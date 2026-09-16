@@ -1,0 +1,156 @@
+from app import workers
+
+
+class DummyWebClient:
+    def __init__(self):
+        self.once_calls = []
+        self.stream_calls = []
+
+    def chat_once(self, model, messages, timeout=600.0):
+        self.once_calls.append((model, messages))
+        return "Qwen local AI latest news"
+
+    def chat_stream(
+        self,
+        model,
+        messages,
+        on_token,
+        should_stop,
+        timeout=600.0,
+    ):
+        self.stream_calls.append((model, messages))
+        if not should_stop():
+            on_token("Grounded web answer.")
+
+
+def test_chat_web_worker_searches_streams_and_appends_sources(monkeypatch):
+    monkeypatch.setattr(
+        workers,
+        "search_web",
+        lambda query, max_results=8, fetch_pages=True: {
+            "provider": "Bing Web RSS",
+            "query": query,
+            "results": [{
+                "title": "Qwen update",
+                "url": "https://example.com/qwen",
+                "snippet": "Fresh Qwen local AI news",
+            }],
+        },
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: ["https://example.com/qwen"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: "WEB SEARCH TOOL DATA\nQwen update",
+    )
+
+    client = DummyWebClient()
+    tokens = []
+    failed = []
+    finished = []
+
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [
+            {"role": "system", "content": "Base system"},
+            {"role": "user", "content": "Keress ra a legfrissebb Qwen hirekre"},
+        ],
+        "Keress ra a legfrissebb Qwen hirekre",
+    )
+    worker.token.connect(tokens.append)
+    worker.failed.connect(failed.append)
+    worker.finished.connect(lambda: finished.append(True))
+    worker.run()
+
+    assert not failed
+    assert finished == [True]
+    assert client.once_calls
+    assert client.stream_calls
+
+    streamed_messages = client.stream_calls[0][1]
+    assert "use ONLY the AUTHORIZED WEB TOOL DATA" in streamed_messages[1]["content"]
+    assert "AUTHORIZED WEB TOOL DATA" in streamed_messages[-1]["content"]
+
+    combined = "".join(tokens)
+    assert "Grounded web answer." in combined
+    assert "Search query: Qwen local AI latest news" in combined
+    assert "https://example.com/qwen" in combined
+
+
+def test_chat_web_worker_fails_closed_without_sources(monkeypatch):
+    monkeypatch.setattr(
+        workers,
+        "search_web",
+        lambda query, max_results=8, fetch_pages=True: {
+            "provider": "test",
+            "query": query,
+            "results": [],
+        },
+    )
+    monkeypatch.setattr(workers, "source_urls", lambda payload: [])
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: "",
+    )
+
+    client = DummyWebClient()
+    failed = []
+
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Keress nekem valamit az interneten",
+    )
+    worker.failed.connect(failed.append)
+    worker.run()
+
+    assert failed
+    assert "no usable public sources" in failed[0].lower()
+    assert not client.stream_calls
+
+
+def test_chat_web_worker_stop_prevents_source_footer(monkeypatch):
+    monkeypatch.setattr(
+        workers,
+        "search_web",
+        lambda query, max_results=8, fetch_pages=True: {
+            "provider": "test",
+            "query": query,
+            "results": [{
+                "title": "Result",
+                "url": "https://example.com/result",
+                "snippet": "Result",
+            }],
+        },
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: ["https://example.com/result"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: "WEB SEARCH TOOL DATA",
+    )
+
+    client = DummyWebClient()
+    tokens = []
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Search the web",
+    )
+    worker.token.connect(tokens.append)
+    worker.stop()
+    worker.run()
+
+    assert "Sources:" not in "".join(tokens)
