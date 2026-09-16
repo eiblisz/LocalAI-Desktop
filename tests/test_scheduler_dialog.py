@@ -38,3 +38,11 @@ def test_scheduler_exposes_four_automation_types():
 def test_scheduler_frequency_list_includes_weekly():
     source = inspect.getsource(SchedulerDialog._build_ui)
     assert '["Hourly", "Daily", "Weekly"]' in source
+
+
+def test_scheduler_list_does_not_predeclare_task_categories():
+    source = inspect.getsource(SchedulerDialog._build_ui)
+
+    assert "type_status_labels" not in source
+    assert "TASK_TYPES.items()" not in source
+    assert "self.task_list = QListWidget()" in source
