@@ -289,3 +289,53 @@ def test_relevance_filter_rejects_single_weak_match_for_specific_query():
     assert [item["url"] for item in filtered] == [
         "https://example.com/gpu"
     ]
+
+
+def test_bing_redirect_url_is_decoded_to_target():
+    url = (
+        "https://www.bing.com/ck/a?"
+        "u=a1aHR0cHM6Ly9leGFtcGxlLmNvbS9wcm9kdWN0"
+    )
+    assert (
+        web_search_tool._decode_bing_result_url(url)
+        == "https://example.com/product"
+    )
+
+
+def test_source_entries_use_direct_urls_and_titles():
+    payload = {
+        "results": [
+            {
+                "title": "Example product",
+                "url": (
+                    "https://www.bing.com/ck/a?"
+                    "u=a1aHR0cHM6Ly9leGFtcGxlLmNvbS9wcm9kdWN0"
+                ),
+            }
+        ]
+    }
+
+    assert web_search_tool.source_entries(payload) == [
+        {
+            "title": "Example product",
+            "url": "https://example.com/product",
+        }
+    ]
+
+
+def test_relevance_filter_does_not_match_query_terms_only_from_redirect_url():
+    results = [
+        {
+            "title": "General news",
+            "url": "https://www.bing.com/ck/a?u=graphics-card-32gb",
+            "snippet": "Unrelated general article",
+        }
+    ]
+
+    assert (
+        web_search_tool._filter_relevant_results(
+            "32GB graphics card",
+            results,
+        )
+        == []
+    )
