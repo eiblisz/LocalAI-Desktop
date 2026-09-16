@@ -9,7 +9,7 @@ from .computer_status_tool import (
 from .ebay_tool import ebay_context_text, search_ebay
 from .ollama_client import OllamaClient
 from .weather_tool import get_weather, weather_context_text
-from .web_search_tool import search_web, web_search_context_text
+from .web_search_tool import search_web, source_urls, web_search_context_text
 
 
 class ChatWorker(QObject):
@@ -74,8 +74,33 @@ class ScheduledTaskWorker(QObject):
         super().__init__()
         self.client = client
         self.task = dict(task)
+        self.source_urls = []
+        self.effective_query = ""
 
-    def _build_context(self):
+    def _generate_search_query(self, prompt, model):
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Convert the user's scheduled research task into one concise web "
+                    "search query. Preserve product/model/proper names. Prefer English "
+                    "search terms when that improves international web results. "
+                    "Return ONLY the search query, no explanation, no quotes."
+                ),
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ]
+        query = self.client.chat_once(
+            model=model,
+            messages=messages,
+        ).strip()
+        query = " ".join(query.splitlines()[0].strip().strip('\"\'').split())
+        return query[:180] or prompt[:180]
+
+    def _build_context(self, model):
         task_type = str(self.task.get("task_type", "weather")).strip().lower()
 
         if task_type == "weather":
@@ -96,6 +121,12 @@ class ScheduledTaskWorker(QObject):
                 query,
                 max_results=int(self.task.get("ebay_max_results", 8) or 8),
             )
+            self.source_urls = [
+                str(item.get("url", "")).strip()
+                for item in payload.get("results") or []
+                if str(item.get("url", "")).strip()
+            ]
+            self.effective_query = query
             return ebay_context_text(payload)
 
         if task_type == "computer":
@@ -105,15 +136,20 @@ class ScheduledTaskWorker(QObject):
             if not bool(self.task.get("web_search_enabled", False)):
                 return ""
 
-            query = (
-                str(self.task.get("web_query", "")).strip()
-                or str(self.task.get("prompt", "")).strip()
-            )
+            query = str(self.task.get("web_query", "")).strip()
+            if not query:
+                query = self._generate_search_query(
+                    str(self.task.get("prompt", "")).strip(),
+                    model,
+                )
+
             payload = search_web(
                 query,
                 max_results=int(self.task.get("web_max_results", 6) or 6),
                 fetch_pages=bool(self.task.get("web_fetch_pages", True)),
             )
+            self.source_urls = source_urls(payload)
+            self.effective_query = query
             return web_search_context_text(payload)
 
         raise RuntimeError(f"Unsupported scheduled task type: {task_type}")
@@ -131,7 +167,7 @@ class ScheduledTaskWorker(QObject):
             if not model:
                 raise RuntimeError("Scheduled task model is not set.")
 
-            tool_context = self._build_context()
+            tool_context = self._build_context(model)
 
             if tool_context:
                 user_content = (
@@ -141,10 +177,14 @@ class ScheduledTaskWorker(QObject):
                 )
                 system_content = (
                     "You are running a scheduled local-assistant task. "
-                    "You do not have arbitrary internet access. Use only the "
-                    "authorized tool data included in the user message for current "
-                    "external facts. Do not invent missing live data. Keep the answer "
-                    "concise unless the task explicitly asks for detail."
+                    "For current or external facts, use ONLY the AUTHORIZED TOOL DATA "
+                    "in the user message. Do not use memory or prior knowledge to fill "
+                    "missing facts. If the supplied sources are irrelevant or do not "
+                    "support the requested topic, explicitly say that no relevant "
+                    "sources were found instead of answering a different topic. "
+                    "Never invent scores, ratings, prices, specifications, dates, "
+                    "comparisons, or recommendations. Keep the answer concise unless "
+                    "the task asks for detail."
                 )
             else:
                 user_content = (
@@ -168,6 +208,19 @@ class ScheduledTaskWorker(QObject):
             )
             if not content.strip():
                 raise RuntimeError("The model returned an empty scheduled result.")
-            self.finished.emit(task_id, content.strip())
+
+            final_content = content.strip()
+            if self.source_urls:
+                source_lines = "\n".join(
+                    f"- {url}" for url in self.source_urls[:10]
+                )
+                final_content += (
+                    "\n\n---\n"
+                    f"Search query: {self.effective_query}\n"
+                    "Sources:\n"
+                    f"{source_lines}"
+                )
+
+            self.finished.emit(task_id, final_content)
         except Exception as exc:
             self.failed.emit(task_id, str(exc))
