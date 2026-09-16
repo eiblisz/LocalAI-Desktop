@@ -26,8 +26,17 @@ from PySide6.QtWidgets import (
 
 from .artifact_utils import artifact_url, open_file, open_folder
 from .config import APP_NAME, DEFAULT_SYSTEM_PROMPT
-from .document_tools import build_document_messages, topic_title
+from .document_tools import (
+    build_document_messages,
+    build_excel_messages,
+    build_summary_messages,
+    conversation_text,
+    topic_title,
+)
+from .docx_tool import create_red_executive_docx, create_red_professional_docx
+from .excel_tool import create_conversation_excel, create_structured_excel
 from .file_reader import read_attachment
+from .html_tool import create_red_html
 from .ollama_client import OllamaClient
 from .pdf_tool import create_red_executive_pdf, create_red_professional_pdf
 from .resource_monitor import format_resource_summary, get_system_metrics
@@ -168,6 +177,9 @@ class MainWindow(QMainWindow):
         self.pdf_thread = None
         self.pdf_worker = None
         self.pending_pdf_title = ""
+        self.pending_tool = ""
+        self.pending_preset = ""
+        self.active_tool = "PDF"
         self.last_artifact_path = None
 
         self.setStyleSheet(STYLE)
@@ -314,25 +326,24 @@ class MainWindow(QMainWindow):
         title.setObjectName("brand")
         layout.addWidget(title)
 
-        for text in ["PDF", "DOCX", "EXCEL", "SUMMARY"]:
+        self.tool_buttons = {}
+        for text in ["PDF", "DOCX", "EXCEL", "HTML", "SUMMARY"]:
             button = QPushButton(text)
             button.setObjectName("toolButton")
-            if text == "PDF":
-                button.clicked.connect(self._pdf_selected)
-            else:
-                button.clicked.connect(
-                    lambda _checked=False, name=text: self._tool_placeholder(name)
-                )
+            button.clicked.connect(
+                lambda _checked=False, name=text: self._select_tool(name)
+            )
+            self.tool_buttons[text] = button
             layout.addWidget(button)
 
         layout.addSpacing(10)
-        options = QLabel("PDF OPTIONS")
-        options.setObjectName("muted")
-        layout.addWidget(options)
+        self.tool_options_label = QLabel("PDF OPTIONS")
+        self.tool_options_label.setObjectName("muted")
+        layout.addWidget(self.tool_options_label)
 
-        preset_label = QLabel("PDF preset")
-        preset_label.setObjectName("muted")
-        layout.addWidget(preset_label)
+        self.preset_label = QLabel("Preset")
+        self.preset_label.setObjectName("muted")
+        layout.addWidget(self.preset_label)
 
         self.pdf_preset = QComboBox()
         self.pdf_preset.addItems(["Red Professional", "Red Executive"])
@@ -363,16 +374,16 @@ class MainWindow(QMainWindow):
 
         self.create_pdf_button = QPushButton("CREATE PDF")
         self.create_pdf_button.setObjectName("primary")
-        self.create_pdf_button.clicked.connect(self._create_pdf)
+        self.create_pdf_button.clicked.connect(self._create_selected_tool)
         layout.addWidget(self.create_pdf_button)
 
-        info = QLabel(
+        self.tool_info = QLabel(
             "Choose the current conversation or let the selected local model "
             "write a standalone document from your topic."
         )
-        info.setWordWrap(True)
-        info.setObjectName("muted")
-        layout.addWidget(info)
+        self.tool_info.setWordWrap(True)
+        self.tool_info.setObjectName("muted")
+        layout.addWidget(self.tool_info)
 
         self.artifact_path_label = QLabel("")
         self.artifact_path_label.setWordWrap(True)
@@ -395,6 +406,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(artifact_buttons)
 
         layout.addStretch()
+        self._select_tool("PDF")
         return frame
 
     def _load_models(self):
