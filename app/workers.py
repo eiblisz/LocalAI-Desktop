@@ -149,6 +149,37 @@ class ChatWebWorker(QObject):
         ]
         return any(marker in normalized for marker in bad_markers)
 
+    def _required_search_constraints(self):
+        source = self.user_prompt
+        if self._is_research_followup():
+            recent = self._recent_user_requests(limit=1)
+            if recent:
+                source = recent[-1]
+
+        patterns = [
+            r"\b\d+\s*[x×]\s*\d+\s*(?:GB|TB)\b",
+            r"\bDDR\s*[345]\b",
+            r"\b\d{3,5}\s*(?:MHz|MT/s|MTs|MTPS)\b",
+            r"\b\d+(?:[.,]\d+)?\s*(?:EUR|USD)\b",
+            r"(?:€|\$)\s*\d+(?:[.,]\d+)?\b",
+        ]
+        constraints = []
+        for pattern in patterns:
+            for match in re.finditer(pattern, source, flags=re.IGNORECASE):
+                clean = " ".join(match.group(0).split())
+                if clean not in constraints:
+                    constraints.append(clean)
+        return constraints
+
+    def _preserve_search_constraints(self, query):
+        clean = " ".join(str(query or "").split())
+        folded = self._fold_text(clean)
+        for constraint in self._required_search_constraints():
+            if self._fold_text(constraint) not in folded:
+                clean = f"{clean} {constraint}".strip()
+                folded = self._fold_text(clean)
+        return clean[:260]
+
     def _generate_search_queries(self):
         prompt = self.user_prompt[:5000]
         recent_requests = self._recent_user_requests()
@@ -215,15 +246,15 @@ class ChatWebWorker(QObject):
                     and self._query_is_literal_followup_command(clean)
                 )
             ):
-                queries.append(clean[:180])
+                queries.append(self._preserve_search_constraints(clean))
             if len(queries) >= 4:
                 break
 
         if not queries:
             if self._is_research_followup() and recent_requests:
-                queries = [recent_requests[-1][:180]]
+                queries = [self._preserve_search_constraints(recent_requests[-1])]
             else:
-                queries = [self.user_prompt[:180]]
+                queries = [self._preserve_search_constraints(self.user_prompt)]
         return queries
 
     @Slot()
@@ -237,6 +268,8 @@ class ChatWebWorker(QObject):
             urls = []
             entries = []
             successful_queries = []
+            successful_providers = []
+            provider_fallback_notes = []
             failed_queries = []
 
             for query in queries:
@@ -262,6 +295,12 @@ class ChatWebWorker(QObject):
                     continue
 
                 successful_queries.append(query)
+                provider = str(payload.get("provider", "")).strip() or "unknown"
+                if provider not in successful_providers:
+                    successful_providers.append(provider)
+                for note in payload.get("provider_chain_errors") or []:
+                    if note not in provider_fallback_notes:
+                        provider_fallback_notes.append(str(note))
                 contexts.append(
                     f"SEARCH QUERY: {query}\n"
                     f"{web_search_context_text(payload)}"
@@ -361,9 +400,30 @@ class ChatWebWorker(QObject):
                     )
                 )
 
+            if len(successful_providers) == 1:
+                provider_footer = f"Search provider: {successful_providers[0]}"
+            else:
+                provider_footer = (
+                    "Search providers: "
+                    + ", ".join(successful_providers)
+                )
+
+            fallback_footer = ""
+            brave_fallback = [
+                note for note in provider_fallback_notes
+                if note.startswith("Brave Search API:")
+            ]
+            if brave_fallback:
+                fallback_footer = (
+                    "\nBrave fallback: "
+                    + brave_fallback[0].split(":", 1)[1].strip()
+                )
+
             self.token.emit(
                 "\n\n---\n"
                 f"{query_footer}\n"
+                f"{provider_footer}"
+                f"{fallback_footer}\n"
                 "Web results / sources:\n"
                 f"{source_lines}"
             )
