@@ -37,12 +37,13 @@ from .document_tools import (
     conversation_text,
     topic_title,
 )
-from .docx_tool import create_red_executive_docx, create_red_professional_docx
+from .artifact_themes import document_preset_labels, workbook_preset_labels
+from .docx_tool import create_docx
 from .excel_tool import create_conversation_excel, create_structured_excel
 from .file_reader import read_attachment
-from .html_tool import create_red_html
+from .html_tool import create_html
 from .ollama_client import OllamaClient
-from .pdf_tool import create_red_executive_pdf, create_red_professional_pdf
+from .pdf_tool import create_pdf
 from .resource_monitor import format_resource_summary, get_system_metrics
 from .storage import ChatStore
 from .workers import ChatWorker, DocumentWorker
@@ -785,11 +786,11 @@ class MainWindow(QMainWindow):
         self.pdf_preset.clear()
 
         if name in {"PDF", "DOCX", "HTML"}:
-            self.pdf_preset.addItems(["Red Professional", "Red Executive"])
+            self.pdf_preset.addItems(document_preset_labels())
             self.preset_label.show()
             self.pdf_preset.show()
         elif name == "EXCEL":
-            self.pdf_preset.addItem("Red Executive Workbook")
+            self.pdf_preset.addItems(workbook_preset_labels())
             self.preset_label.show()
             self.pdf_preset.show()
         else:
@@ -847,13 +848,11 @@ class MainWindow(QMainWindow):
         self.pdf_topic.setVisible(custom)
 
     def _artifact_creator(self, tool, preset):
-        executive = preset == "Red Executive"
-
         if tool == "PDF":
-            return (
-                create_red_executive_pdf
-                if executive
-                else create_red_professional_pdf
+            return lambda messages, title: create_pdf(
+                messages,
+                title=title,
+                preset=preset,
             )
         if tool == "DOCX":
             model_name = (
@@ -861,21 +860,17 @@ class MainWindow(QMainWindow):
                 or (self.current_chat or {}).get("model", "")
                 or self.model_combo.currentText().strip()
             )
-            creator = (
-                create_red_executive_docx
-                if executive
-                else create_red_professional_docx
-            )
-            return lambda messages, title: creator(
+            return lambda messages, title: create_docx(
                 messages,
                 title=title,
                 model_name=model_name,
+                preset=preset,
             )
         if tool == "HTML":
-            return lambda messages, title: create_red_html(
+            return lambda messages, title: create_html(
                 messages,
                 title=title,
-                executive=executive,
+                preset=preset,
             )
         return None
 
@@ -931,6 +926,7 @@ class MainWindow(QMainWindow):
                             (self.current_chat or {}).get("model", "")
                             or self.model_combo.currentText().strip()
                         ),
+                        preset=preset,
                     )
                 else:
                     creator = self._artifact_creator(tool, preset)
@@ -1038,6 +1034,7 @@ class MainWindow(QMainWindow):
                     title=title,
                     source_text=self.pending_source_text,
                     model_name=self.pending_model,
+                    preset=preset,
                 )
             else:
                 creator = self._artifact_creator(tool, preset)
