@@ -822,7 +822,11 @@ class MainWindow(QMainWindow):
         self.scheduler_dialog.activateWindow()
 
     def _check_scheduled_tasks(self):
-        if self.scheduled_worker is not None:
+        if (
+            self.scheduled_worker is not None
+            or self.worker is not None
+            or self.pdf_worker is not None
+        ):
             return
 
         due = self.scheduler_store.due_tasks()
@@ -830,8 +834,14 @@ class MainWindow(QMainWindow):
             self._run_scheduled_task(due[0]["id"])
 
     def _run_scheduled_task(self, task_id):
-        if self.scheduled_worker is not None:
-            self.status.setText("Schedule: another task is already running")
+        if (
+            self.scheduled_worker is not None
+            or self.worker is not None
+            or self.pdf_worker is not None
+        ):
+            self.status.setText(
+                "Schedule postponed: LocalAI is busy with another generation"
+            )
             return
 
         try:
