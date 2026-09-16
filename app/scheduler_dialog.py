@@ -102,7 +102,7 @@ class SchedulerDialog(QDialog):
         self.ebay_query_label = QLabel("eBay search")
         self.ebay_query_edit = QLineEdit()
         self.ebay_query_edit.setPlaceholderText(
-            "Example: Kingston Fury 64GB DDR4 3200 2x32"
+            "Optional - leave blank to search using the task prompt"
         )
         form.addRow(self.ebay_query_label, self.ebay_query_edit)
 
@@ -496,8 +496,6 @@ class SchedulerDialog(QDialog):
             raise ValueError("Select an Ollama model.")
         if task_type == "weather" and not location:
             raise ValueError("Weather task requires a location.")
-        if task_type == "ebay" and not ebay_query:
-            raise ValueError("eBay Search task requires a search query.")
 
         if self.current_id:
             try:
