@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QTextBrowser,
     QTextEdit,
@@ -262,6 +263,13 @@ class MainWindow(QMainWindow):
 
         self.status = QLabel("Ollama: checking...")
         self.status.setObjectName("muted")
+        self.status.setMinimumWidth(0)
+        self.status.setMaximumWidth(360)
+        self.status.setSizePolicy(
+            QSizePolicy.Policy.Ignored,
+            QSizePolicy.Policy.Preferred,
+        )
+        self.status.setTextFormat(Qt.TextFormat.PlainText)
         top_layout.addWidget(self.status)
 
         root.addWidget(top)
@@ -1193,6 +1201,7 @@ class MainWindow(QMainWindow):
 
         self.pending_scheduled_task_id = ""
         self.status.setText(f'Schedule running: {task.get("name", "task")}')
+        self.status.setToolTip("")
         self._refresh_schedule_indicator()
         if self.scheduler_dialog is not None:
             self.scheduler_dialog.set_run_status(
@@ -1265,6 +1274,7 @@ class MainWindow(QMainWindow):
                 running=False,
             )
         self.status.setText(f'Schedule completed: {task.get("name", "task")}')
+        self.status.setToolTip("")
         self._refresh_schedule_indicator()
 
     def _scheduled_task_failed(self, task_id, message):
@@ -1285,7 +1295,9 @@ class MainWindow(QMainWindow):
                 f"Run failed: {message}",
                 running=False,
             )
-        self.status.setText(f"Schedule failed: {name} - {message}")
+        full_error = " ".join(str(message or "").split())
+        self.status.setText(f"Schedule failed: {name}")
+        self.status.setToolTip(full_error)
         self._refresh_schedule_indicator()
 
     def _cleanup_scheduled_worker(self):
