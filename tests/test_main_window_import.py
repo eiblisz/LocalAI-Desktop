@@ -250,3 +250,23 @@ def test_long_error_dialog_uses_bounded_summary_and_details():
     assert "summary[:517]" in source
     assert "setDetailedText(full_message)" in source
     assert "QMessageBox.critical(self, title, message)" not in source
+
+
+def test_top_status_cannot_force_window_wider():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._build_ui)
+
+    assert "self.status.setMinimumWidth(0)" in source
+    assert "self.status.setMaximumWidth(360)" in source
+    assert "QSizePolicy.Policy.Ignored" in source
+
+
+def test_scheduler_failure_keeps_full_error_out_of_topbar():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._scheduled_task_failed)
+
+    assert 'self.status.setText(f"Schedule failed: {name}")' in source
+    assert "self.status.setToolTip(full_error)" in source
+    assert 'Schedule failed: {name} - {message}' not in source
