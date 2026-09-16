@@ -270,3 +270,26 @@ def test_scheduler_failure_keeps_full_error_out_of_topbar():
     assert 'self.status.setText(f"Schedule failed: {name}")' in source
     assert "self.status.setToolTip(full_error)" in source
     assert 'Schedule failed: {name} - {message}' not in source
+
+
+def test_chat_generation_is_bound_to_originating_chat():
+    from app.main_window import MainWindow
+
+    send_source = inspect.getsource(MainWindow._send)
+    finish_source = inspect.getsource(MainWindow._on_finished)
+    cleanup_source = inspect.getsource(MainWindow._cleanup_worker)
+
+    assert 'self.generation_chat_id = str(self.current_chat.get("id", ""))' in send_source
+    assert "self.store.load(self.generation_chat_id)" in finish_source
+    assert "current_id == target_id" in finish_source
+    assert 'self.generation_chat_id = ""' in cleanup_source
+
+
+def test_scheduled_completion_does_not_steal_active_chat():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._scheduled_task_finished)
+
+    assert "current_id == scheduled_chat_id" in source
+    assert "Result saved in" in source
+    assert "Result opened in" not in source
