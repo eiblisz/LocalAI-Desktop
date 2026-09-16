@@ -1,4 +1,5 @@
 import html
+from datetime import datetime
 from pathlib import Path
 
 import markdown
@@ -873,7 +874,7 @@ class MainWindow(QMainWindow):
             return
 
         chat = self._scheduled_task_chat(task)
-        stamp = __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M")
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
         chat["messages"].append({
             "role": "assistant",
             "content": (
@@ -1277,9 +1278,14 @@ class MainWindow(QMainWindow):
             )
 
     def closeEvent(self, event):
+        if self.scheduled_worker is not None:
+            QMessageBox.information(
+                self,
+                "Scheduled task is running",
+                "Wait for the scheduled task to finish before closing LocalAI Desktop.",
+            )
+            event.ignore()
+            return
         if self.worker is not None:
             self.worker.stop()
-        if self.scheduled_thread is not None:
-            self.scheduled_thread.quit()
-            self.scheduled_thread.wait(1500)
         event.accept()
