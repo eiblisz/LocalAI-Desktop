@@ -9,6 +9,7 @@ from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
 from .config import OUTPUT_DIR
+from .localization import labels_for_text
 
 RED = "B92F3B"
 DARK_RED = "8E1F2D"
@@ -148,6 +149,7 @@ def create_red_professional_docx(
         + ".docx"
     )
     text = _document_text(messages)
+    labels = labels_for_text(text)
     document_title = _extract_title(text, title)
     text = _strip_first_h1(text)
 
@@ -161,7 +163,9 @@ def create_red_professional_docx(
 
     footer = doc.sections[0].footer.paragraphs[0]
     footer.text = (
-        "Red Professional · Generated "
+        "Red Professional · "
+        + labels["generated_footer"]
+        + " "
         + datetime.now().strftime("%Y-%m-%d %H:%M")
     )
     footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -181,6 +185,7 @@ def create_red_executive_docx(
         + ".docx"
     )
     text = _document_text(messages)
+    labels = labels_for_text(text)
     document_title = _extract_title(text, title)
     text = _strip_first_h1(text)
 
@@ -196,7 +201,7 @@ def create_red_executive_docx(
 
     p2 = doc.add_paragraph()
     p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    r2 = p2.add_run("Local AI · Executive / Technical Report")
+    r2 = p2.add_run("Local AI · " + labels["subtitle_executive"])
     r2.font.name = "Arial"
     r2.font.size = Pt(13)
     r2.font.color.rgb = RGBColor.from_string(MUTED)
@@ -206,14 +211,14 @@ def create_red_executive_docx(
     _shade_cell(hero.cell(1, 0), DARK_RED)
     _set_cell_text(
         hero.cell(0, 0),
-        "RED EXECUTIVE REPORT",
+        labels["hero_title"],
         bold=True,
         color="FFFFFF",
         size=17,
     )
     _set_cell_text(
         hero.cell(1, 0),
-        "Structured local-model document output",
+        labels["hero_subtitle"],
         color="FFE9EC",
         size=11.5,
     )
@@ -224,19 +229,19 @@ def create_red_executive_docx(
         _shade_cell(cell, LIGHT_GREY)
     _set_cell_text(
         info.cell(0, 0),
-        "Preset\nRed Executive",
+        labels["preset"] + "\nRed Executive",
         bold=True,
         size=10.5,
     )
     _set_cell_text(
         info.cell(0, 1),
-        "Execution\nLocal",
+        labels["execution"] + "\n" + labels["local"],
         bold=True,
         size=10.5,
     )
     _set_cell_text(
         info.cell(0, 2),
-        "Generated\n" + datetime.now().strftime("%Y-%m-%d"),
+        labels["generated"] + "\n" + datetime.now().strftime("%Y-%m-%d"),
         bold=True,
         size=10.5,
     )
@@ -246,8 +251,7 @@ def create_red_executive_docx(
     _shade_cell(summary.cell(0, 0), LIGHT_RED)
     _set_cell_text(
         summary.cell(0, 0),
-        "Executive Summary\n"
-        "This document was generated locally using the selected AI model.",
+        labels["executive_summary"] + "\n" + labels["summary_text"],
         bold=True,
         color=TEXT,
         size=11.5,
@@ -258,7 +262,9 @@ def create_red_executive_docx(
 
     footer = doc.sections[0].footer.paragraphs[0]
     footer.text = (
-        "Red Executive · Generated "
+        "Red Executive · "
+        + labels["generated_footer"]
+        + " "
         + datetime.now().strftime("%Y-%m-%d %H:%M")
     )
     footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
