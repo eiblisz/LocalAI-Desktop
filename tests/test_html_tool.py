@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from app.html_tool import create_red_html
+from app.html_tool import create_html, create_red_html
 
 
 def test_red_executive_html_created(tmp_path: Path):
@@ -36,3 +36,22 @@ def test_hungarian_html_localizes_fixed_labels_and_deduplicates_title(tmp_path: 
     assert "Futtatás" in content
     assert "Készült" in content
     assert 'lang="hu"' in content
+
+
+def test_classic_executive_html_is_print_friendly_and_not_red(tmp_path: Path):
+    path = create_html(
+        [{
+            "role": "assistant",
+            "content": "# Classic Test\n## Section\nPrintable body.",
+        }],
+        preset="Classic Executive",
+        output_dir=tmp_path,
+    )
+    content = path.read_text(encoding="utf-8")
+
+    assert "CLASSIC EXECUTIVE REPORT" in content
+    assert "RED EXECUTIVE REPORT" not in content
+    assert "#44546A" in content
+    assert "#B92F3B" not in content
+    assert "@media print" in content
+    assert "Classic Executive" in content
