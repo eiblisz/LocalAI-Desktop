@@ -2,8 +2,7 @@ import html
 from pathlib import Path
 
 import markdown
-from PySide6.QtCore import QThread, QTimer, Qt, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import QThread, QTimer, Qt
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -24,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .artifact_utils import artifact_url, open_file, open_folder
+from .artifact_utils import open_file, open_folder
 from .config import APP_NAME, DEFAULT_SYSTEM_PROMPT
 from .document_tools import (
     build_document_messages,
@@ -289,8 +288,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(header)
 
         self.chat_view = QTextBrowser()
+        self.chat_view.setOpenLinks(False)
         self.chat_view.setOpenExternalLinks(False)
-        self.chat_view.anchorClicked.connect(self._open_artifact_url)
         layout.addWidget(self.chat_view, 1)
 
         input_row = QHBoxLayout()
@@ -715,15 +714,16 @@ class MainWindow(QMainWindow):
                 path = message.get("path", "")
                 name = html.escape(message.get("name") or Path(path).name or "Artifact")
                 safe_path = html.escape(path)
-                href = html.escape(artifact_url(path)) if path else ""
                 html_parts.append(
                     "<div style='background:#151D24;border:1px solid #394653;"
                     "border-radius:12px;padding:15px;margin:12px 6px 18px 6px;'>"
                     "<div style='font-size:11px;color:#D24A57;font-weight:700;"
                     "margin-bottom:7px;'>ARTIFACT READY</div>"
                     f"<div style='font-size:15px;font-weight:700;margin-bottom:6px;'>{name}</div>"
-                    f"<div style='font-size:12px;color:#9099A6;margin-bottom:9px;'>{safe_path}</div>"
-                    f"<a style='color:#F06A75;text-decoration:none;' href='{href}'>OPEN FILE</a>"
+                    f"<div style='font-size:12px;color:#9099A6;'>{safe_path}</div>"
+                    "<div style='font-size:12px;color:#7F8995;margin-top:7px;'>"
+                    "Use OPEN FILE or OPEN FOLDER in the Tools panel."
+                    "</div>"
                     "</div>"
                 )
                 continue
@@ -752,8 +752,18 @@ class MainWindow(QMainWindow):
 
         html_parts.append("</div>")
         self.chat_view.setHtml("".join(html_parts))
+        self._schedule_scroll_to_bottom()
+
+    def _scroll_chat_to_bottom(self):
         scrollbar = self.chat_view.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
+
+    def _schedule_scroll_to_bottom(self):
+        # QTextBrowser lays out rich HTML after setHtml returns. A delayed
+        # second scroll makes chat switches and streamed replies reliably
+        # land on the newest message instead of around the middle.
+        QTimer.singleShot(0, self._scroll_chat_to_bottom)
+        QTimer.singleShot(60, self._scroll_chat_to_bottom)
 
     def _refresh_resources(self):
         try:
@@ -1109,9 +1119,6 @@ class MainWindow(QMainWindow):
                 "Open folder error",
                 str(exc),
             )
-
-    def _open_artifact_url(self, url: QUrl):
-        QDesktopServices.openUrl(url)
 
     def closeEvent(self, event):
         if self.worker is not None:
