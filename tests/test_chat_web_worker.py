@@ -154,3 +154,70 @@ def test_chat_web_worker_stop_prevents_source_footer(monkeypatch):
     worker.run()
 
     assert "Sources:" not in "".join(tokens)
+
+
+def test_chat_web_worker_runs_separate_searches_for_multi_part_request(monkeypatch):
+    class MultiQueryClient(DummyWebClient):
+        def chat_once(self, model, messages, timeout=600.0):
+            self.once_calls.append((model, messages))
+            return (
+                "32GB GPU graphics cards current models\n"
+                "latest Qwen model release\n"
+                "64GB DDR4 2x32 current prices Germany"
+            )
+
+    seen = []
+
+    def fake_search(query, max_results=6, fetch_pages=True):
+        seen.append(query)
+        slug = str(len(seen))
+        return {
+            "provider": "test",
+            "query": query,
+            "results": [{
+                "title": f"Relevant result {slug}",
+                "url": f"https://example.com/{slug}",
+                "snippet": query,
+            }],
+        }
+
+    monkeypatch.setattr(workers, "search_web", fake_search)
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: [payload["results"][0]["url"]],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: payload["results"][0]["snippet"],
+    )
+
+    client = MultiQueryClient()
+    tokens = []
+    failed = []
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        (
+            "Keress 32 GB-os videokartyakat.\n"
+            "Nezd meg a legfrissebb Qwen modellt.\n"
+            "Keress 64 GB DDR4 RAM-ot."
+        ),
+    )
+    worker.token.connect(tokens.append)
+    worker.failed.connect(failed.append)
+    worker.run()
+
+    assert not failed
+    assert seen == [
+        "32GB GPU graphics cards current models",
+        "latest Qwen model release",
+        "64GB DDR4 2x32 current prices Germany",
+    ]
+    combined = "".join(tokens)
+    assert "Search queries:" in combined
+    assert "https://example.com/1" in combined
+    assert "https://example.com/2" in combined
+    assert "https://example.com/3" in combined
