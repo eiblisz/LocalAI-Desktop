@@ -2,7 +2,7 @@ import html
 from pathlib import Path
 
 import markdown
-from PySide6.QtCore import QThread, Qt, QUrl
+from PySide6.QtCore import QThread, QTimer, Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
@@ -29,7 +29,8 @@ from .config import APP_NAME, DEFAULT_SYSTEM_PROMPT
 from .document_tools import build_document_messages, topic_title
 from .file_reader import read_attachment
 from .ollama_client import OllamaClient
-from .pdf_tool import create_red_professional_pdf
+from .pdf_tool import create_red_executive_pdf, create_red_professional_pdf
+from .resource_monitor import format_resource_summary, get_system_metrics
 from .storage import ChatStore
 from .workers import ChatWorker, DocumentWorker
 
@@ -49,7 +50,7 @@ QLabel#brand {
     font-weight: 700;
 }
 QLabel#chatTitle {
-    font-size: 17px;
+    font-size: 19px;
     font-weight: 700;
     color: #F4F6F8;
 }
@@ -102,18 +103,26 @@ QListWidget {
 }
 QListWidget::item {
     background: transparent;
+    color: #EEF1F5;
     border-radius: 9px;
     padding: 11px;
     margin: 2px 0;
 }
-QListWidget::item:selected {
-    background: #252E38;
+QListWidget::item:hover {
+    background: #1D2630;
+    color: #FFFFFF;
+}
+QListWidget::item:selected,
+QListWidget::item:selected:active,
+QListWidget::item:selected:!active {
+    background: #27323E;
+    color: #FFFFFF;
 }
 QTextBrowser {
     background: #0F1318;
     border: none;
     padding: 18px;
-    font-size: 15px;
+    font-size: 16px;
 }
 QTextEdit {
     background: #161C23;
@@ -167,6 +176,11 @@ class MainWindow(QMainWindow):
         self._load_chat_list()
         self._ensure_chat()
 
+        self.resource_timer = QTimer(self)
+        self.resource_timer.timeout.connect(self._refresh_resources)
+        self.resource_timer.start(1000)
+        self._refresh_resources()
+
     def _build_ui(self):
         central = QWidget()
         root = QVBoxLayout(central)
@@ -186,6 +200,12 @@ class MainWindow(QMainWindow):
         brand_box.addWidget(brand)
         brand_box.addWidget(subtitle)
         top_layout.addLayout(brand_box)
+
+        self.resource_label = QLabel("CPU -- | RAM -- | GPU -- | VRAM --")
+        self.resource_label.setObjectName("muted")
+        self.resource_label.setMinimumWidth(440)
+        self.resource_label.setAlignment(Qt.AlignCenter)
+        top_layout.addWidget(self.resource_label, 1)
         top_layout.addStretch()
 
         self.model_combo = QComboBox()
@@ -202,7 +222,7 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self._build_sidebar())
         splitter.addWidget(self._build_chat_panel())
         splitter.addWidget(self._build_tools_panel())
-        splitter.setSizes([300, 840, 280])
+        splitter.setSizes([300, 900, 250])
         splitter.setStretchFactor(1, 1)
         root.addWidget(splitter, 1)
 
@@ -315,7 +335,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(preset_label)
 
         self.pdf_preset = QComboBox()
-        self.pdf_preset.addItem("Red Professional")
+        self.pdf_preset.addItems(["Red Professional", "Red Executive"])
         layout.addWidget(self.pdf_preset)
 
         source_label = QLabel("Source")
@@ -664,7 +684,7 @@ class MainWindow(QMainWindow):
             self.chat_title.setText("Local AI")
 
         html_parts = [
-            "<div style='font-family: Segoe UI; font-size:15px; color:#EDF0F3;'>"
+            "<div style='font-family: Segoe UI; font-size:16px; color:#EDF0F3;'>"
         ]
         if not messages:
             html_parts.append(
@@ -710,7 +730,7 @@ class MainWindow(QMainWindow):
                 "border-radius:12px;padding:17px;margin:12px 6px 18px 6px;'>"
                 f"<div style='font-size:11px;color:#D24A57;font-weight:700;"
                 f"margin-bottom:9px;'>{label}</div>"
-                "<div style='font-size:15px;line-height:1.55;'>"
+                "<div style='font-size:16px;line-height:1.62;'>"
                 f"{rendered}"
                 "</div>"
                 "</div>"
@@ -720,6 +740,18 @@ class MainWindow(QMainWindow):
         self.chat_view.setHtml("".join(html_parts))
         scrollbar = self.chat_view.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
+
+    def _refresh_resources(self):
+        try:
+            metrics = get_system_metrics()
+            self.resource_label.setText(format_resource_summary(metrics))
+        except Exception:
+            self.resource_label.setText("CPU -- | RAM -- | GPU -- | VRAM --")
+
+    def _pdf_creator(self):
+        if self.pdf_preset.currentText() == "Red Executive":
+            return create_red_executive_pdf
+        return create_red_professional_pdf
 
     def _pdf_selected(self):
         self.pdf_preset.setFocus()
@@ -737,7 +769,7 @@ class MainWindow(QMainWindow):
 
         if source == "Current conversation":
             try:
-                path = create_red_professional_pdf(
+                path = self._pdf_creator()(
                     self.current_chat.get("messages", []),
                     title=self.current_chat.get("title") or "Local AI Report",
                 )
@@ -787,7 +819,7 @@ class MainWindow(QMainWindow):
 
     def _on_pdf_document_ready(self, content):
         try:
-            path = create_red_professional_pdf(
+            path = self._pdf_creator()(
                 [{"role": "assistant", "content": content}],
                 title=self.pending_pdf_title or "Local AI Document",
             )
