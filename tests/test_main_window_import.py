@@ -71,3 +71,32 @@ def test_pending_schedule_runs_after_worker_cleanup():
     assert "_run_pending_scheduled_task" in chat_cleanup
     assert "_run_pending_scheduled_task" in doc_cleanup
     assert "_run_scheduled_task(task_id)" in pending
+
+
+def test_schedule_button_has_health_indicator_states():
+    from app.main_window import MainWindow
+
+    build_source = inspect.getsource(MainWindow._build_tools_panel)
+    health_source = inspect.getsource(MainWindow._schedule_health_state)
+    style_source = inspect.getsource(MainWindow._apply_schedule_button_style)
+
+    assert 'self.schedule_button = QPushButton("SCHEDULE")' in build_source
+    assert '"idle"' in health_source
+    assert '"error"' in health_source
+    assert '"running"' in health_source
+    assert '"active"' in health_source
+    assert "#315A43" in style_source
+    assert "#6A3035" in style_source
+    assert "RUNNING" in style_source
+
+
+def test_schedule_button_refreshes_after_task_results():
+    from app.main_window import MainWindow
+
+    success_source = inspect.getsource(MainWindow._scheduled_task_finished)
+    failure_source = inspect.getsource(MainWindow._scheduled_task_failed)
+    cleanup_source = inspect.getsource(MainWindow._cleanup_scheduled_worker)
+
+    assert "_refresh_schedule_indicator()" in success_source
+    assert "_refresh_schedule_indicator()" in failure_source
+    assert "_refresh_schedule_indicator()" in cleanup_source
