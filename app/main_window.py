@@ -2,7 +2,8 @@ import html
 from pathlib import Path
 
 import markdown
-from PySide6.QtCore import QThread, Qt
+from PySide6.QtCore import QThread, Qt, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -23,12 +24,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .artifact_utils import artifact_url, open_file, open_folder
 from .config import APP_NAME, DEFAULT_SYSTEM_PROMPT
+from .document_tools import build_document_messages, topic_title
 from .file_reader import read_attachment
 from .ollama_client import OllamaClient
 from .pdf_tool import create_red_professional_pdf
 from .storage import ChatStore
-from .workers import ChatWorker
+from .workers import ChatWorker, DocumentWorker
 
 
 STYLE = """
@@ -153,6 +156,10 @@ class MainWindow(QMainWindow):
         self.worker = None
         self.partial_assistant = ""
         self.show_closed = False
+        self.pdf_thread = None
+        self.pdf_worker = None
+        self.pending_pdf_title = ""
+        self.last_artifact_path = None
 
         self.setStyleSheet(STYLE)
         self._build_ui()
@@ -249,6 +256,7 @@ class MainWindow(QMainWindow):
 
         self.chat_view = QTextBrowser()
         self.chat_view.setOpenExternalLinks(False)
+        self.chat_view.anchorClicked.connect(self._open_artifact_url)
         layout.addWidget(self.chat_view, 1)
 
         input_row = QHBoxLayout()
@@ -315,18 +323,56 @@ class MainWindow(QMainWindow):
         layout.addWidget(source_label)
 
         self.pdf_source = QComboBox()
-        self.pdf_source.addItem("Current conversation")
+        self.pdf_source.addItems(["Current conversation", "Custom topic"])
+        self.pdf_source.currentTextChanged.connect(self._pdf_source_changed)
         layout.addWidget(self.pdf_source)
 
-        create_pdf = QPushButton("CREATE PDF")
-        create_pdf.setObjectName("primary")
-        create_pdf.clicked.connect(self._create_pdf)
-        layout.addWidget(create_pdf)
+        self.pdf_topic_label = QLabel("Topic / instructions")
+        self.pdf_topic_label.setObjectName("muted")
+        self.pdf_topic_label.hide()
+        layout.addWidget(self.pdf_topic_label)
 
-        info = QLabel("The PDF is generated directly from the current conversation.")
+        self.pdf_topic = QTextEdit()
+        self.pdf_topic.setPlaceholderText(
+            "Example: Create a 3-page overview of local AI assistants, "
+            "with benefits, limitations and practical examples."
+        )
+        self.pdf_topic.setFixedHeight(100)
+        self.pdf_topic.hide()
+        layout.addWidget(self.pdf_topic)
+
+        self.create_pdf_button = QPushButton("CREATE PDF")
+        self.create_pdf_button.setObjectName("primary")
+        self.create_pdf_button.clicked.connect(self._create_pdf)
+        layout.addWidget(self.create_pdf_button)
+
+        info = QLabel(
+            "Choose the current conversation or let the selected local model "
+            "write a standalone document from your topic."
+        )
         info.setWordWrap(True)
         info.setObjectName("muted")
         layout.addWidget(info)
+
+        self.artifact_path_label = QLabel("")
+        self.artifact_path_label.setWordWrap(True)
+        self.artifact_path_label.setObjectName("muted")
+        self.artifact_path_label.hide()
+        layout.addWidget(self.artifact_path_label)
+
+        artifact_buttons = QHBoxLayout()
+        self.open_artifact_button = QPushButton("OPEN FILE")
+        self.open_artifact_button.clicked.connect(self._open_last_artifact)
+        self.open_artifact_button.hide()
+        artifact_buttons.addWidget(self.open_artifact_button)
+
+        self.open_artifact_folder_button = QPushButton("OPEN FOLDER")
+        self.open_artifact_folder_button.clicked.connect(
+            self._open_last_artifact_folder
+        )
+        self.open_artifact_folder_button.hide()
+        artifact_buttons.addWidget(self.open_artifact_folder_button)
+        layout.addLayout(artifact_buttons)
 
         layout.addStretch()
         return frame
@@ -542,7 +588,8 @@ class MainWindow(QMainWindow):
 
         messages_for_model = [{"role": "system", "content": DEFAULT_SYSTEM_PROMPT}]
         for message in self.current_chat["messages"][:-1]:
-            messages_for_model.append(message)
+            if message.get("role") in {"user", "assistant"}:
+                messages_for_model.append(message)
         messages_for_model.append({"role": "user", "content": text_for_model})
 
         self.partial_assistant = ""
@@ -629,6 +676,24 @@ class MainWindow(QMainWindow):
 
         for message in messages:
             role = message.get("role", "assistant")
+
+            if role == "artifact":
+                path = message.get("path", "")
+                name = html.escape(message.get("name") or Path(path).name or "Artifact")
+                safe_path = html.escape(path)
+                href = html.escape(artifact_url(path)) if path else ""
+                html_parts.append(
+                    "<div style='background:#151D24;border:1px solid #394653;"
+                    "border-radius:12px;padding:15px;margin:12px 6px 18px 6px;'>"
+                    "<div style='font-size:11px;color:#D24A57;font-weight:700;"
+                    "margin-bottom:7px;'>ARTIFACT READY</div>"
+                    f"<div style='font-size:15px;font-weight:700;margin-bottom:6px;'>{name}</div>"
+                    f"<div style='font-size:12px;color:#9099A6;margin-bottom:9px;'>{safe_path}</div>"
+                    f"<a style='color:#F06A75;text-decoration:none;' href='{href}'>OPEN FILE</a>"
+                    "</div>"
+                )
+                continue
+
             rendered = self._markdown_to_html(message.get("content", ""))
 
             if role == "user":
@@ -659,19 +724,130 @@ class MainWindow(QMainWindow):
     def _pdf_selected(self):
         self.pdf_preset.setFocus()
 
+    def _pdf_source_changed(self, source):
+        custom = source == "Custom topic"
+        self.pdf_topic_label.setVisible(custom)
+        self.pdf_topic.setVisible(custom)
+
     def _create_pdf(self):
-        if not self.current_chat:
+        if not self.current_chat or self.pdf_worker is not None:
             return
+
+        source = self.pdf_source.currentText()
+
+        if source == "Current conversation":
+            try:
+                path = create_red_professional_pdf(
+                    self.current_chat.get("messages", []),
+                    title=self.current_chat.get("title") or "Local AI Report",
+                )
+            except Exception as exc:
+                QMessageBox.critical(self, "PDF error", str(exc))
+                return
+            self._register_artifact(path)
+            return
+
+        topic = self.pdf_topic.toPlainText().strip()
+        if not topic:
+            QMessageBox.warning(
+                self,
+                "PDF topic",
+                "Enter a topic or instructions for the document first.",
+            )
+            return
+
+        model = self.model_combo.currentText().strip()
+        if not model or model.startswith("No Ollama"):
+            QMessageBox.warning(
+                self,
+                "Ollama",
+                "Start Ollama and select a local model first.",
+            )
+            return
+
+        self.pending_pdf_title = topic_title(topic)
+        self.create_pdf_button.setEnabled(False)
+        self.create_pdf_button.setText("GENERATING...")
+
+        self.pdf_thread = QThread()
+        self.pdf_worker = DocumentWorker(
+            self.client,
+            model,
+            build_document_messages(topic),
+        )
+        self.pdf_worker.moveToThread(self.pdf_thread)
+
+        self.pdf_thread.started.connect(self.pdf_worker.run)
+        self.pdf_worker.finished.connect(self._on_pdf_document_ready)
+        self.pdf_worker.failed.connect(self._on_pdf_generation_failed)
+        self.pdf_worker.finished.connect(self.pdf_thread.quit)
+        self.pdf_worker.failed.connect(self.pdf_thread.quit)
+        self.pdf_thread.finished.connect(self._cleanup_pdf_worker)
+        self.pdf_thread.start()
+
+    def _on_pdf_document_ready(self, content):
         try:
             path = create_red_professional_pdf(
-                self.current_chat.get("messages", []),
-                title=self.current_chat.get("title") or "Local AI Report",
+                [{"role": "assistant", "content": content}],
+                title=self.pending_pdf_title or "Local AI Document",
             )
         except Exception as exc:
             QMessageBox.critical(self, "PDF error", str(exc))
             return
+        self._register_artifact(path)
 
-        QMessageBox.information(self, "PDF created", f"PDF saved to:\n{path}")
+    def _on_pdf_generation_failed(self, message):
+        QMessageBox.critical(self, "Document generation error", message)
+
+    def _cleanup_pdf_worker(self):
+        if self.pdf_worker is not None:
+            self.pdf_worker.deleteLater()
+        if self.pdf_thread is not None:
+            self.pdf_thread.deleteLater()
+        self.pdf_worker = None
+        self.pdf_thread = None
+        self.pending_pdf_title = ""
+        self.create_pdf_button.setEnabled(True)
+        self.create_pdf_button.setText("CREATE PDF")
+
+    def _register_artifact(self, path):
+        path = Path(path).resolve()
+        self.last_artifact_path = path
+        self.artifact_path_label.setText(str(path))
+        self.artifact_path_label.show()
+        self.open_artifact_button.show()
+        self.open_artifact_folder_button.show()
+
+        self.current_chat["messages"].append(
+            {
+                "role": "artifact",
+                "content": f"{path.suffix.upper().lstrip('.')} created",
+                "path": str(path),
+                "name": path.name,
+            }
+        )
+        self.store.save(self.current_chat)
+        self._render_chat()
+        self._load_chat_list()
+
+    def _open_last_artifact(self):
+        if not self.last_artifact_path:
+            return
+        try:
+            open_file(self.last_artifact_path)
+        except Exception as exc:
+            QMessageBox.critical(self, "Open file error", str(exc))
+
+    def _open_last_artifact_folder(self):
+        if not self.last_artifact_path:
+            return
+        try:
+            open_folder(self.last_artifact_path)
+        except Exception as exc:
+            QMessageBox.critical(self, "Open folder error", str(exc))
+
+    def _open_artifact_url(self, url: QUrl):
+        QDesktopServices.openUrl(url)
 
     def _tool_placeholder(self, name):
         QMessageBox.information(
