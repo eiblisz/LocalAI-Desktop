@@ -185,6 +185,7 @@ class MainWindow(QMainWindow):
         self.worker = None
         self.partial_assistant = ""
         self.current_chat_uses_web = False
+        self.generation_chat_id = ""
         self.show_closed = False
         self.thinking_phase = 0
         self.thinking_base_text = "Gondolkodik"
@@ -776,6 +777,7 @@ class MainWindow(QMainWindow):
         self.current_chat["model"] = model
         self.current_chat["messages"].append({"role": "user", "content": text})
         self.store.save(self.current_chat)
+        self.generation_chat_id = str(self.current_chat.get("id", ""))
         self.input.clear()
         self.attachment_context = []
         self._load_chat_list()
@@ -830,15 +832,33 @@ class MainWindow(QMainWindow):
 
     def _on_finished(self):
         self._stop_thinking_indicator()
-        if self.partial_assistant.strip():
-            self.current_chat["messages"].append(
+        content = self.partial_assistant.strip()
+        target_chat = self.current_chat
+
+        if self.generation_chat_id:
+            try:
+                target_chat = self.store.load(self.generation_chat_id)
+            except Exception:
+                target_chat = self.current_chat
+
+        if content and target_chat is not None:
+            target_chat["messages"].append(
                 {"role": "assistant", "content": self.partial_assistant}
             )
-            self.store.save(self.current_chat)
+            self.store.save(target_chat)
+
+            current_id = str((self.current_chat or {}).get("id", ""))
+            target_id = str(target_chat.get("id", ""))
+            if current_id == target_id:
+                self.current_chat = target_chat
+                self._render_chat()
+        elif not content:
+            self.status.setText("No model response received")
+
         self.partial_assistant = ""
         self.stop_button.setEnabled(False)
-        self.status.setText("Ollama connected")
-        self._render_chat()
+        if content:
+            self.status.setText("Ollama connected")
         self._load_chat_list()
 
     def _on_failed(self, message):
@@ -870,6 +890,7 @@ class MainWindow(QMainWindow):
         self.worker = None
         self.thread = None
         self.current_chat_uses_web = False
+        self.generation_chat_id = ""
         self._stop_thinking_indicator()
         QTimer.singleShot(0, self._run_pending_scheduled_task)
 
@@ -1259,16 +1280,18 @@ class MainWindow(QMainWindow):
             chat_id=chat["id"],
         )
 
-        self.show_closed = False
-        self.current_chat = self.store.load(chat["id"])
-        self._render_chat()
+        current_id = str((self.current_chat or {}).get("id", ""))
+        scheduled_chat_id = str(chat.get("id", ""))
+        if current_id == scheduled_chat_id:
+            self.current_chat = self.store.load(chat["id"])
+            self._render_chat()
         self._load_chat_list()
         if self.scheduler_dialog is not None:
             self.scheduler_dialog._refresh_list()
             self.scheduler_dialog.set_run_status(
                 task_id,
                 (
-                    f'Completed successfully. Result opened in '
+                    f'Completed successfully. Result saved in '
                     f'[SCHEDULE] {task.get("name", "Scheduled task")}.'
                 ),
                 running=False,
