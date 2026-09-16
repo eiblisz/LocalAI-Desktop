@@ -70,3 +70,22 @@ Generated files are saved under `output\`.
 The MVP is a chat client and document tool. It does not automatically execute shell commands, Git operations, repository changes, or arbitrary Python code.
 
 Those capabilities can be added later as explicit opt-in tools.
+
+
+## Artifact themes
+
+LocalAI Desktop uses a shared artifact theme engine across PDF, DOCX, HTML and Excel.
+
+Document presets:
+- Red Professional
+- Red Executive
+- Classic Professional
+- Classic Executive
+
+Workbook presets:
+- Red Executive Workbook
+- Classic Workbook
+
+Classic themes are designed for formal documents and printing: white backgrounds, charcoal text, restrained blue-grey accents, light borders and high readability. Red themes remain available for more visual reports.
+
+Theme definitions live in `app/artifact_themes.py`, so additional families such as Minimal, Corporate Blue, Technical, Academic or Legal can be added without duplicating the artifact generators.
