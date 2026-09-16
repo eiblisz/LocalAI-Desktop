@@ -155,3 +155,75 @@ def test_yahoo_redirect_url_is_decoded():
         web_search_tool._decode_yahoo_result_url(url)
         == "https://example.com/story"
     )
+
+
+def test_web_search_uses_edge_browser_as_final_fallback(monkeypatch):
+    monkeypatch.setattr(
+        web_search_tool,
+        "_search_bing_rss",
+        lambda *args, **kwargs: {"provider": "Bing", "results": []},
+    )
+    monkeypatch.setattr(
+        web_search_tool,
+        "_search_bing_html",
+        lambda *args, **kwargs: {"provider": "Bing HTML", "results": []},
+    )
+    monkeypatch.setattr(
+        web_search_tool,
+        "_search_yahoo_html",
+        lambda *args, **kwargs: {"provider": "Yahoo", "results": []},
+    )
+    monkeypatch.setattr(
+        web_search_tool,
+        "_search_ddg_lite",
+        lambda *args, **kwargs: {"provider": "DDG", "results": []},
+    )
+    monkeypatch.setattr(
+        web_search_tool,
+        "browser_search",
+        lambda query, max_results=6, timeout=20.0: {
+            "provider": "Edge Browser / Bing",
+            "results": [{
+                "title": "Browser result",
+                "url": "https://example.com/browser",
+                "snippet": "Rendered result",
+                "published": "",
+                "page_text": "",
+            }],
+        },
+    )
+
+    payload = web_search_tool.search_web(
+        "browser fallback",
+        fetch_pages=False,
+    )
+
+    assert payload["provider"] == "Edge Browser / Bing"
+    assert payload["results"][0]["title"] == "Browser result"
+
+
+def test_page_read_falls_back_to_edge_browser(monkeypatch):
+    monkeypatch.setattr(
+        web_search_tool,
+        "_safe_page_text",
+        lambda *args, **kwargs: "",
+    )
+    monkeypatch.setattr(
+        web_search_tool,
+        "browser_read_pages",
+        lambda urls, timeout=20.0: {
+            urls[0]: "Rendered browser page text"
+        },
+    )
+
+    results = [{
+        "title": "Result",
+        "url": "https://example.com/page",
+        "snippet": "",
+        "published": "",
+        "page_text": "",
+    }]
+
+    web_search_tool._fetch_top_pages(results, 20.0)
+
+    assert results[0]["page_text"] == "Rendered browser page text"
