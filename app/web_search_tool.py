@@ -8,6 +8,8 @@ from urllib.parse import parse_qs, unquote, urlparse
 import requests
 from bs4 import BeautifulSoup
 
+from .browser_web_tool import browser_read_pages, browser_search
+
 BING_WEB_RSS_URL = "https://www.bing.com/search"
 BING_NEWS_RSS_URL = "https://www.bing.com/news/search"
 YAHOO_SEARCH_URL = "https://search.yahoo.com/search"
@@ -372,6 +374,8 @@ def _search_ddg_lite(query, limit, timeout):
 
 
 def _fetch_top_pages(results, timeout):
+    missing = []
+
     for item in results[: min(3, len(results))]:
         try:
             item["page_text"] = _safe_page_text(
@@ -380,6 +384,22 @@ def _fetch_top_pages(results, timeout):
             )
         except Exception:
             item["page_text"] = ""
+
+        if not item.get("page_text"):
+            missing.append(item["url"])
+
+    if missing:
+        try:
+            browser_pages = browser_read_pages(
+                missing,
+                timeout=min(timeout, 20.0),
+            )
+        except Exception:
+            browser_pages = {}
+
+        for item in results[: min(3, len(results))]:
+            if not item.get("page_text"):
+                item["page_text"] = browser_pages.get(item["url"], "")
 
 
 def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
@@ -394,6 +414,7 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
         ("Bing News RSS", lambda: _search_bing_rss(clean, limit, timeout, news=True)),
         ("Yahoo Search HTML", lambda: _search_yahoo_html(clean, limit, timeout)),
         ("DuckDuckGo Lite", lambda: _search_ddg_lite(clean, limit, timeout)),
+        ("Edge Browser / Bing", lambda: browser_search(clean, limit, timeout)),
     ]
     errors = []
 
