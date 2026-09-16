@@ -1,6 +1,7 @@
 import html
 import ipaddress
 import socket
+import re
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from urllib.parse import parse_qs, unquote, urlparse
@@ -373,6 +374,55 @@ def _search_ddg_lite(query, limit, timeout):
     }
 
 
+STOP_TERMS = {
+    "the", "and", "for", "with", "from", "this", "that", "latest", "news",
+    "current", "recent", "about", "into", "using", "find", "search",
+    "keress", "keresd", "meg", "legfrissebb", "fontos", "hirek", "hírek",
+    "foglald", "ossze", "össze", "roviden", "röviden", "csak", "konkret",
+    "konkrét", "friss", "informaciot", "információt", "irj", "írj",
+}
+
+
+def _query_terms(query):
+    terms = []
+    for token in re.findall(r"\w+", str(query).lower(), flags=re.UNICODE):
+        if len(token) < 3 or token in STOP_TERMS or token == "site":
+            continue
+        if token.isdigit() and len(token) < 3:
+            continue
+        terms.append(token)
+    return list(dict.fromkeys(terms))
+
+
+def _filter_relevant_results(query, results):
+    terms = _query_terms(query)
+    if not terms:
+        return list(results)
+
+    relevant = []
+    for item in results:
+        haystack = " ".join([
+            str(item.get("title", "")),
+            str(item.get("snippet", "")),
+            str(item.get("url", "")),
+        ]).lower()
+        if any(term in haystack for term in terms):
+            relevant.append(item)
+
+    return relevant
+
+
+def source_urls(payload, limit=10):
+    urls = []
+    for item in payload.get("results") or []:
+        url = str(item.get("url", "")).strip()
+        if url and url not in urls:
+            urls.append(url)
+        if len(urls) >= limit:
+            break
+    return urls
+
+
 def _fetch_top_pages(results, timeout):
     missing = []
 
@@ -424,6 +474,11 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
             results = payload.get("results") or []
             if not results:
                 errors.append(f"{name}: no results")
+                continue
+
+            results = _filter_relevant_results(clean, results)
+            if not results:
+                errors.append(f"{name}: results were not relevant to the query")
                 continue
 
             if fetch_pages:
