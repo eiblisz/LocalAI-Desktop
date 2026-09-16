@@ -11,6 +11,15 @@ class ChatStore:
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
 
+    @staticmethod
+    def _normalize(chat: dict) -> dict:
+        chat.setdefault("title", "New chat")
+        chat.setdefault("model", "")
+        chat.setdefault("messages", [])
+        chat.setdefault("pinned", False)
+        chat.setdefault("closed", False)
+        return chat
+
     def new_chat(self, model: str = "") -> dict:
         now = datetime.now().isoformat(timespec="seconds")
         chat = {
@@ -19,12 +28,15 @@ class ChatStore:
             "model": model,
             "created_at": now,
             "updated_at": now,
+            "pinned": False,
+            "closed": False,
             "messages": [],
         }
         self.save(chat)
         return chat
 
     def save(self, chat: dict) -> None:
+        self._normalize(chat)
         chat["updated_at"] = datetime.now().isoformat(timespec="seconds")
         path = self.root / f"{chat['id']}.json"
         path.write_text(
@@ -34,17 +46,48 @@ class ChatStore:
 
     def load(self, chat_id: str) -> dict:
         path = self.root / f"{chat_id}.json"
-        return json.loads(path.read_text(encoding="utf-8"))
+        return self._normalize(json.loads(path.read_text(encoding="utf-8")))
 
-    def list_chats(self) -> list[dict]:
+    def list_chats(self, include_closed: bool = False) -> list[dict]:
         items = []
         for path in self.root.glob("*.json"):
             try:
-                chat = json.loads(path.read_text(encoding="utf-8"))
-                items.append(chat)
+                chat = self._normalize(
+                    json.loads(path.read_text(encoding="utf-8"))
+                )
+                if include_closed or not chat.get("closed", False):
+                    items.append(chat)
             except Exception:
                 continue
-        return sorted(items, key=lambda x: x.get("updated_at", ""), reverse=True)
+
+        return sorted(
+            items,
+            key=lambda x: (
+                bool(x.get("pinned", False)),
+                x.get("updated_at", ""),
+            ),
+            reverse=True,
+        )
+
+    def rename(self, chat_id: str, title: str) -> dict:
+        chat = self.load(chat_id)
+        clean = " ".join(title.strip().split())
+        if clean:
+            chat["title"] = clean[:80]
+            self.save(chat)
+        return chat
+
+    def set_pinned(self, chat_id: str, pinned: bool) -> dict:
+        chat = self.load(chat_id)
+        chat["pinned"] = bool(pinned)
+        self.save(chat)
+        return chat
+
+    def set_closed(self, chat_id: str, closed: bool) -> dict:
+        chat = self.load(chat_id)
+        chat["closed"] = bool(closed)
+        self.save(chat)
+        return chat
 
     @staticmethod
     def infer_title(text: str) -> str:
