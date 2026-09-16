@@ -54,13 +54,6 @@ class SchedulerDialog(QDialog):
         title.setStyleSheet("font-size:17px;font-weight:700;")
         left.addWidget(title)
 
-        self.type_status_labels = {}
-        for key, label in TASK_TYPES.items():
-            status = QLabel(f"●  {label}")
-            status.setStyleSheet("color:#7F8995;font-weight:700;padding:2px 4px;")
-            self.type_status_labels[key] = status
-            left.addWidget(status)
-
         self.task_list = QListWidget()
         self.task_list.itemClicked.connect(self._task_selected)
         left.addWidget(self.task_list, 1)
@@ -212,37 +205,6 @@ class SchedulerDialog(QDialog):
             if index >= 0:
                 self.model_combo.setCurrentIndex(index)
 
-    def _type_health(self, task_type):
-        tasks = [
-            task
-            for task in self.store.list_tasks()
-            if task.get("task_type", "weather") == task_type
-        ]
-        enabled = [task for task in tasks if task.get("enabled", True)]
-        if not enabled:
-            return "idle", 0
-        if any(task.get("last_status") == "failed" for task in enabled):
-            return "error", len(enabled)
-        return "active", len(enabled)
-
-    def _refresh_type_statuses(self):
-        for key, label in TASK_TYPES.items():
-            state, count = self._type_health(key)
-            widget = self.type_status_labels[key]
-            if state == "error":
-                color = "#D46A72"
-                suffix = f"  {count} active · ERROR"
-            elif state == "active":
-                color = "#78B98C"
-                suffix = f"  {count} active"
-            else:
-                color = "#7F8995"
-                suffix = "  inactive"
-            widget.setText(f"●  {label}{suffix}")
-            widget.setStyleSheet(
-                f"color:{color};font-weight:700;padding:2px 4px;"
-            )
-
     def _refresh_list(self):
         selected_id = self.current_id
         self.task_list.clear()
@@ -286,7 +248,6 @@ class SchedulerDialog(QDialog):
             if task["id"] == selected_id:
                 self.task_list.setCurrentItem(item)
 
-        self._refresh_type_statuses()
 
     def _task_selected(self, item):
         task = self.store.get(item.data(Qt.UserRole))
