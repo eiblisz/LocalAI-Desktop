@@ -10,7 +10,12 @@ from .computer_status_tool import (
 from .ebay_tool import ebay_context_text, search_ebay
 from .ollama_client import OllamaClient
 from .weather_tool import get_weather, weather_context_text
-from .web_search_tool import search_web, source_urls, web_search_context_text
+from .web_search_tool import (
+    search_web,
+    source_entries,
+    source_urls,
+    web_search_context_text,
+)
 
 
 class ChatWorker(QObject):
@@ -109,6 +114,7 @@ class ChatWebWorker(QObject):
             queries = self._generate_search_queries()
             contexts = []
             urls = []
+            entries = []
             successful_queries = []
             failed_queries = []
 
@@ -143,6 +149,12 @@ class ChatWebWorker(QObject):
                     if url not in urls:
                         urls.append(url)
 
+                for entry in source_entries(payload, limit=6):
+                    if entry["url"] not in {
+                        item["url"] for item in entries
+                    }:
+                        entries.append(entry)
+
             if not contexts or not urls:
                 detail = " | ".join(failed_queries[:4])
                 raise RuntimeError(
@@ -164,7 +176,11 @@ class ChatWebWorker(QObject):
                     "If one part has no supporting source, say that explicitly for that "
                     "part instead of inventing an answer. Never invent prices, "
                     "specifications, dates, availability, ratings, comparisons, or "
-                    "quotations. Do not answer an adjacent topic."
+                    "quotations. Do not answer an adjacent topic. When you mention a "
+                    "specific product, offer, article, or result, include its provided "
+                    "source URL in the same bullet or sentence using Markdown link syntax. "
+                    "Do not say you cannot browse the web; the authorized web data has "
+                    "already been collected for you."
                 ),
             }
 
@@ -203,9 +219,16 @@ class ChatWebWorker(QObject):
                 self.finished.emit()
                 return
 
-            source_lines = "\n".join(
-                f"- {url}" for url in urls[:12]
-            )
+            if entries:
+                source_lines = "\n".join(
+                    f"- [{item['title']}]({item['url']})"
+                    for item in entries[:12]
+                )
+            else:
+                source_lines = "\n".join(
+                    f"- {url}" for url in urls[:12]
+                )
+
             if len(successful_queries) == 1:
                 query_footer = f"Search query: {successful_queries[0]}"
             else:
@@ -219,7 +242,7 @@ class ChatWebWorker(QObject):
             self.token.emit(
                 "\n\n---\n"
                 f"{query_footer}\n"
-                "Sources:\n"
+                "Web results / sources:\n"
                 f"{source_lines}"
             )
             self.finished.emit()
