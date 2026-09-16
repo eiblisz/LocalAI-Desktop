@@ -125,7 +125,7 @@ class SchedulerDialog(QDialog):
         form.addRow("Data access", self.data_access_label)
 
         self.frequency_combo = QComboBox()
-        self.frequency_combo.addItems(["Hourly", "Daily"])
+        self.frequency_combo.addItems(["Hourly", "Daily", "Weekly"])
         self.frequency_combo.currentTextChanged.connect(self._frequency_changed)
         form.addRow("Frequency", self.frequency_combo)
 
@@ -136,7 +136,20 @@ class SchedulerDialog(QDialog):
         self.interval_spin.setSuffix(" hour(s)")
         form.addRow(self.every_label, self.interval_spin)
 
-        self.daily_time_label = QLabel("Daily time")
+        self.weekly_day_label = QLabel("Weekday")
+        self.weekly_day_combo = QComboBox()
+        self.weekly_day_combo.addItems([
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+            "Sunday",
+        ])
+        form.addRow(self.weekly_day_label, self.weekly_day_combo)
+
+        self.daily_time_label = QLabel("Run time")
         self.daily_time = QTimeEdit()
         self.daily_time.setDisplayFormat("HH:mm")
         self.daily_time.setTime(QTime(8, 0))
@@ -145,6 +158,11 @@ class SchedulerDialog(QDialog):
         self.enabled_checkbox = QPushButton("ENABLED")
         self.enabled_checkbox.setCheckable(True)
         self.enabled_checkbox.setChecked(True)
+        self.enabled_checkbox.toggled.connect(
+            lambda checked: self.enabled_checkbox.setText(
+                "ENABLED" if checked else "DISABLED"
+            )
+        )
         form.addRow("State", self.enabled_checkbox)
 
         right.addLayout(form)
@@ -247,6 +265,11 @@ class SchedulerDialog(QDialog):
 
             if task.get("frequency") == "daily":
                 schedule = f"daily {task.get('daily_time', '08:00')}"
+            elif task.get("frequency") == "weekly":
+                weekday = [
+                    "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"
+                ][max(0, min(int(task.get("weekly_day", 0) or 0), 6))]
+                schedule = f"weekly {weekday} {task.get('daily_time', '08:00')}"
             else:
                 schedule = f"every {task.get('interval_hours', 1)}h"
 
@@ -286,9 +309,18 @@ class SchedulerDialog(QDialog):
         if index >= 0:
             self.model_combo.setCurrentIndex(index)
 
-        daily = task.get("frequency") == "daily"
-        self.frequency_combo.setCurrentText("Daily" if daily else "Hourly")
+        frequency = task.get("frequency", "hourly")
+        self.frequency_combo.setCurrentText(
+            "Weekly"
+            if frequency == "weekly"
+            else "Daily"
+            if frequency == "daily"
+            else "Hourly"
+        )
         self.interval_spin.setValue(max(1, int(task.get("interval_hours", 1) or 1)))
+        self.weekly_day_combo.setCurrentIndex(
+            max(0, min(int(task.get("weekly_day", 0) or 0), 6))
+        )
 
         parsed = QTime.fromString(task.get("daily_time", "08:00"), "HH:mm")
         self.daily_time.setTime(parsed if parsed.isValid() else QTime(8, 0))
@@ -316,6 +348,7 @@ class SchedulerDialog(QDialog):
         self.task_type_combo.setCurrentText("Weather")
         self.frequency_combo.setCurrentText("Hourly")
         self.interval_spin.setValue(1)
+        self.weekly_day_combo.setCurrentIndex(0)
         self.daily_time.setTime(QTime(8, 0))
         self.enabled_checkbox.setChecked(True)
         self.enabled_checkbox.setText("ENABLED")
@@ -324,11 +357,15 @@ class SchedulerDialog(QDialog):
         self._task_type_changed(self.task_type_combo.currentText())
 
     def _frequency_changed(self, value):
-        daily = value == "Daily"
-        self.every_label.setVisible(not daily)
-        self.interval_spin.setVisible(not daily)
-        self.daily_time_label.setVisible(daily)
-        self.daily_time.setVisible(daily)
+        hourly = value == "Hourly"
+        weekly = value == "Weekly"
+
+        self.every_label.setVisible(hourly)
+        self.interval_spin.setVisible(hourly)
+        self.weekly_day_label.setVisible(weekly)
+        self.weekly_day_combo.setVisible(weekly)
+        self.daily_time_label.setVisible(not hourly)
+        self.daily_time.setVisible(not hourly)
 
     def _task_type_changed(self, label):
         task_type = TYPE_KEYS_BY_LABEL.get(label, "weather")
@@ -404,12 +441,15 @@ class SchedulerDialog(QDialog):
             "ebay_query": ebay_query if task_type == "ebay" else "",
             "ebay_max_results": self.ebay_results_spin.value(),
             "frequency": (
-                "daily"
+                "weekly"
+                if self.frequency_combo.currentText() == "Weekly"
+                else "daily"
                 if self.frequency_combo.currentText() == "Daily"
                 else "hourly"
             ),
             "interval_hours": self.interval_spin.value(),
             "daily_time": self.daily_time.time().toString("HH:mm"),
+            "weekly_day": self.weekly_day_combo.currentIndex(),
             "enabled": enabled,
             "permissions": {
                 "weather": task_type == "weather",
