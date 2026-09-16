@@ -179,6 +179,7 @@ class MainWindow(QMainWindow):
         self.pending_pdf_title = ""
         self.pending_tool = ""
         self.pending_preset = ""
+        self.pending_model = ""
         self.active_tool = "PDF"
         self.last_artifact_path = None
 
@@ -839,10 +840,20 @@ class MainWindow(QMainWindow):
                 else create_red_professional_pdf
             )
         if tool == "DOCX":
-            return (
+            model_name = (
+                self.pending_model
+                or (self.current_chat or {}).get("model", "")
+                or self.model_combo.currentText().strip()
+            )
+            creator = (
                 create_red_executive_docx
                 if executive
                 else create_red_professional_docx
+            )
+            return lambda messages, title: creator(
+                messages,
+                title=title,
+                model_name=model_name,
             )
         if tool == "HTML":
             return lambda messages, title: create_red_html(
@@ -959,6 +970,7 @@ class MainWindow(QMainWindow):
         self.pending_pdf_title = title
         self.pending_tool = tool
         self.pending_preset = preset
+        self.pending_model = model
 
         self.create_pdf_button.setEnabled(False)
         self.create_pdf_button.setText("GENERATING...")
@@ -1038,6 +1050,7 @@ class MainWindow(QMainWindow):
         self.pending_pdf_title = ""
         self.pending_tool = ""
         self.pending_preset = ""
+        self.pending_model = ""
 
         self.create_pdf_button.setEnabled(True)
         self._select_tool(self.active_tool)
