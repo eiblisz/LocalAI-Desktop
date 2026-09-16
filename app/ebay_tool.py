@@ -5,6 +5,7 @@ from urllib.parse import urlencode, urlparse
 import requests
 from bs4 import BeautifulSoup
 
+from .browser_web_tool import browser_read_html
 from .web_search_tool import search_web
 
 EBAY_SEARCH_URL = "https://www.ebay.de/sch/i.html"
@@ -31,17 +32,8 @@ def _price_from_text(text):
     return ""
 
 
-def _direct_ebay_search(clean, limit, timeout):
-    params = {"_nkw": clean}
-    response = requests.get(
-        EBAY_SEARCH_URL,
-        params=params,
-        headers={"User-Agent": USER_AGENT},
-        timeout=timeout,
-    )
-    response.raise_for_status()
-
-    soup = BeautifulSoup(response.text, "html.parser")
+def _parse_ebay_html(html_text, limit):
+    soup = BeautifulSoup(html_text, "html.parser")
     results = []
     for item in soup.select("li.s-item"):
         title_node = item.select_one(".s-item__title")
@@ -72,7 +64,31 @@ def _direct_ebay_search(clean, limit, timeout):
         if len(results) >= limit:
             break
 
-    return results, EBAY_SEARCH_URL + "?" + urlencode(params)
+    return results
+
+
+def _direct_ebay_search(clean, limit, timeout):
+    params = {"_nkw": clean}
+    response = requests.get(
+        EBAY_SEARCH_URL,
+        params=params,
+        headers={"User-Agent": USER_AGENT},
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    return (
+        _parse_ebay_html(response.text, limit),
+        EBAY_SEARCH_URL + "?" + urlencode(params),
+    )
+
+
+def _browser_ebay_search(clean, limit, timeout):
+    search_url = EBAY_SEARCH_URL + "?" + urlencode({"_nkw": clean})
+    html_text = browser_read_html(
+        search_url,
+        timeout=timeout,
+    )
+    return _parse_ebay_html(html_text, limit), search_url
 
 
 def _is_ebay_item_url(url):
@@ -142,6 +158,24 @@ def search_ebay(query, max_results=8, timeout=20.0):
         errors.append("direct eBay: no parseable results")
     except Exception as exc:
         errors.append(f"direct eBay: {exc}")
+
+    try:
+        results, search_url = _browser_ebay_search(
+            clean,
+            limit,
+            timeout,
+        )
+        if results:
+            return {
+                "provider": "eBay.de via Edge Browser",
+                "query": clean,
+                "retrieved_at": datetime.now().isoformat(timespec="seconds"),
+                "search_url": search_url,
+                "results": results,
+            }
+        errors.append("Edge browser eBay: no parseable results")
+    except Exception as exc:
+        errors.append(f"Edge browser eBay: {exc}")
 
     try:
         results, web_payload = _web_fallback(
