@@ -153,7 +153,7 @@ def test_chat_web_worker_stop_prevents_source_footer(monkeypatch):
     worker.stop()
     worker.run()
 
-    assert "Sources:" not in "".join(tokens)
+    assert "Web results / sources:" not in "".join(tokens)
 
 
 def test_chat_web_worker_runs_separate_searches_for_multi_part_request(monkeypatch):
@@ -221,3 +221,61 @@ def test_chat_web_worker_runs_separate_searches_for_multi_part_request(monkeypat
     assert "https://example.com/1" in combined
     assert "https://example.com/2" in combined
     assert "https://example.com/3" in combined
+
+
+def test_chat_web_worker_appends_markdown_result_links(monkeypatch):
+    monkeypatch.setattr(
+        workers.ChatWebWorker,
+        "_generate_search_queries",
+        lambda self: ["64GB DDR4 2x32 Germany price"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "search_web",
+        lambda query, max_results=6, fetch_pages=True: {
+            "provider": "test",
+            "query": query,
+            "results": [{
+                "title": "Kingston 64GB DDR4 kit",
+                "url": "https://shop.example/kingston-64gb",
+                "snippet": "2x32GB DDR4 kit EUR 149",
+            }],
+        },
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: ["https://shop.example/kingston-64gb"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_entries",
+        lambda payload, limit=10: [{
+            "title": "Kingston 64GB DDR4 kit",
+            "url": "https://shop.example/kingston-64gb",
+        }],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: "WEB SEARCH TOOL DATA",
+    )
+
+    client = DummyWebClient()
+    tokens = []
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "2x32GB DDR4 1000 EUR alatt",
+    )
+    worker.token.connect(tokens.append)
+    worker.run()
+
+    combined = "".join(tokens)
+    assert (
+        "[Kingston 64GB DDR4 kit]"
+        "(https://shop.example/kingston-64gb)"
+        in combined
+    )
+    assert "Web results / sources:" in combined
