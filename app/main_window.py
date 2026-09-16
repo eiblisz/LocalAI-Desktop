@@ -283,20 +283,10 @@ class MainWindow(QMainWindow):
         self.schedule_button.clicked.connect(self._open_scheduler)
         layout.addWidget(self.schedule_button)
 
-        self.schedule_type_labels = {}
-        for key, label_text in [
-            ("weather", "Weather"),
-            ("ebay", "eBay Search"),
-            ("computer", "Computer"),
-            ("custom", "Custom"),
-        ]:
-            status_label = QLabel(f"○  {label_text}")
-            status_label.setObjectName("muted")
-            status_label.setStyleSheet(
-                "padding-left:8px;color:#7F8995;font-size:11px;"
-            )
-            self.schedule_type_labels[key] = status_label
-            layout.addWidget(status_label)
+        self.schedule_task_status_layout = QVBoxLayout()
+        self.schedule_task_status_layout.setContentsMargins(6, 0, 4, 0)
+        self.schedule_task_status_layout.setSpacing(1)
+        layout.addLayout(self.schedule_task_status_layout)
 
         layout.addSpacing(8)
 
@@ -873,6 +863,7 @@ class MainWindow(QMainWindow):
     def _refresh_schedule_indicator(self):
         self.schedule_indicator_state = self._schedule_health_state()
         self._apply_schedule_button_style()
+        self._refresh_schedule_task_labels()
 
     def _pulse_schedule_button(self):
         self.schedule_pulse_on = not self.schedule_pulse_on
@@ -882,38 +873,14 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "schedule_button"):
             return
 
-        state = self.schedule_indicator_state
-        pulse = self.schedule_pulse_on
-
-        if state == "error":
-            background = "#6A3035" if pulse else "#57282D"
-            border = "#B85A63"
-            self.schedule_button.setText("SCHEDULE  ●")
-            self.schedule_button.setToolTip(
-                "Scheduler attention required: an enabled task failed or no Ollama model is available."
-            )
-        elif state == "running":
-            background = "#356A4A" if pulse else "#2C5B40"
-            border = "#6FAF83"
-            self.schedule_button.setText("SCHEDULE  ●  RUNNING")
-            self.schedule_button.setToolTip("A scheduled task is running now.")
-        elif state == "active":
-            background = "#315A43" if pulse else "#294C39"
-            border = "#5F9C73"
-            self.schedule_button.setText("SCHEDULE  ●")
-            self.schedule_button.setToolTip(
-                "Scheduler active: at least one enabled task is waiting for its next run."
-            )
-        else:
-            background = "#202730"
-            border = "#323C48"
-            self.schedule_button.setText("SCHEDULE")
-            self.schedule_button.setToolTip("No enabled scheduled tasks.")
-
+        self.schedule_button.setText("SCHEDULE")
+        self.schedule_button.setToolTip(
+            "Open the scheduler and manage saved automations."
+        )
         self.schedule_button.setStyleSheet(
             "QPushButton {"
-            f"background:{background};"
-            f"border:1px solid {border};"
+            "background:#202730;"
+            "border:1px solid #323C48;"
             "border-radius:10px;"
             "padding:9px 13px;"
             "color:#F4F6F8;"
@@ -921,48 +888,69 @@ class MainWindow(QMainWindow):
             "min-height:44px;"
             "}"
             "QPushButton:hover {"
-            f"background:{background};"
+            "background:#29323D;"
             "}"
         )
-        self._refresh_schedule_type_labels()
 
-    def _refresh_schedule_type_labels(self):
-        if not hasattr(self, "schedule_type_labels"):
+    def _clear_schedule_task_labels(self):
+        if not hasattr(self, "schedule_task_status_layout"):
             return
 
+        while self.schedule_task_status_layout.count():
+            item = self.schedule_task_status_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def _refresh_schedule_task_labels(self):
+        if not hasattr(self, "schedule_task_status_layout"):
+            return
+
+        self._clear_schedule_task_labels()
         tasks = self.scheduler_store.list_tasks()
-        names = {
-            "weather": "Weather",
-            "ebay": "eBay Search",
-            "computer": "Computer",
-            "custom": "Custom",
-        }
+        running_id = ""
+        if self.scheduled_worker is not None:
+            running_id = str(
+                getattr(self.scheduled_worker, "task", {}).get("id", "")
+            )
 
-        for task_type, widget in self.schedule_type_labels.items():
-            typed = [
-                task
-                for task in tasks
-                if task.get("task_type", "weather") == task_type
-            ]
-            enabled = [task for task in typed if task.get("enabled", True)]
+        for task in tasks:
+            enabled = bool(task.get("enabled", True))
+            failed = task.get("last_status") == "failed"
+            running = task.get("id") == running_id
+            pulse = self.schedule_pulse_on
 
-            if any(task.get("last_status") == "failed" for task in enabled):
+            if failed and enabled:
                 dot = "●"
-                color = "#D46A72"
-                suffix = " ERROR"
+                color = "#E07A82" if pulse else "#B95A63"
+                suffix = "  ERROR"
+            elif running:
+                dot = "●"
+                color = "#8AC89C" if pulse else "#5FAE78"
+                suffix = "  RUNNING"
             elif enabled:
                 dot = "●"
-                color = "#78B98C"
-                suffix = f" {len(enabled)} active"
+                color = "#86C69A" if pulse else "#65A97A"
+                suffix = ""
             else:
                 dot = "○"
                 color = "#7F8995"
-                suffix = ""
+                suffix = "  DISABLED"
 
-            widget.setText(f"{dot}  {names[task_type]}{suffix}")
-            widget.setStyleSheet(
-                f"padding-left:8px;color:{color};font-size:11px;"
+            name = str(task.get("name", "Scheduled task")).strip() or "Scheduled task"
+            label = QLabel(f"{dot}  {name}{suffix}")
+            label.setStyleSheet(
+                f"padding:2px 4px 2px 8px;color:{color};font-size:11px;"
             )
+            label.setToolTip(
+                "Type: {task_type}\nNext run: {next_run}\nLast status: {last_status}".format(
+                    task_type=task.get("task_type", "custom"),
+                    next_run=task.get("next_run_at") or "not scheduled",
+                    last_status=task.get("last_status", "never"),
+                )
+            )
+            self.schedule_task_status_layout.addWidget(label)
+
 
     def _check_scheduled_tasks(self):
         if (
