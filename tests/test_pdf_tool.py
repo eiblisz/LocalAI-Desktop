@@ -1,6 +1,10 @@
 from pathlib import Path
 
-from app.pdf_tool import create_red_professional_pdf, markdown_to_reportlab
+from app.pdf_tool import (
+    create_red_executive_pdf,
+    create_red_professional_pdf,
+    markdown_to_reportlab,
+)
 
 
 def test_pdf_created(tmp_path: Path):
@@ -15,6 +19,32 @@ def test_pdf_created(tmp_path: Path):
     )
     assert path.exists()
     assert path.stat().st_size > 500
+
+
+def test_red_executive_pdf_created(tmp_path: Path):
+    messages = [
+        {
+            "role": "assistant",
+            "content": (
+                "# Local AI Development System\n"
+                "## Executive Summary\n"
+                "A structured local model report.\n\n"
+                "Source Generation: 90%\n"
+                "Syntax Correctness: 95%\n\n"
+                "| Model | Result |\n"
+                "| --- | --- |\n"
+                "| Qwen | Strong |"
+            ),
+        }
+    ]
+    path = create_red_executive_pdf(
+        messages,
+        title="Fallback title",
+        output_dir=tmp_path,
+    )
+    assert path.exists()
+    assert path.name.startswith("local_ai_executive_")
+    assert path.stat().st_size > 1000
 
 
 def test_markdown_bold_is_rendered_for_reportlab():
