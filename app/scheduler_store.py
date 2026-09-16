@@ -65,12 +65,20 @@ class ScheduledTaskStore:
         task.setdefault("name", "Scheduled task")
         task.setdefault("prompt", "")
         task.setdefault("location", "")
+        task.setdefault("ebay_query", "")
+        task.setdefault("ebay_max_results", 8)
         task.setdefault("model", "")
         task.setdefault("frequency", "hourly")
         task.setdefault("interval_hours", 1)
         task.setdefault("daily_time", "08:00")
         task.setdefault("enabled", True)
-        task.setdefault("permissions", {"weather": False})
+        permissions = task.setdefault("permissions", {"weather": False})
+        if "task_type" not in task:
+            task["task_type"] = (
+                "weather"
+                if permissions.get("weather", False)
+                else "custom"
+            )
         task.setdefault("chat_id", "")
         task.setdefault("last_run_at", "")
         task.setdefault("last_status", "never")
