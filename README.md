@@ -89,3 +89,23 @@ Workbook presets:
 Classic themes are designed for formal documents and printing: white backgrounds, charcoal text, restrained blue-grey accents, light borders and high readability. Red themes remain available for more visual reports.
 
 Theme definitions live in `app/artifact_themes.py`, so additional families such as Minimal, Corporate Blue, Technical, Academic or Legal can be added without duplicating the artifact generators.
+
+
+## Scheduled tasks
+
+LocalAI Desktop includes a bounded scheduler for recurring local-model tasks.
+
+Current MVP:
+- Hourly schedules with a configurable interval.
+- Daily schedules at a selected local time.
+- RUN NOW for immediate execution.
+- Persistent task storage under `data/schedules/tasks.json`.
+- Results are written to a dedicated `[SCHEDULE] ...` chat.
+- Scheduled work is postponed while a normal chat or document generation is using Ollama.
+
+Internet access is permission-based. The first available external tool is Weather:
+- Location lookup through Open-Meteo geocoding.
+- Current conditions plus the next 12 hours of forecast data.
+- The Ollama model receives only the returned tool data; it does not get arbitrary web access.
+
+The scheduler currently runs while LocalAI Desktop is open. A separate Windows background/autostart runner can be added later for schedules that must continue after the GUI is closed.
