@@ -385,3 +385,103 @@ def test_hungarian_conversation_forces_hungarian_final_answer():
 
     instruction = worker._conversation_language_instruction()
     assert "Hungarian" in instruction
+
+
+def test_single_topic_search_preserves_hardware_and_price_constraints():
+    class ConstraintDroppingClient(DummyWebClient):
+        def chat_once(self, model, messages, timeout=600.0):
+            self.once_calls.append((model, messages))
+            return "DDR4 RAM Germany shops"
+
+    worker = workers.ChatWebWorker(
+        ConstraintDroppingClient(),
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Keress 2x32GB DDR4 3200 MHz RAM-ot Németországban 200 EUR alatt",
+    )
+
+    assert worker._generate_search_queries() == [
+        "DDR4 RAM Germany shops 2x32GB 3200 MHz 200 EUR"
+    ]
+
+
+def test_multi_topic_search_does_not_cross_contaminate_constraints():
+    class MultiClient(DummyWebClient):
+        def chat_once(self, model, messages, timeout=600.0):
+            self.once_calls.append((model, messages))
+            return (
+                "latest Qwen model release\n"
+                "64GB DDR4 2x32 current prices Germany"
+            )
+
+    worker = workers.ChatWebWorker(
+        MultiClient(),
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        (
+            "Nézd meg a legfrissebb Qwen modellt. "
+            "Keress 2x32GB DDR4 RAM-ot 200 EUR alatt."
+        ),
+    )
+
+    assert worker._generate_search_queries() == [
+        "latest Qwen model release",
+        "64GB DDR4 2x32 current prices Germany",
+    ]
+
+
+def test_chat_web_worker_footer_reports_provider_and_brave_fallback(monkeypatch):
+    monkeypatch.setattr(
+        workers.ChatWebWorker,
+        "_generate_search_queries",
+        lambda self: ["2x32GB DDR4 3200MHz Germany 200 EUR"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "search_web",
+        lambda query, max_results=6, fetch_pages=True: {
+            "provider": "Bing Web RSS",
+            "provider_chain_errors": [
+                "Brave Search API: 401 Client Error"
+            ],
+            "query": query,
+            "results": [{
+                "title": "64GB DDR4 kit",
+                "url": "https://example.com/ram",
+                "snippet": "2x32GB DDR4 3200MHz",
+            }],
+        },
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: ["https://example.com/ram"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_entries",
+        lambda payload, limit=10: [{
+            "title": "64GB DDR4 kit",
+            "url": "https://example.com/ram",
+        }],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: "WEB SEARCH TOOL DATA",
+    )
+
+    client = DummyWebClient()
+    tokens = []
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Keress 2x32GB DDR4 RAM-ot",
+    )
+    worker.token.connect(tokens.append)
+    worker.run()
+
+    combined = "".join(tokens)
+    assert "Search provider: Bing Web RSS" in combined
+    assert "Brave fallback: 401 Client Error" in combined
