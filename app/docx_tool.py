@@ -8,16 +8,9 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
+from .artifact_themes import get_theme
 from .config import OUTPUT_DIR
-from .localization import labels_for_text
-
-RED = "B92F3B"
-DARK_RED = "8E1F2D"
-LIGHT_RED = "F9EDEF"
-TEXT = "1F2630"
-MUTED = "6C737F"
-LIGHT_GREY = "F4F6F8"
-BORDER = "D9DEE5"
+from .localization import is_hungarian, labels_for_text
 
 
 def _visible_messages(messages):
@@ -62,7 +55,7 @@ def _shade_cell(cell, fill):
     tc_pr.append(shd)
 
 
-def _set_cell_border(cell, color=BORDER, size="4"):
+def _set_cell_border(cell, color, size="4"):
     tc = cell._tc
     tc_pr = tc.get_or_add_tcPr()
     tc_borders = tc_pr.first_child_found_in("w:tcBorders")
@@ -81,26 +74,11 @@ def _set_cell_border(cell, color=BORDER, size="4"):
         element.set(qn("w:color"), color)
 
 
-def _set_cell_text(
-    cell,
-    text,
-    bold=False,
-    color=TEXT,
-    size=10.5,
-    align=WD_ALIGN_PARAGRAPH.CENTER,
-):
-    cell.text = ""
-    p = cell.paragraphs[0]
-    p.alignment = align
-    _add_inline_runs(p, text, size=size, color=color, force_bold=bold)
-    cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
-
-
 def _add_inline_runs(
     paragraph,
     text,
-    size=11.5,
-    color=TEXT,
+    size,
+    color,
     force_bold=False,
 ):
     parts = re.split(r"(\*\*.+?\*\*)", text)
@@ -116,6 +94,28 @@ def _add_inline_runs(
         run.font.color.rgb = RGBColor.from_string(color)
 
 
+def _set_cell_text(
+    cell,
+    text,
+    theme,
+    bold=False,
+    color=None,
+    size=10.5,
+    align=WD_ALIGN_PARAGRAPH.CENTER,
+):
+    cell.text = ""
+    p = cell.paragraphs[0]
+    p.alignment = align
+    _add_inline_runs(
+        p,
+        text,
+        size=size,
+        color=color or theme.text,
+        force_bold=bold,
+    )
+    cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+
+
 def _is_table_separator(line):
     cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
     return bool(cells) and all(
@@ -127,7 +127,7 @@ def _parse_table_row(line):
     return [cell.strip() for cell in line.strip().strip("|").split("|")]
 
 
-def _add_word_table(document, rows, executive=False):
+def _add_word_table(document, rows, theme):
     if not rows:
         return
 
@@ -139,32 +139,36 @@ def _add_word_table(document, rows, executive=False):
         for col_index in range(columns):
             cell = table.cell(row_index, col_index)
             value = row[col_index] if col_index < len(row) else ""
-            _set_cell_border(cell)
+            _set_cell_border(cell, theme.border)
 
             if row_index == 0:
-                _shade_cell(cell, LIGHT_RED)
+                _shade_cell(cell, theme.accent_light)
                 _set_cell_text(
                     cell,
                     value,
+                    theme,
                     bold=True,
-                    color=DARK_RED,
-                    size=10.5 if executive else 10,
+                    color=theme.accent_dark,
+                    size=10.5 if theme.executive else 10,
                     align=WD_ALIGN_PARAGRAPH.LEFT,
                 )
             else:
+                if row_index % 2 == 0:
+                    _shade_cell(cell, theme.zebra)
                 _set_cell_text(
                     cell,
                     value,
+                    theme,
                     bold=False,
-                    color=TEXT,
-                    size=10.5 if executive else 10,
+                    color=theme.text,
+                    size=10.5 if theme.executive else 10,
                     align=WD_ALIGN_PARAGRAPH.LEFT,
                 )
 
     document.add_paragraph("")
 
 
-def _add_markdown(document, text, executive=False):
+def _add_markdown(document, text, theme):
     lines = text.splitlines()
     i = 0
 
@@ -189,7 +193,7 @@ def _add_markdown(document, text, executive=False):
                     break
                 rows.append(_parse_table_row(candidate))
                 i += 1
-            _add_word_table(document, rows, executive=executive)
+            _add_word_table(document, rows, theme)
             continue
 
         heading = re.match(r"^(#{1,6})\s+(.+)$", line)
@@ -200,10 +204,15 @@ def _add_markdown(document, text, executive=False):
             run.bold = True
             run.font.name = "Arial"
             run.font.size = Pt(
-                {1: 18, 2: 15, 3: 13}[level] + (1 if executive else 0)
+                {1: 18, 2: 15, 3: 13}[level]
+                + (1 if theme.executive else 0)
             )
             run.font.color.rgb = RGBColor.from_string(
-                DARK_RED if level == 1 else RED if level == 2 else TEXT
+                theme.accent_dark
+                if level == 1
+                else theme.accent
+                if level == 2
+                else theme.text
             )
             p.paragraph_format.space_after = Pt(6)
             p.paragraph_format.space_before = Pt(8)
@@ -220,8 +229,8 @@ def _add_markdown(document, text, executive=False):
             _add_inline_runs(
                 p,
                 text_value,
-                size=12 if executive else 11.5,
-                color=TEXT,
+                size=12 if theme.executive else 11.5,
+                color=theme.text,
             )
             i += 1
             continue
@@ -232,8 +241,8 @@ def _add_markdown(document, text, executive=False):
         _add_inline_runs(
             p,
             line,
-            size=12 if executive else 11.5,
-            color=TEXT,
+            size=12 if theme.executive else 11.5,
+            color=theme.text,
         )
         i += 1
 
@@ -250,7 +259,7 @@ def _base_document():
     return doc
 
 
-def _set_footer(doc, labels, preset, model_name=""):
+def _set_footer(doc, labels, preset, theme, model_name=""):
     model = model_name.strip() or "Local model"
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
 
@@ -268,72 +277,97 @@ def _set_footer(doc, labels, preset, model_name=""):
         run = p.add_run(text)
         run.font.name = "Arial"
         run.font.size = Pt(7.5)
-        run.font.color.rgb = RGBColor.from_string(MUTED)
+        run.font.color.rgb = RGBColor.from_string(theme.muted)
 
 
-def create_red_professional_docx(
+def _classic_hero_labels(text):
+    if is_hungarian(text):
+        return (
+            "CLASSIC EXECUTIVE RIPORT",
+            "Elegáns, nyomtatásbarát helyi dokumentum",
+        )
+    return (
+        "CLASSIC EXECUTIVE REPORT",
+        "Elegant print-friendly local document",
+    )
+
+
+def create_docx(
     messages,
     title="Local AI Report",
     output_dir=OUTPUT_DIR,
     model_name="",
+    preset="Red Professional",
 ):
+    theme = get_theme(preset)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    family = "classic" if theme.family == "classic" else "red"
+    variant = "executive" if theme.executive else "professional"
     path = output_dir / (
-        "local_ai_report_"
+        f"local_ai_{family}_{variant}_"
         + datetime.now().strftime("%Y%m%d_%H%M%S")
         + ".docx"
     )
+
     text = _document_text(messages)
     labels = labels_for_text(text)
     document_title = _extract_title(text, title)
-    text = _strip_first_h1(text)
-
+    body_text = _strip_first_h1(text)
     doc = _base_document()
-    table = doc.add_table(rows=1, cols=1)
-    cell = table.cell(0, 0)
-    _shade_cell(cell, RED)
-    _set_cell_text(
-        cell,
-        document_title,
-        bold=True,
-        color="FFFFFF",
-        size=18,
-    )
-    doc.add_paragraph("")
-    _add_markdown(
-        doc,
-        text or "No document content.",
-        executive=False,
-    )
-    _set_footer(
-        doc,
-        labels,
-        "Red Professional",
-        model_name=model_name,
-    )
 
-    doc.save(path)
-    return path
+    if not theme.executive:
+        if theme.family == "red":
+            table = doc.add_table(rows=1, cols=1)
+            cell = table.cell(0, 0)
+            _shade_cell(cell, theme.accent)
+            _set_cell_border(cell, theme.accent)
+            _set_cell_text(
+                cell,
+                document_title,
+                theme,
+                bold=True,
+                color=theme.hero_foreground,
+                size=18,
+                align=WD_ALIGN_PARAGRAPH.LEFT,
+            )
+        else:
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            run = p.add_run(document_title)
+            run.bold = True
+            run.font.name = "Arial"
+            run.font.size = Pt(22)
+            run.font.color.rgb = RGBColor.from_string(theme.text)
 
+            rule = doc.add_table(rows=1, cols=1)
+            cell = rule.cell(0, 0)
+            _shade_cell(cell, theme.accent_light)
+            _set_cell_border(cell, theme.accent, size="6")
+            _set_cell_text(
+                cell,
+                "Classic Professional",
+                theme,
+                color=theme.muted,
+                size=9,
+                align=WD_ALIGN_PARAGRAPH.LEFT,
+            )
 
-def create_red_executive_docx(
-    messages,
-    title="Local AI Executive Report",
-    output_dir=OUTPUT_DIR,
-    model_name="",
-):
-    output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / (
-        "local_ai_executive_"
-        + datetime.now().strftime("%Y%m%d_%H%M%S")
-        + ".docx"
-    )
-    text = _document_text(messages)
-    labels = labels_for_text(text)
-    document_title = _extract_title(text, title)
-    text = _strip_first_h1(text)
-
-    doc = _base_document()
+        doc.add_paragraph("")
+        _add_markdown(
+            doc,
+            body_text or "No document content.",
+            theme,
+        )
+        _set_footer(
+            doc,
+            labels,
+            theme.label,
+            theme,
+            model_name=model_name,
+        )
+        doc.save(path)
+        return path
 
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -341,7 +375,7 @@ def create_red_executive_docx(
     run.bold = True
     run.font.name = "Arial"
     run.font.size = Pt(24)
-    run.font.color.rgb = RGBColor.from_string(TEXT)
+    run.font.color.rgb = RGBColor.from_string(theme.text)
 
     p2 = doc.add_paragraph()
     p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -350,40 +384,58 @@ def create_red_executive_docx(
     )
     r2.font.name = "Arial"
     r2.font.size = Pt(13)
-    r2.font.color.rgb = RGBColor.from_string(MUTED)
+    r2.font.color.rgb = RGBColor.from_string(theme.muted)
+
+    if theme.family == "red":
+        hero_title = labels["hero_title"]
+        hero_subtitle = labels["hero_subtitle"]
+        hero_bg = theme.accent_dark
+        hero_title_color = theme.hero_foreground
+        hero_sub_color = theme.hero_subtle
+    else:
+        hero_title, hero_subtitle = _classic_hero_labels(text)
+        hero_bg = theme.surface
+        hero_title_color = theme.accent_dark
+        hero_sub_color = theme.muted
 
     hero = doc.add_table(rows=2, cols=1)
-    _shade_cell(hero.cell(0, 0), DARK_RED)
-    _shade_cell(hero.cell(1, 0), DARK_RED)
+    for cell in (hero.cell(0, 0), hero.cell(1, 0)):
+        _shade_cell(cell, hero_bg)
+        _set_cell_border(cell, theme.border)
+
     _set_cell_text(
         hero.cell(0, 0),
-        labels["hero_title"],
+        hero_title,
+        theme,
         bold=True,
-        color="FFFFFF",
+        color=hero_title_color,
         size=17,
     )
     _set_cell_text(
         hero.cell(1, 0),
-        labels["hero_subtitle"],
-        color="FFE9EC",
+        hero_subtitle,
+        theme,
+        color=hero_sub_color,
         size=11.5,
     )
 
     doc.add_paragraph("")
     info = doc.add_table(rows=1, cols=3)
     for cell in info.rows[0].cells:
-        _shade_cell(cell, LIGHT_GREY)
-        _set_cell_border(cell)
+        _shade_cell(cell, theme.surface)
+        _set_cell_border(cell, theme.border)
 
     _set_cell_text(
         info.cell(0, 0),
-        labels["preset"] + "\nRed Executive",
+        labels["preset"] + "\n" + theme.label,
+        theme,
         bold=True,
         size=10.5,
     )
     _set_cell_text(
         info.cell(0, 1),
         labels["execution"] + "\n" + labels["local"],
+        theme,
         bold=True,
         size=10.5,
     )
@@ -392,36 +444,70 @@ def create_red_executive_docx(
         labels["generated"]
         + "\n"
         + datetime.now().strftime("%Y-%m-%d"),
+        theme,
         bold=True,
         size=10.5,
     )
 
     doc.add_paragraph("")
     summary = doc.add_table(rows=1, cols=1)
-    _shade_cell(summary.cell(0, 0), LIGHT_RED)
-    _set_cell_border(summary.cell(0, 0))
+    _shade_cell(summary.cell(0, 0), theme.accent_light)
+    _set_cell_border(summary.cell(0, 0), theme.border)
     _set_cell_text(
         summary.cell(0, 0),
         labels["executive_summary"]
         + "\n"
         + labels["summary_text"],
+        theme,
         bold=True,
-        color=TEXT,
+        color=theme.text,
         size=11.5,
+        align=WD_ALIGN_PARAGRAPH.LEFT,
     )
 
     doc.add_paragraph("")
     _add_markdown(
         doc,
-        text or "No document content.",
-        executive=True,
+        body_text or "No document content.",
+        theme,
     )
     _set_footer(
         doc,
         labels,
-        "Red Executive",
+        theme.label,
+        theme,
         model_name=model_name,
     )
 
     doc.save(path)
     return path
+
+
+def create_red_professional_docx(
+    messages,
+    title="Local AI Report",
+    output_dir=OUTPUT_DIR,
+    model_name="",
+):
+    return create_docx(
+        messages,
+        title=title,
+        output_dir=output_dir,
+        model_name=model_name,
+        preset="Red Professional",
+    )
+
+
+def create_red_executive_docx(
+    messages,
+    title="Local AI Executive Report",
+    output_dir=OUTPUT_DIR,
+    model_name="",
+):
+    return create_docx(
+        messages,
+        title=title,
+        output_dir=output_dir,
+        model_name=model_name,
+        preset="Red Executive",
+    )
