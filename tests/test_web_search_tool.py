@@ -451,3 +451,71 @@ def test_web_search_falls_back_when_brave_fails(monkeypatch):
     )
 
     assert payload["provider"] == "Bing Web RSS"
+
+
+def test_bing_ad_click_url_is_rejected():
+    assert (
+        web_search_tool._decode_bing_result_url(
+            "https://www.bing.com/aclick?ld=test&u=https://example.com"
+        )
+        == ""
+    )
+
+
+def test_hardware_relevance_requires_exact_kit_and_speed_specs():
+    results = [
+        {
+            "title": "Kingston 32GB 2x16GB DDR4 3200MHz",
+            "url": "https://example.com/wrong",
+            "snippet": "Desktop RAM kit",
+        },
+        {
+            "title": "Kingston 64GB kit 2 x 32 GB DDR4-3200",
+            "url": "https://example.com/right",
+            "snippet": "3200 MHz desktop memory",
+        },
+    ]
+
+    filtered = web_search_tool._filter_relevant_results(
+        "2x32GB DDR4 3200MHz RAM",
+        results,
+    )
+
+    assert [item["url"] for item in filtered] == [
+        "https://example.com/right"
+    ]
+
+
+def test_provider_chain_errors_are_returned_on_fallback(monkeypatch):
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "secret-test-key")
+    monkeypatch.setattr(
+        web_search_tool,
+        "_search_brave_api",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("401 unauthorized")
+        ),
+    )
+    monkeypatch.setattr(
+        web_search_tool,
+        "_search_bing_rss",
+        lambda *args, **kwargs: {
+            "provider": "Bing Web RSS",
+            "results": [{
+                "title": "Example result",
+                "url": "https://example.com/fallback",
+                "snippet": "Example result",
+                "published": "",
+                "page_text": "",
+            }],
+        },
+    )
+
+    payload = web_search_tool.search_web(
+        "example",
+        fetch_pages=False,
+    )
+
+    assert payload["provider"] == "Bing Web RSS"
+    assert payload["provider_chain_errors"] == [
+        "Brave Search API: 401 unauthorized"
+    ]
