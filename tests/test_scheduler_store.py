@@ -59,3 +59,23 @@ def test_mark_result_records_status_and_moves_next_run(tmp_path: Path):
     assert updated["chat_id"] == "chat-123"
     assert updated["last_run_at"]
     assert updated["next_run_at"]
+
+
+def test_compute_weekly_next_run():
+    now = datetime(2026, 9, 16, 13, 0, 0)  # Wednesday
+    task = {
+        "frequency": "weekly",
+        "weekly_day": 4,  # Friday
+        "daily_time": "18:30",
+    }
+    assert compute_next_run(task, now) == datetime(2026, 9, 18, 18, 30, 0)
+
+
+def test_compute_weekly_rolls_one_week_when_time_has_passed():
+    now = datetime(2026, 9, 18, 20, 0, 0)  # Friday
+    task = {
+        "frequency": "weekly",
+        "weekly_day": 4,
+        "daily_time": "18:30",
+    }
+    assert compute_next_run(task, now) == datetime(2026, 9, 25, 18, 30, 0)
