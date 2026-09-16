@@ -196,6 +196,8 @@ class MainWindow(QMainWindow):
         self.scheduled_thread = None
         self.scheduled_worker = None
         self.pending_scheduled_task_id = ""
+        self.schedule_indicator_state = "idle"
+        self.schedule_pulse_on = False
 
         self.setStyleSheet(STYLE)
         self._build_ui()
@@ -211,6 +213,12 @@ class MainWindow(QMainWindow):
         self.scheduler_timer = QTimer(self)
         self.scheduler_timer.timeout.connect(self._check_scheduled_tasks)
         self.scheduler_timer.start(30000)
+
+        self.schedule_pulse_timer = QTimer(self)
+        self.schedule_pulse_timer.timeout.connect(self._pulse_schedule_button)
+        self.schedule_pulse_timer.start(850)
+
+        self._refresh_schedule_indicator()
         QTimer.singleShot(3000, self._check_scheduled_tasks)
 
     def _build_ui(self):
@@ -357,10 +365,10 @@ class MainWindow(QMainWindow):
             self.tool_buttons[text] = button
             layout.addWidget(button)
 
-        schedule_button = QPushButton("SCHEDULE")
-        schedule_button.setObjectName("toolButton")
-        schedule_button.clicked.connect(self._open_scheduler)
-        layout.addWidget(schedule_button)
+        self.schedule_button = QPushButton("SCHEDULE")
+        self.schedule_button.setObjectName("toolButton")
+        self.schedule_button.clicked.connect(self._open_scheduler)
+        layout.addWidget(self.schedule_button)
 
         layout.addSpacing(10)
         self.tool_options_label = QLabel("PDF OPTIONS")
@@ -815,6 +823,9 @@ class MainWindow(QMainWindow):
             self.scheduler_dialog.run_requested.connect(
                 lambda task_id: self._run_scheduled_task(task_id)
             )
+            self.scheduler_dialog.tasks_changed.connect(
+                self._refresh_schedule_indicator
+            )
         else:
             self.scheduler_dialog.set_models(self._scheduler_models())
             self.scheduler_dialog._refresh_list()
@@ -822,6 +833,80 @@ class MainWindow(QMainWindow):
         self.scheduler_dialog.show()
         self.scheduler_dialog.raise_()
         self.scheduler_dialog.activateWindow()
+        self._refresh_schedule_indicator()
+
+    def _schedule_health_state(self):
+        tasks = self.scheduler_store.list_tasks()
+        enabled = [task for task in tasks if task.get("enabled", True)]
+
+        if not enabled:
+            return "idle"
+
+        if (
+            not self._scheduler_models()
+            or any(task.get("last_status") == "failed" for task in enabled)
+        ):
+            return "error"
+
+        if self.scheduled_worker is not None:
+            return "running"
+
+        return "active"
+
+    def _refresh_schedule_indicator(self):
+        self.schedule_indicator_state = self._schedule_health_state()
+        self._apply_schedule_button_style()
+
+    def _pulse_schedule_button(self):
+        self.schedule_pulse_on = not self.schedule_pulse_on
+        self._refresh_schedule_indicator()
+
+    def _apply_schedule_button_style(self):
+        if not hasattr(self, "schedule_button"):
+            return
+
+        state = self.schedule_indicator_state
+        pulse = self.schedule_pulse_on
+
+        if state == "error":
+            background = "#6A3035" if pulse else "#57282D"
+            border = "#B85A63"
+            self.schedule_button.setText("SCHEDULE  ●")
+            self.schedule_button.setToolTip(
+                "Scheduler attention required: an enabled task failed or no Ollama model is available."
+            )
+        elif state == "running":
+            background = "#356A4A" if pulse else "#2C5B40"
+            border = "#6FAF83"
+            self.schedule_button.setText("SCHEDULE  ●  RUNNING")
+            self.schedule_button.setToolTip("A scheduled task is running now.")
+        elif state == "active":
+            background = "#315A43" if pulse else "#294C39"
+            border = "#5F9C73"
+            self.schedule_button.setText("SCHEDULE  ●")
+            self.schedule_button.setToolTip(
+                "Scheduler active: at least one enabled task is waiting for its next run."
+            )
+        else:
+            background = "#202730"
+            border = "#323C48"
+            self.schedule_button.setText("SCHEDULE")
+            self.schedule_button.setToolTip("No enabled scheduled tasks.")
+
+        self.schedule_button.setStyleSheet(
+            "QPushButton {"
+            f"background:{background};"
+            f"border:1px solid {border};"
+            "border-radius:10px;"
+            "padding:9px 13px;"
+            "color:#F4F6F8;"
+            "font-weight:700;"
+            "min-height:44px;"
+            "}"
+            "QPushButton:hover {"
+            f"background:{background};"
+            "}"
+        )
 
     def _check_scheduled_tasks(self):
         if (
@@ -862,6 +947,7 @@ class MainWindow(QMainWindow):
 
         self.pending_scheduled_task_id = ""
         self.status.setText(f'Schedule running: {task.get("name", "task")}')
+        self._refresh_schedule_indicator()
         if self.scheduler_dialog is not None:
             self.scheduler_dialog.set_run_status(
                 task_id,
@@ -933,6 +1019,7 @@ class MainWindow(QMainWindow):
                 running=False,
             )
         self.status.setText(f'Schedule completed: {task.get("name", "task")}')
+        self._refresh_schedule_indicator()
 
     def _scheduled_task_failed(self, task_id, message):
         try:
@@ -953,6 +1040,7 @@ class MainWindow(QMainWindow):
                 running=False,
             )
         self.status.setText(f"Schedule failed: {name} - {message}")
+        self._refresh_schedule_indicator()
 
     def _cleanup_scheduled_worker(self):
         if self.scheduled_worker is not None:
@@ -961,6 +1049,7 @@ class MainWindow(QMainWindow):
             self.scheduled_thread.deleteLater()
         self.scheduled_worker = None
         self.scheduled_thread = None
+        self._refresh_schedule_indicator()
         QTimer.singleShot(0, self._run_pending_scheduled_task)
 
     def _run_pending_scheduled_task(self):
