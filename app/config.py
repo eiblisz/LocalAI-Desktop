@@ -5,9 +5,11 @@ OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 CHAT_DIR = ROOT_DIR / "data" / "chats"
+SCHEDULE_DIR = ROOT_DIR / "data" / "schedules"
 OUTPUT_DIR = ROOT_DIR / "output"
 
 CHAT_DIR.mkdir(parents=True, exist_ok=True)
+SCHEDULE_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 DEFAULT_SYSTEM_PROMPT = (
