@@ -599,7 +599,10 @@ def _filter_relevant_results(query, results):
 
         matched = {
             term for term in terms
-            if term in haystack
+            if (
+                term in haystack
+                or re.sub(r"[^a-z0-9]+", "", term) in normalized_haystack
+            )
         }
         if len(matched) >= minimum_matches:
             relevant.append(item)
