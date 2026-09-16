@@ -21,6 +21,7 @@ from reportlab.platypus import (
 )
 
 from .config import OUTPUT_DIR
+from .localization import labels_for_text
 
 HEADER_RED = colors.HexColor("#B92F3B")
 DARK_RED = colors.HexColor("#8E1F2D")
@@ -336,19 +337,26 @@ def _markdown_flowables(
     return flowables
 
 
-def _footer(canvas, page_width: float, font_name: str, label: str) -> None:
+def _footer(
+    canvas,
+    page_width: float,
+    font_name: str,
+    label: str,
+    labels: dict,
+) -> None:
     canvas.setFillColor(MUTED)
     canvas.setFont(font_name, 9)
     canvas.drawString(
         18 * mm,
         10 * mm,
-        datetime.now().strftime("Generated %Y-%m-%d %H:%M"),
+        f'{labels["generated_footer"]} '
+        + datetime.now().strftime("%Y-%m-%d %H:%M"),
     )
     canvas.drawCentredString(page_width / 2, 10 * mm, label)
     canvas.drawRightString(
         page_width - 18 * mm,
         10 * mm,
-        f"Page {canvas.getPageNumber()}",
+        f'{labels["page"]} {canvas.getPageNumber()}',
     )
 
 
@@ -364,6 +372,7 @@ def create_red_professional_pdf(
     font_name = _register_font_family()
     page_width, page_height = A4
     text = _document_text(messages)
+    labels = labels_for_text(text)
     document_title = _extract_title(text, title)
     text = _strip_first_h1(text)
     styles = _make_styles(font_name, executive=False)
@@ -390,7 +399,7 @@ def create_red_professional_pdf(
         canvas.drawString(
             18 * mm, page_height - 16.5 * mm, document_title[:78]
         )
-        _footer(canvas, page_width, font_name, "Red Professional")
+        _footer(canvas, page_width, font_name, "Red Professional", labels)
         canvas.restoreState()
 
     doc.addPageTemplates(
@@ -419,6 +428,7 @@ def create_red_executive_pdf(
     font_name = _register_font_family()
     page_width, page_height = A4
     text = _document_text(messages)
+    labels = labels_for_text(text)
     document_title = _extract_title(text, title)
     text = _strip_first_h1(text)
     styles = _make_styles(font_name, executive=True)
@@ -444,7 +454,7 @@ def create_red_executive_pdf(
             page_width - 20 * mm,
             page_height - 12 * mm,
         )
-        _footer(canvas, page_width, font_name, "Red Executive")
+        _footer(canvas, page_width, font_name, "Red Executive", labels)
         canvas.restoreState()
 
     doc.addPageTemplates(
@@ -453,7 +463,7 @@ def create_red_executive_pdf(
 
     hero_title = Paragraph(document_title, styles["center_title"])
     hero_subtitle = Paragraph(
-        "Local AI · Executive / Technical Report",
+        "Local AI · " + labels["subtitle_executive"],
         styles["center_subtitle"],
     )
 
@@ -479,8 +489,8 @@ def create_red_executive_pdf(
     )
     hero = Table(
         [
-            [Paragraph("<b>RED EXECUTIVE REPORT</b>", hero_main_style)],
-            [Paragraph("Structured local-model document output", hero_sub_style)],
+            [Paragraph("<b>" + html.escape(labels["hero_title"]) + "</b>", hero_main_style)],
+            [Paragraph(html.escape(labels["hero_subtitle"]), hero_sub_style)],
         ],
         colWidths=[doc.width],
         rowHeights=[14 * mm, 11 * mm],
@@ -508,10 +518,18 @@ def create_red_executive_pdf(
     )
     info = Table(
         [[
-            Paragraph("<b>Preset</b><br/>Red Executive", info_style),
-            Paragraph("<b>Execution</b><br/>Local", info_style),
             Paragraph(
-                f"<b>Generated</b><br/>{datetime.now().strftime('%Y-%m-%d')}",
+                f'<b>{html.escape(labels["preset"])}</b><br/>Red Executive',
+                info_style,
+            ),
+            Paragraph(
+                f'<b>{html.escape(labels["execution"])}</b><br/>'
+                + html.escape(labels["local"]),
+                info_style,
+            ),
+            Paragraph(
+                f'<b>{html.escape(labels["generated"])}</b><br/>'
+                + datetime.now().strftime("%Y-%m-%d"),
                 info_style,
             ),
         ]],
@@ -541,10 +559,8 @@ def create_red_executive_pdf(
     )
     summary_box = Table(
         [[Paragraph(
-            "<b>Executive Summary</b><br/>"
-            "This report was generated locally using the selected AI model. "
-            "The document below preserves the model's structured content while "
-            "applying the Red Executive visual system.",
+            f'<b>{html.escape(labels["executive_summary"])}</b><br/>'
+            + html.escape(labels["summary_text"]),
             summary_style,
         )]],
         colWidths=[doc.width],
