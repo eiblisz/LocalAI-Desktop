@@ -89,16 +89,18 @@ class SchedulerDialog(QDialog):
         self.frequency_combo.currentTextChanged.connect(self._frequency_changed)
         form.addRow("Frequency", self.frequency_combo)
 
+        self.every_label = QLabel("Every")
         self.interval_spin = QSpinBox()
         self.interval_spin.setRange(1, 168)
         self.interval_spin.setValue(1)
         self.interval_spin.setSuffix(" hour(s)")
-        form.addRow("Every", self.interval_spin)
+        form.addRow(self.every_label, self.interval_spin)
 
+        self.daily_time_label = QLabel("Daily time")
         self.daily_time = QTimeEdit()
         self.daily_time.setDisplayFormat("HH:mm")
         self.daily_time.setTime(QTime(8, 0))
-        form.addRow("Daily time", self.daily_time)
+        form.addRow(self.daily_time_label, self.daily_time)
 
         self.weather_checkbox = QCheckBox("Allow Weather internet tool (Open-Meteo)")
         self.weather_checkbox.setChecked(True)
@@ -220,8 +222,10 @@ class SchedulerDialog(QDialog):
 
     def _frequency_changed(self, value):
         daily = value == "Daily"
-        self.interval_spin.setEnabled(not daily)
-        self.daily_time.setEnabled(daily)
+        self.every_label.setVisible(not daily)
+        self.interval_spin.setVisible(not daily)
+        self.daily_time_label.setVisible(daily)
+        self.daily_time.setVisible(daily)
 
     def _task_payload(self):
         name = " ".join(self.name_edit.text().strip().split())
