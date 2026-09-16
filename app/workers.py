@@ -246,7 +246,7 @@ class ChatWebWorker(QObject):
                     and self._query_is_literal_followup_command(clean)
                 )
             ):
-                queries.append(self._preserve_search_constraints(clean))
+                queries.append(clean[:260])
             if len(queries) >= 4:
                 break
 
@@ -255,6 +255,8 @@ class ChatWebWorker(QObject):
                 queries = [self._preserve_search_constraints(recent_requests[-1])]
             else:
                 queries = [self._preserve_search_constraints(self.user_prompt)]
+        elif len(queries) == 1:
+            queries = [self._preserve_search_constraints(queries[0])]
         return queries
 
     @Slot()
