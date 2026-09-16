@@ -7,12 +7,27 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from .config import OUTPUT_DIR
+from .localization import is_hungarian
 
 RED = "B92F3B"
 DARK_RED = "8E1F2D"
+LIGHT_RED = "F9EDEF"
 LIGHT_GREY = "F4F6F8"
+ZEBRA = "FAFBFC"
 WHITE = "FFFFFF"
 TEXT = "1F2630"
+MUTED = "6C737F"
+BORDER = "D9DEE5"
+
+FACTUAL_HEADER_MARKERS = (
+    "year", "release", "date", "kiadás", "megjelenés", "dátum",
+    "benchmark", "score", "pont", "accuracy", "pontosság",
+    "percent", "százalék", "%",
+    "ram", "vram", "gpu", "cpu", "storage", "tárhely",
+    "price", "ár", "cost", "költség",
+    "parameter", "paraméter", "capacity", "kapacitás",
+    "context", "token", "latency", "késleltetés", "speed", "sebesség",
+)
 
 
 def _clean_json(text):
@@ -32,10 +47,85 @@ def _safe_sheet_name(name):
     return clean[:31]
 
 
-def _style_sheet(ws, title, columns=1):
+def _normalize_for_match(value):
+    return re.sub(r"\s+", " ", str(value).strip().lower())
+
+
+def _header_requires_source(header):
+    h = _normalize_for_match(header)
+    return any(marker in h for marker in FACTUAL_HEADER_MARKERS)
+
+
+def _numeric_tokens(value):
+    return re.findall(r"\d+(?:[.,]\d+)?", str(value))
+
+
+def _is_unknown_value(value):
+    normalized = _normalize_for_match(value)
+    return normalized in {
+        "", "unknown", "not provided", "n/a", "na",
+        "nincs megadva", "ismeretlen", "nem ismert",
+    }
+
+
+def sanitize_structured_payload(payload, source_text=""):
+    source = _normalize_for_match(source_text)
+    missing = "Nincs megadva" if is_hungarian(source_text) else "Not provided"
+
+    sheets = payload.get("sheets") or []
+    for sheet in sheets:
+        headers = list(sheet.get("headers") or [])
+        rows = sheet.get("rows") or []
+
+        protected = {
+            index
+            for index, header in enumerate(headers)
+            if _header_requires_source(header)
+        }
+
+        if not protected:
+            continue
+
+        for row in rows:
+            if not isinstance(row, list):
+                continue
+            for index in protected:
+                if index >= len(row):
+                    continue
+
+                value = row[index]
+                if value is None or _is_unknown_value(value):
+                    continue
+
+                tokens = _numeric_tokens(value)
+                if not tokens:
+                    continue
+
+                if not source:
+                    row[index] = missing
+                    continue
+
+                unsupported = [
+                    token
+                    for token in tokens
+                    if token.replace(",", ".") not in source.replace(",", ".")
+                ]
+                if unsupported:
+                    row[index] = missing
+
+    return payload
+
+
+def _style_sheet(
+    ws,
+    title,
+    columns=1,
+    model_name="",
+    source_label="Custom topic",
+):
     ws.sheet_view.showGridLines = False
-    ws.freeze_panes = "A4"
     end_col = max(1, columns)
+
     ws.merge_cells(
         start_row=1,
         start_column=1,
@@ -43,47 +133,147 @@ def _style_sheet(ws, title, columns=1):
         end_column=end_col,
     )
     ws["A1"] = title
-    ws["A1"].font = Font(name="Arial", size=18, bold=True, color=WHITE)
+    ws["A1"].font = Font(
+        name="Arial",
+        size=20,
+        bold=True,
+        color=WHITE,
+    )
     ws["A1"].fill = PatternFill("solid", fgColor=DARK_RED)
-    ws["A1"].alignment = Alignment(vertical="center")
-    ws.row_dimensions[1].height = 30
+    ws["A1"].alignment = Alignment(
+        vertical="center",
+        horizontal="left",
+        wrap_text=True,
+    )
+    ws.row_dimensions[1].height = 38
+
+    ws.merge_cells(
+        start_row=2,
+        start_column=1,
+        end_row=2,
+        end_column=end_col,
+    )
+    meta = (
+        f"Red Executive Workbook  ·  "
+        f"Generated {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    )
+    if model_name:
+        meta += f"  ·  Model: {model_name}"
+    if source_label:
+        meta += f"  ·  Source: {source_label}"
+
+    ws["A2"] = meta
+    ws["A2"].font = Font(
+        name="Arial",
+        size=9,
+        italic=True,
+        color=MUTED,
+    )
+    ws["A2"].fill = PatternFill("solid", fgColor=LIGHT_GREY)
+    ws["A2"].alignment = Alignment(
+        vertical="center",
+        horizontal="left",
+        wrap_text=True,
+    )
+    ws.row_dimensions[2].height = 22
+
+    ws.freeze_panes = "A5"
 
 
-def _style_table(ws, header_row=3):
-    thin = Side(style="thin", color="D9DEE5")
+def _style_table(ws, header_row=4):
+    thin = Side(style="thin", color=BORDER)
+
     for cell in ws[header_row]:
         if cell.value is not None:
-            cell.font = Font(name="Arial", size=11, bold=True, color=WHITE)
-            cell.fill = PatternFill("solid", fgColor=RED)
-            cell.alignment = Alignment(vertical="center", wrap_text=True)
-            cell.border = Border(bottom=thin)
-
-    for row in ws.iter_rows(min_row=header_row + 1):
-        for cell in row:
-            cell.font = Font(name="Arial", size=10.5, color=TEXT)
-            cell.alignment = Alignment(vertical="top", wrap_text=True)
-            cell.border = Border(
-                bottom=Side(style="hair", color="E6E9ED")
+            cell.font = Font(
+                name="Arial",
+                size=11,
+                bold=True,
+                color=WHITE,
             )
+            cell.fill = PatternFill("solid", fgColor=RED)
+            cell.alignment = Alignment(
+                vertical="center",
+                horizontal="left",
+                wrap_text=True,
+            )
+            cell.border = Border(
+                top=thin,
+                bottom=thin,
+                left=thin,
+                right=thin,
+            )
+    ws.row_dimensions[header_row].height = 30
+
+    for row_index, row in enumerate(
+        ws.iter_rows(min_row=header_row + 1),
+        start=header_row + 1,
+    ):
+        zebra = row_index % 2 == 0
+        for cell in row:
+            cell.font = Font(
+                name="Arial",
+                size=10.5,
+                color=TEXT,
+            )
+            cell.alignment = Alignment(
+                vertical="top",
+                horizontal="left",
+                wrap_text=True,
+            )
+            cell.border = Border(
+                bottom=Side(style="hair", color="E6E9ED"),
+            )
+            if zebra:
+                cell.fill = PatternFill("solid", fgColor=ZEBRA)
+
+        ws.row_dimensions[row_index].height = 24
 
 
-def _auto_width(ws, max_width=48):
+def _auto_width(
+    ws,
+    min_row=4,
+    min_width=14,
+    max_width=42,
+):
     for col in range(1, ws.max_column + 1):
         letter = get_column_letter(col)
-        width = 10
-        for cell in ws[letter]:
-            if cell.value is not None:
-                width = max(
-                    width,
-                    min(len(str(cell.value)) + 2, max_width),
-                )
+        width = min_width
+
+        for row in range(min_row, ws.max_row + 1):
+            cell = ws.cell(row=row, column=col)
+            if cell.value is None:
+                continue
+
+            text = str(cell.value)
+            longest_line = max(
+                (len(part) for part in text.splitlines()),
+                default=0,
+            )
+            width = max(
+                width,
+                min(longest_line + 3, max_width),
+            )
+
         ws.column_dimensions[letter].width = width
+
+
+def _finish_table(ws, header_row=4):
+    _style_table(ws, header_row=header_row)
+    _auto_width(ws, min_row=header_row)
+
+    if ws.max_column and ws.max_row >= header_row:
+        end = get_column_letter(ws.max_column)
+        ws.auto_filter.ref = (
+            f"A{header_row}:{end}{ws.max_row}"
+        )
 
 
 def create_conversation_excel(
     messages,
     title="Local AI Conversation",
     output_dir=OUTPUT_DIR,
+    model_name="",
 ):
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / (
@@ -95,7 +285,14 @@ def create_conversation_excel(
     wb = Workbook()
     ws = wb.active
     ws.title = "Conversation"
-    _style_sheet(ws, title, columns=3)
+
+    _style_sheet(
+        ws,
+        title,
+        columns=3,
+        model_name=model_name,
+        source_label="Current conversation",
+    )
     ws.append([])
     ws.append(["Role", "Content", "Artifact path"])
 
@@ -103,16 +300,14 @@ def create_conversation_excel(
         role = message.get("role", "")
         if role == "system":
             continue
+
         ws.append([
             role.upper(),
             message.get("content", ""),
             message.get("path", "") if role == "artifact" else "",
         ])
 
-    _style_table(ws)
-    _auto_width(ws)
-    if ws.max_row >= 3:
-        ws.auto_filter.ref = f"A3:C{ws.max_row}"
+    _finish_table(ws)
     wb.save(path)
     return path
 
@@ -121,6 +316,8 @@ def create_structured_excel(
     model_output,
     title="Local AI Workbook",
     output_dir=OUTPUT_DIR,
+    source_text="",
+    model_name="",
 ):
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / (
@@ -141,6 +338,11 @@ def create_structured_excel(
             }],
         }
 
+    payload = sanitize_structured_payload(
+        payload,
+        source_text=source_text,
+    )
+
     workbook_title = str(payload.get("title") or title)
     sheets = payload.get("sheets") or []
     if not sheets:
@@ -155,12 +357,25 @@ def create_structured_excel(
 
     for index, spec in enumerate(sheets):
         name = _safe_sheet_name(
-            spec.get("name") or f"Sheet {index + 1}"
+            spec.get("name")
+            or f"Sheet {index + 1}"
         )
         ws = wb.create_sheet(name)
-        headers = list(spec.get("headers") or ["Value"])
+
+        headers = list(
+            spec.get("headers")
+            or ["Value"]
+        )
         rows = spec.get("rows") or []
-        _style_sheet(ws, workbook_title, columns=len(headers))
+
+        _style_sheet(
+            ws,
+            workbook_title,
+            columns=len(headers),
+            model_name=model_name,
+            source_label="Custom topic",
+        )
+
         ws.append([])
         ws.append(headers)
 
@@ -170,11 +385,7 @@ def create_structured_excel(
             else:
                 ws.append([row])
 
-        _style_table(ws)
-        _auto_width(ws)
-        if ws.max_column and ws.max_row >= 3:
-            end = get_column_letter(ws.max_column)
-            ws.auto_filter.ref = f"A3:{end}{ws.max_row}"
+        _finish_table(ws)
 
     wb.save(path)
     return path
