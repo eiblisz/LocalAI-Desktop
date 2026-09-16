@@ -278,6 +278,28 @@ class MainWindow(QMainWindow):
         new_chat.clicked.connect(self._new_chat)
         layout.addWidget(new_chat)
 
+        self.schedule_button = QPushButton("SCHEDULE")
+        self.schedule_button.setObjectName("toolButton")
+        self.schedule_button.clicked.connect(self._open_scheduler)
+        layout.addWidget(self.schedule_button)
+
+        self.schedule_type_labels = {}
+        for key, label_text in [
+            ("weather", "Weather"),
+            ("ebay", "eBay Search"),
+            ("computer", "Computer"),
+            ("custom", "Custom"),
+        ]:
+            status_label = QLabel(f"○  {label_text}")
+            status_label.setObjectName("muted")
+            status_label.setStyleSheet(
+                "padding-left:8px;color:#7F8995;font-size:11px;"
+            )
+            self.schedule_type_labels[key] = status_label
+            layout.addWidget(status_label)
+
+        layout.addSpacing(8)
+
         label = QLabel("Conversations")
         label.setObjectName("muted")
         layout.addWidget(label)
@@ -364,11 +386,6 @@ class MainWindow(QMainWindow):
             )
             self.tool_buttons[text] = button
             layout.addWidget(button)
-
-        self.schedule_button = QPushButton("SCHEDULE")
-        self.schedule_button.setObjectName("toolButton")
-        self.schedule_button.clicked.connect(self._open_scheduler)
-        layout.addWidget(self.schedule_button)
 
         layout.addSpacing(10)
         self.tool_options_label = QLabel("PDF OPTIONS")
@@ -907,6 +924,45 @@ class MainWindow(QMainWindow):
             f"background:{background};"
             "}"
         )
+        self._refresh_schedule_type_labels()
+
+    def _refresh_schedule_type_labels(self):
+        if not hasattr(self, "schedule_type_labels"):
+            return
+
+        tasks = self.scheduler_store.list_tasks()
+        names = {
+            "weather": "Weather",
+            "ebay": "eBay Search",
+            "computer": "Computer",
+            "custom": "Custom",
+        }
+
+        for task_type, widget in self.schedule_type_labels.items():
+            typed = [
+                task
+                for task in tasks
+                if task.get("task_type", "weather") == task_type
+            ]
+            enabled = [task for task in typed if task.get("enabled", True)]
+
+            if any(task.get("last_status") == "failed" for task in enabled):
+                dot = "●"
+                color = "#D46A72"
+                suffix = " ERROR"
+            elif enabled:
+                dot = "●"
+                color = "#78B98C"
+                suffix = f" {len(enabled)} active"
+            else:
+                dot = "○"
+                color = "#7F8995"
+                suffix = ""
+
+            widget.setText(f"{dot}  {names[task_type]}{suffix}")
+            widget.setStyleSheet(
+                f"padding-left:8px;color:{color};font-size:11px;"
+            )
 
     def _check_scheduled_tasks(self):
         if (
