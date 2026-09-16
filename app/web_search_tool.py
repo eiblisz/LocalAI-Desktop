@@ -1,3 +1,4 @@
+import base64
 import html
 import ipaddress
 import socket
@@ -23,6 +24,37 @@ USER_AGENT = (
 
 class WebSearchError(RuntimeError):
     pass
+
+
+def _decode_bing_result_url(url):
+    value = str(url or "").strip()
+    if not value:
+        return ""
+
+    try:
+        parsed = urlparse(value)
+        host = (parsed.hostname or "").lower()
+        if host not in {"bing.com", "www.bing.com"} or parsed.path != "/ck/a":
+            return value
+
+        encoded = parse_qs(parsed.query).get("u", [""])[0]
+        if not encoded:
+            return value
+
+        if encoded.startswith("a1"):
+            encoded = encoded[2:]
+
+        padding = "=" * (-len(encoded) % 4)
+        decoded = base64.urlsafe_b64decode(encoded + padding).decode(
+            "utf-8",
+            errors="strict",
+        )
+        if decoded.startswith(("http://", "https://")):
+            return decoded
+    except Exception:
+        pass
+
+    return value
 
 
 def _decode_result_url(url):
@@ -154,7 +186,9 @@ def _parse_bing_rss(xml_text, limit):
     results = []
     for item in root.findall(".//item"):
         title = (item.findtext("title") or "").strip()
-        url = (item.findtext("link") or "").strip()
+        url = _decode_bing_result_url(
+            (item.findtext("link") or "").strip()
+        )
         description = _clean_markup(item.findtext("description") or "")
         published = (item.findtext("pubDate") or "").strip()
 
@@ -219,7 +253,9 @@ def _search_bing_html(query, limit, timeout):
             continue
 
         title = link.get_text(" ", strip=True)
-        url = str(link.get("href", "")).strip()
+        url = _decode_bing_result_url(
+            str(link.get("href", "")).strip()
+        )
         snippet_node = block.select_one(
             ".b_caption p, .b_snippet, p"
         )
@@ -406,7 +442,6 @@ def _filter_relevant_results(query, results):
         haystack = " ".join([
             str(item.get("title", "")),
             str(item.get("snippet", "")),
-            str(item.get("url", "")),
         ]).lower()
 
         matched = {
@@ -422,12 +457,39 @@ def _filter_relevant_results(query, results):
 def source_urls(payload, limit=10):
     urls = []
     for item in payload.get("results") or []:
-        url = str(item.get("url", "")).strip()
+        url = _decode_bing_result_url(
+            str(item.get("url", "")).strip()
+        )
         if url and url not in urls:
             urls.append(url)
         if len(urls) >= limit:
             break
     return urls
+
+
+def source_entries(payload, limit=10):
+    entries = []
+    seen = set()
+
+    for item in payload.get("results") or []:
+        url = _decode_bing_result_url(
+            str(item.get("url", "")).strip()
+        )
+        title = " ".join(
+            str(item.get("title", "")).strip().split()
+        )
+        if not url or url in seen:
+            continue
+
+        seen.add(url)
+        entries.append({
+            "title": title or url,
+            "url": url,
+        })
+        if len(entries) >= limit:
+            break
+
+    return entries
 
 
 def _fetch_top_pages(results, timeout):
