@@ -180,6 +180,7 @@ class MainWindow(QMainWindow):
         self.pending_tool = ""
         self.pending_preset = ""
         self.pending_model = ""
+        self.pending_source_text = ""
         self.active_tool = "PDF"
         self.last_artifact_path = None
 
@@ -911,6 +912,10 @@ class MainWindow(QMainWindow):
                     path = create_conversation_excel(
                         messages,
                         title=title,
+                        model_name=(
+                            (self.current_chat or {}).get("model", "")
+                            or self.model_combo.currentText().strip()
+                        ),
                     )
                 else:
                     creator = self._artifact_creator(tool, preset)
@@ -957,6 +962,7 @@ class MainWindow(QMainWindow):
             tool,
             topic_title(topic),
             preset,
+            source_text=topic,
         )
 
     def _start_document_worker(
@@ -966,11 +972,13 @@ class MainWindow(QMainWindow):
         tool,
         title,
         preset,
+        source_text="",
     ):
         self.pending_pdf_title = title
         self.pending_tool = tool
         self.pending_preset = preset
         self.pending_model = model
+        self.pending_source_text = source_text
 
         self.create_pdf_button.setEnabled(False)
         self.create_pdf_button.setText("GENERATING...")
@@ -1013,6 +1021,8 @@ class MainWindow(QMainWindow):
                 path = create_structured_excel(
                     content,
                     title=title,
+                    source_text=self.pending_source_text,
+                    model_name=self.pending_model,
                 )
             else:
                 creator = self._artifact_creator(tool, preset)
@@ -1051,6 +1061,7 @@ class MainWindow(QMainWindow):
         self.pending_tool = ""
         self.pending_preset = ""
         self.pending_model = ""
+        self.pending_source_text = ""
 
         self.create_pdf_button.setEnabled(True)
         self._select_tool(self.active_tool)
