@@ -3,10 +3,18 @@ from pathlib import Path
 from pypdf import PdfReader
 
 from app.pdf_tool import (
+    create_pdf,
     create_red_executive_pdf,
     create_red_professional_pdf,
     markdown_to_reportlab,
 )
+
+
+def _pdf_text(path):
+    return "\n".join(
+        page.extract_text() or ""
+        for page in PdfReader(str(path)).pages
+    )
 
 
 def test_pdf_created(tmp_path: Path):
@@ -45,8 +53,35 @@ def test_red_executive_pdf_created(tmp_path: Path):
         output_dir=tmp_path,
     )
     assert path.exists()
-    assert path.name.startswith("local_ai_executive_")
+    assert path.name.startswith("local_ai_red_executive_")
     assert path.stat().st_size > 1000
+
+
+def test_classic_executive_pdf_has_classic_identity(tmp_path: Path):
+    path = create_pdf(
+        [{
+            "role": "assistant",
+            "content": "# Classic Report\n## Overview\nPrintable content.",
+        }],
+        preset="Classic Executive",
+        output_dir=tmp_path,
+    )
+    text = _pdf_text(path)
+    assert path.name.startswith("local_ai_classic_executive_")
+    assert "CLASSIC EXECUTIVE REPORT" in text
+    assert "RED EXECUTIVE REPORT" not in text
+    assert "Classic Executive" in text
+
+
+def test_classic_professional_pdf_created(tmp_path: Path):
+    path = create_pdf(
+        [{"role": "assistant", "content": "# Formal Letter\nProfessional content."}],
+        preset="Classic Professional",
+        output_dir=tmp_path,
+    )
+    assert path.exists()
+    assert path.name.startswith("local_ai_classic_professional_")
+    assert path.stat().st_size > 500
 
 
 def test_hungarian_red_executive_pdf_localizes_fixed_labels(tmp_path: Path):
@@ -60,10 +95,7 @@ def test_hungarian_red_executive_pdf_localizes_fixed_labels(tmp_path: Path):
         }],
         output_dir=tmp_path,
     )
-    text = "\n".join(
-        page.extract_text() or ""
-        for page in PdfReader(str(path)).pages
-    )
+    text = _pdf_text(path)
     assert "Vezetői összefoglaló" in text
     assert "Futtatás" in text
     assert "Készült" in text
