@@ -117,3 +117,45 @@ def test_sidebar_lists_only_saved_tasks_not_predeclared_categories():
     assert "for task in tasks" in refresh
     assert 'task.get("name", "Scheduled task")' in refresh
 
+
+
+def test_normal_chat_has_web_auto_and_manual_web_toggle():
+    from app.main_window import MainWindow
+
+    build = inspect.getsource(MainWindow._build_chat_panel)
+    send = inspect.getsource(MainWindow._send)
+
+    assert 'QPushButton("WEB AUTO")' in build
+    assert "setCheckable(True)" in build
+    assert "self.web_button.isChecked()" in send
+    assert "_looks_like_web_request(text)" in send
+    assert "ChatWebWorker" in send
+
+
+def test_web_auto_detects_explicit_search_intent():
+    from app.main_window import MainWindow
+
+    assert MainWindow._looks_like_web_request(
+        None,
+        "Keress ra milyen 32 GB-os videokartyak vannak most",
+    )
+    assert MainWindow._looks_like_web_request(
+        None,
+        "Nezz utana online a legfrissebb Qwen modellnek",
+    )
+    assert MainWindow._looks_like_web_request(
+        None,
+        "search the web for current Ollama news",
+    )
+    assert not MainWindow._looks_like_web_request(
+        None,
+        "Irj egy rovid verset az oszrol",
+    )
+
+
+def test_web_chat_failure_gets_distinct_status():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._on_failed)
+    assert "Web research error" in source
+    assert "Web research failed" in source
