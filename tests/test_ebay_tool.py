@@ -40,11 +40,44 @@ def test_ebay_search_parses_public_result_cards(monkeypatch):
     assert "https://www.ebay.de/itm/123" in text
 
 
+def test_ebay_search_uses_edge_browser_after_direct_failure(monkeypatch):
+    monkeypatch.setattr(
+        ebay_tool,
+        "_direct_ebay_search",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("403 Forbidden")
+        ),
+    )
+    monkeypatch.setattr(
+        ebay_tool,
+        "_browser_ebay_search",
+        lambda clean, limit, timeout: ([
+            {
+                "title": "Rendered GPU 32GB",
+                "price": "EUR 999,00",
+                "shipping": "",
+                "snippet": "",
+                "url": "https://www.ebay.de/itm/789",
+            }
+        ], "https://www.ebay.de/sch/i.html?_nkw=GPU"),
+    )
+
+    result = ebay_tool.search_ebay("GPU 32GB", max_results=5)
+
+    assert result["provider"] == "eBay.de via Edge Browser"
+    assert result["results"][0]["url"] == "https://www.ebay.de/itm/789"
+
+
 def test_ebay_search_falls_back_to_web_search(monkeypatch):
     monkeypatch.setattr(
-        ebay_tool.requests,
-        "get",
-        lambda *args, **kwargs: FakeResponse("<html><body>No cards</body></html>"),
+        ebay_tool,
+        "_direct_ebay_search",
+        lambda *args, **kwargs: ([], "https://www.ebay.de/search"),
+    )
+    monkeypatch.setattr(
+        ebay_tool,
+        "_browser_ebay_search",
+        lambda *args, **kwargs: ([], "https://www.ebay.de/search"),
     )
     monkeypatch.setattr(
         ebay_tool,
@@ -65,3 +98,8 @@ def test_ebay_search_falls_back_to_web_search(monkeypatch):
     assert len(result["results"]) == 1
     assert result["results"][0]["url"] == "https://www.ebay.de/itm/456"
     assert result["results"][0]["price"] == "EUR 120,00"
+
+
+def test_ebay_price_parser_handles_euro_formats():
+    assert ebay_tool._price_from_text("GPU EUR 1.299,99") == "EUR 1.299,99"
+    assert ebay_tool._price_from_text("999,00 € plus shipping") == "999,00 €"
