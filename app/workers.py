@@ -180,6 +180,13 @@ class ChatWebWorker(QObject):
                 folded = self._fold_text(clean)
         return clean[:260]
 
+    @staticmethod
+    def _compact_web_error(exc, limit=360):
+        message = " ".join(str(exc or "").split())
+        if len(message) <= limit:
+            return message
+        return message[: max(0, limit - 3)].rstrip() + "..."
+
     def _generate_search_queries(self):
         prompt = self.user_prompt[:5000]
         recent_requests = self._recent_user_requests()
@@ -286,7 +293,9 @@ class ChatWebWorker(QObject):
                         fetch_pages=True,
                     )
                 except Exception as exc:
-                    failed_queries.append(f"{query}: {exc}")
+                    failed_queries.append(
+                        f"{query}: {self._compact_web_error(exc)}"
+                    )
                     continue
 
                 query_urls = source_urls(payload)
