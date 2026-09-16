@@ -5,6 +5,7 @@ from datetime import datetime
 import markdown
 
 from .config import OUTPUT_DIR
+from .localization import is_hungarian, labels_for_text
 
 
 def _visible_messages(messages):
@@ -34,6 +35,14 @@ def _extract_title(text, fallback):
     return (fallback or "Local AI Document")[:100]
 
 
+def _strip_first_h1(text):
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if re.match(r"^\s*#\s+.+$", line):
+            return "\n".join(lines[:index] + lines[index + 1:]).lstrip()
+    return text
+
+
 def _body_html(text):
     return markdown.markdown(
         text,
@@ -54,24 +63,28 @@ def create_red_html(
 
     text = _document_text(messages)
     document_title = _extract_title(text, title)
+    labels = labels_for_text(text)
+    language = "hu" if is_hungarian(text) else "en"
+    text = _strip_first_h1(text)
     body = _body_html(text or "No document content.")
 
     if executive:
         hero = (
             '<section class="hero">'
-            '<div class="hero-title">RED EXECUTIVE REPORT</div>'
-            '<div class="hero-sub">Structured local-model document output</div>'
+            '<div class="hero-title">' + html.escape(labels["hero_title"]) + '</div>'
+            '<div class="hero-sub">' + html.escape(labels["hero_subtitle"]) + '</div>'
             '</section>'
             '<section class="cards">'
-            '<div><b>Preset</b><span>Red Executive</span></div>'
-            '<div><b>Execution</b><span>Local</span></div>'
-            '<div><b>Generated</b><span>'
+            '<div><b>' + html.escape(labels["preset"]) + '</b><span>Red Executive</span></div>'
+            '<div><b>' + html.escape(labels["execution"]) + '</b><span>'
+            + html.escape(labels["local"]) + '</span></div>'
+            '<div><b>' + html.escape(labels["generated"]) + '</b><span>'
             + datetime.now().strftime("%Y-%m-%d")
             + '</span></div>'
             '</section>'
             '<section class="summary">'
-            '<b>Executive Summary</b>'
-            '<p>This document was generated locally using the selected AI model.</p>'
+            '<b>' + html.escape(labels["executive_summary"]) + '</b>'
+            '<p>' + html.escape(labels["summary_text"]) + '</p>'
             '</section>'
         )
     else:
@@ -127,13 +140,13 @@ def create_red_html(
 
     preset = "Red Executive" if executive else "Red Professional"
     subtitle = (
-        "Executive / Technical Report"
+        labels["subtitle_executive"]
         if executive
-        else "Professional Report"
+        else labels["subtitle_professional"]
     )
 
     html_doc = f"""<!doctype html>
-<html lang="en">
+<html lang="{language}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -147,7 +160,7 @@ def create_red_html(
 {hero}
 <article>{body}</article>
 <footer class="footer">
-<span>Generated {datetime.now().strftime("%Y-%m-%d %H:%M")}</span>
+<span>{html.escape(labels["generated_footer"])} {datetime.now().strftime("%Y-%m-%d %H:%M")}</span>
 <span>{preset}</span>
 </footer>
 </main>
