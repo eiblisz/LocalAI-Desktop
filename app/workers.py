@@ -1,5 +1,6 @@
 import re
 import threading
+import unicodedata
 
 from PySide6.QtCore import QObject, Signal, Slot
 
@@ -82,26 +83,30 @@ class ChatWebWorker(QObject):
 
         return list(reversed(requests))
 
+    @staticmethod
+    def _fold_text(value):
+        normalized = unicodedata.normalize(
+            "NFKD",
+            str(value or "").lower(),
+        )
+        ascii_text = "".join(
+            char for char in normalized
+            if not unicodedata.combining(char)
+        )
+        return " ".join(ascii_text.split())
+
     def _is_research_followup(self):
-        normalized = " ".join(self.user_prompt.lower().split())
+        normalized = self._fold_text(self.user_prompt)
+        if re.search(r"\bkeress\w*\s+(?:ra\s+)?(?:ujra|megint)\b", normalized):
+            return True
         markers = [
-            "keress rá újra",
-            "keress ra ujra",
-            "keress újra",
-            "keress ujra",
-            "nézd meg újra",
             "nezd meg ujra",
-            "nézd meg megint",
             "nezd meg megint",
-            "keress rá megint",
-            "keress ra megint",
             "arra keress",
             "erre keress",
             "ugyanazt",
             "ugyan ezt",
-            "próbáld újra",
             "probald ujra",
-            "most újra",
             "most ujra",
             "search again",
             "look it up again",
@@ -131,14 +136,12 @@ class ChatWebWorker(QObject):
         )
 
     def _query_is_literal_followup_command(self, query):
-        normalized = " ".join(str(query or "").lower().split())
+        normalized = self._fold_text(query)
+        if re.search(r"\bkeress\w*\s+(?:ra\s+)?(?:ujra|megint)\b", normalized):
+            return True
         bad_markers = [
-            "keress ra ujra",
-            "keress rá újra",
-            "keress ujra",
-            "keress újra",
             "nezd meg ujra",
-            "nézd meg újra",
+            "nezd meg megint",
             "search again",
             "look it up again",
             "try again",
