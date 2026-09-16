@@ -36,6 +36,8 @@ def _decode_bing_result_url(url):
     try:
         parsed = urlparse(value)
         host = (parsed.hostname or "").lower()
+        if host in {"bing.com", "www.bing.com"} and parsed.path.startswith("/aclick"):
+            return ""
         if host not in {"bing.com", "www.bing.com"} or parsed.path != "/ck/a":
             return value
 
@@ -514,9 +516,38 @@ def _query_terms(query):
     return list(dict.fromkeys(terms))
 
 
+def _hard_query_specs(query):
+    text = str(query or "").lower().replace("×", "x")
+    specs = []
+
+    for match in re.finditer(
+        r"\b\d+\s*x\s*\d+\s*(?:gb|tb)\b",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        specs.append(
+            ("exact", re.sub(r"[^a-z0-9]+", "", match.group(0)))
+        )
+
+    for match in re.finditer(r"\bddr\s*[345]\b", text, flags=re.IGNORECASE):
+        specs.append(
+            ("exact", re.sub(r"[^a-z0-9]+", "", match.group(0)))
+        )
+
+    for match in re.finditer(
+        r"\b(\d{3,5})\s*(?:mhz|mt/s|mts|mtps)\b",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        specs.append(("speed", match.group(1)))
+
+    return list(dict.fromkeys(specs))
+
+
 def _filter_relevant_results(query, results):
     terms = _query_terms(query)
-    if not terms:
+    hard_specs = _hard_query_specs(query)
+    if not terms and not hard_specs:
         return list(results)
 
     minimum_matches = 1 if len(terms) <= 2 else 2
@@ -527,6 +558,22 @@ def _filter_relevant_results(query, results):
             str(item.get("title", "")),
             str(item.get("snippet", "")),
         ]).lower()
+        normalized_haystack = re.sub(
+            r"[^a-z0-9]+",
+            "",
+            haystack.replace("×", "x"),
+        )
+
+        hard_match = True
+        for kind, value in hard_specs:
+            if kind == "exact" and value not in normalized_haystack:
+                hard_match = False
+                break
+            if kind == "speed" and value not in normalized_haystack:
+                hard_match = False
+                break
+        if not hard_match:
+            continue
 
         matched = {
             term for term in terms
@@ -651,6 +698,7 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
                 "query": clean,
                 "retrieved_at": datetime.now().isoformat(timespec="seconds"),
                 "results": results,
+                "provider_chain_errors": list(errors),
             }
         except Exception as exc:
             errors.append(f"{name}: {exc}")
