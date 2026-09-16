@@ -56,6 +56,15 @@ def compute_next_run(task, now=None):
             task.get("daily_time", "08:00"),
         )
 
+    if frequency == "custom_interval":
+        value = max(1, int(task.get("custom_interval_value", 15) or 15))
+        unit = str(task.get("custom_interval_unit", "minutes")).lower()
+        if unit == "days":
+            return now + timedelta(days=value)
+        if unit == "hours":
+            return now + timedelta(hours=value)
+        return now + timedelta(minutes=value)
+
     interval = max(1, int(task.get("interval_hours", 1) or 1))
     return now + timedelta(hours=interval)
 
@@ -89,11 +98,17 @@ class ScheduledTaskStore:
         task.setdefault("location", "")
         task.setdefault("ebay_query", "")
         task.setdefault("ebay_max_results", 8)
+        task.setdefault("web_search_enabled", False)
+        task.setdefault("web_query", "")
+        task.setdefault("web_max_results", 6)
+        task.setdefault("web_fetch_pages", True)
         task.setdefault("model", "")
         task.setdefault("frequency", "hourly")
         task.setdefault("interval_hours", 1)
         task.setdefault("daily_time", "08:00")
         task.setdefault("weekly_day", 0)
+        task.setdefault("custom_interval_value", 15)
+        task.setdefault("custom_interval_unit", "minutes")
         task.setdefault("enabled", True)
         permissions = task.setdefault("permissions", {"weather": False})
         if "task_type" not in task:
