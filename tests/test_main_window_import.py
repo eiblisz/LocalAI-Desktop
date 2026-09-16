@@ -181,3 +181,29 @@ def test_streaming_does_not_force_bottom_when_user_scrolled_up():
     render_source = inspect.getsource(MainWindow._render_chat)
     assert "if keep_bottom:" in render_source
     assert "if streaming:" in render_source
+
+
+def test_web_auto_detects_shopping_price_requests_without_search_verbs():
+    from app.main_window import MainWindow
+
+    assert MainWindow._looks_like_web_request(
+        None,
+        "2x32GB DDR4 1000 EUR alatt",
+    )
+    assert MainWindow._looks_like_web_request(
+        None,
+        "64GB DDR4 mennyiert kaphato most",
+    )
+    assert MainWindow._looks_like_web_request(
+        None,
+        "RTX 5090 current price Germany",
+    )
+
+
+def test_chat_link_handler_opens_http_links_externally():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._open_artifact_link)
+    assert 'url.scheme().lower() in {"http", "https"}' in source
+    assert "webbrowser.open" in source
+    assert "path_from_artifact_url" in source
