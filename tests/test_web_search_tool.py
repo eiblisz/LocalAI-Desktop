@@ -339,3 +339,115 @@ def test_relevance_filter_does_not_match_query_terms_only_from_redirect_url():
         )
         == []
     )
+
+
+class BraveResponse:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._payload
+
+
+def test_brave_search_api_is_primary_when_key_is_configured(monkeypatch):
+    seen = {}
+
+    def fake_get(url, *args, **kwargs):
+        seen["url"] = url
+        seen["params"] = kwargs.get("params", {})
+        seen["headers"] = kwargs.get("headers", {})
+        return BraveResponse({
+            "web": {
+                "results": [{
+                    "title": "Example Brave result",
+                    "url": "https://example.com/brave",
+                    "description": "Example search result from Brave.",
+                }]
+            }
+        })
+
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "secret-test-key")
+    monkeypatch.setattr(web_search_tool.requests, "get", fake_get)
+    monkeypatch.setattr(
+        web_search_tool,
+        "_is_public_http_url",
+        lambda url: True,
+    )
+
+    payload = web_search_tool.search_web(
+        "example brave",
+        fetch_pages=False,
+    )
+
+    assert payload["provider"] == "Brave Search API"
+    assert payload["results"][0]["url"] == "https://example.com/brave"
+    assert seen["url"] == web_search_tool.BRAVE_WEB_SEARCH_URL
+    assert seen["headers"]["X-Subscription-Token"] == "secret-test-key"
+    assert seen["params"]["country"] == "DE"
+
+
+def test_web_search_skips_brave_when_api_key_is_missing(monkeypatch):
+    monkeypatch.delenv("BRAVE_SEARCH_API_KEY", raising=False)
+    monkeypatch.setattr(
+        web_search_tool,
+        "_search_brave_api",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Brave must not be called without a key")
+        ),
+    )
+    monkeypatch.setattr(
+        web_search_tool,
+        "_search_bing_rss",
+        lambda *args, **kwargs: {
+            "provider": "Bing Web RSS",
+            "results": [{
+                "title": "Example Bing result",
+                "url": "https://example.com/bing",
+                "snippet": "Example result",
+                "published": "",
+                "page_text": "",
+            }],
+        },
+    )
+
+    payload = web_search_tool.search_web(
+        "example",
+        fetch_pages=False,
+    )
+
+    assert payload["provider"] == "Bing Web RSS"
+
+
+def test_web_search_falls_back_when_brave_fails(monkeypatch):
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "secret-test-key")
+    monkeypatch.setattr(
+        web_search_tool,
+        "_search_brave_api",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("429 quota limited")
+        ),
+    )
+    monkeypatch.setattr(
+        web_search_tool,
+        "_search_bing_rss",
+        lambda *args, **kwargs: {
+            "provider": "Bing Web RSS",
+            "results": [{
+                "title": "Example fallback result",
+                "url": "https://example.com/fallback",
+                "snippet": "Example fallback result",
+                "published": "",
+                "page_text": "",
+            }],
+        },
+    )
+
+    payload = web_search_tool.search_web(
+        "example",
+        fetch_pages=False,
+    )
+
+    assert payload["provider"] == "Bing Web RSS"
