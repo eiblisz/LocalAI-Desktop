@@ -1,3 +1,4 @@
+import re
 import threading
 
 from PySide6.QtCore import QObject, Signal, Slot
@@ -85,7 +86,11 @@ class ChatWebWorker(QObject):
         queries = []
         for line in raw.splitlines():
             clean = " ".join(line.strip().strip('\"\'').split())
-            clean = clean.lstrip("-*0123456789.) ").strip()
+            clean = re.sub(
+                r"^(?:[-*•]\s+|\d{1,2}[.)]\s+)",
+                "",
+                clean,
+            ).strip()
             if clean and clean not in queries:
                 queries.append(clean[:180])
             if len(queries) >= 4:
