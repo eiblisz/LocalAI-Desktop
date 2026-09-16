@@ -161,27 +161,36 @@ def test_web_chat_failure_gets_distinct_status():
     assert "Web research failed" in source
 
 
-def test_streaming_chat_is_throttled_instead_of_full_render_per_token():
+def test_chat_tokens_buffer_without_live_rendering():
     from app.main_window import MainWindow
 
     token_source = inspect.getsource(MainWindow._on_token)
-    render_source = inspect.getsource(MainWindow._render_chat)
-    stream_source = inspect.getsource(MainWindow._render_streaming_chat)
 
-    assert "stream_render_timer.start(90)" in token_source
-    assert "_render_chat(include_partial=True)" not in token_source
-    assert "streaming=False" in render_source
-    assert "_chat_is_near_bottom()" in render_source
-    assert "include_partial=True, streaming=True" in stream_source
+    assert "self.partial_assistant += token" in token_source
+    assert "_render_chat" not in token_source
+    assert "stream_render_timer" not in token_source
 
-
-def test_streaming_does_not_force_bottom_when_user_scrolled_up():
+def test_chat_uses_pulsing_thinking_indicator_until_complete():
     from app.main_window import MainWindow
 
-    render_source = inspect.getsource(MainWindow._render_chat)
-    assert "if keep_bottom:" in render_source
-    assert "if streaming:" in render_source
+    build_source = inspect.getsource(MainWindow._build_chat_panel)
+    send_source = inspect.getsource(MainWindow._send)
+    start_source = inspect.getsource(MainWindow._start_thinking_indicator)
+    pulse_source = inspect.getsource(MainWindow._pulse_thinking_indicator)
+    finished_source = inspect.getsource(MainWindow._on_finished)
+    failed_source = inspect.getsource(MainWindow._on_failed)
+    stop_source = inspect.getsource(MainWindow._stop_generation)
 
+    assert 'self.thinking_label = QLabel("")' in build_source
+    assert "setFixedHeight(26)" in build_source
+    assert "_start_thinking_indicator(use_web)" in send_source
+    assert '"Gondolkodik"' in start_source
+    assert '"Keres es gondolkodik"' in start_source
+    assert "thinking_timer.start()" in start_source
+    assert "thinking_phase" in pulse_source
+    assert "_stop_thinking_indicator()" in finished_source
+    assert "_stop_thinking_indicator()" in failed_source
+    assert "_stop_thinking_indicator()" in stop_source
 
 def test_web_auto_detects_shopping_price_requests_without_search_verbs():
     from app.main_window import MainWindow
