@@ -227,3 +227,41 @@ def test_page_read_falls_back_to_edge_browser(monkeypatch):
     web_search_tool._fetch_top_pages(results, 20.0)
 
     assert results[0]["page_text"] == "Rendered browser page text"
+
+
+def test_relevance_filter_drops_unrelated_results():
+    results = [
+        {
+            "title": "Amazon Music Unlimited review",
+            "url": "https://example.com/music",
+            "snippet": "Streaming music and Alexa integration",
+        },
+        {
+            "title": "Qwen local AI model update",
+            "url": "https://example.com/qwen",
+            "snippet": "New Ollama-compatible local model release",
+        },
+    ]
+
+    filtered = web_search_tool._filter_relevant_results(
+        "local AI models Ollama Qwen",
+        results,
+    )
+
+    assert [item["title"] for item in filtered] == [
+        "Qwen local AI model update"
+    ]
+
+
+def test_source_urls_are_deduplicated():
+    payload = {
+        "results": [
+            {"url": "https://example.com/a"},
+            {"url": "https://example.com/a"},
+            {"url": "https://example.com/b"},
+        ]
+    }
+    assert web_search_tool.source_urls(payload) == [
+        "https://example.com/a",
+        "https://example.com/b",
+    ]
