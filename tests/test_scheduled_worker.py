@@ -187,3 +187,35 @@ def test_custom_web_search_falls_back_to_prompt_for_query(monkeypatch):
     assert not failed
     assert completed
     assert seen["query"] == "latest local AI developments"
+
+
+def test_ebay_generic_query_uses_task_prompt(monkeypatch):
+    seen = {}
+
+    def fake_search(query, max_results=8):
+        seen["query"] = query
+        return {
+            "provider": "test",
+            "query": query,
+            "results": [{"title": "GPU", "url": "https://www.ebay.de/itm/1"}],
+        }
+
+    monkeypatch.setattr(workers, "search_ebay", fake_search)
+    monkeypatch.setattr(
+        workers,
+        "ebay_context_text",
+        lambda payload: "EBAY SEARCH TOOL DATA",
+    )
+
+    _client, completed, failed = _run_worker({
+        "id": "ebay-generic",
+        "task_type": "ebay",
+        "prompt": "keress 32gb-os videokartyat mindegy melyik tipus",
+        "model": "qwen-test",
+        "ebay_query": "Ebay",
+        "ebay_max_results": 9,
+    })
+
+    assert not failed
+    assert completed
+    assert seen["query"] == "keress 32gb-os videokartyat mindegy melyik tipus"
