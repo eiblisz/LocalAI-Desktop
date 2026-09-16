@@ -46,3 +46,26 @@ def test_scheduler_list_does_not_predeclare_task_categories():
     assert "type_status_labels" not in source
     assert "TASK_TYPES.items()" not in source
     assert "self.task_list = QListWidget()" in source
+
+
+def test_scheduler_frequency_list_includes_custom_interval():
+    source = inspect.getsource(SchedulerDialog._build_ui)
+    assert "Custom interval" in source
+
+
+def test_custom_frequency_shows_interval_controls():
+    source = inspect.getsource(SchedulerDialog._frequency_changed)
+
+    assert 'custom = value == "Custom interval"' in source
+    assert "self.custom_interval_spin.setVisible(custom)" in source
+    assert "self.custom_interval_unit.setVisible(custom)" in source
+
+
+def test_custom_task_can_toggle_web_search_fields():
+    source = inspect.getsource(SchedulerDialog._web_search_toggled)
+    payload = inspect.getsource(SchedulerDialog._task_payload)
+
+    assert "WEB SEARCH ON" in source
+    assert "self.web_query_edit.setVisible(details)" in source
+    assert '"web_search_enabled": web_enabled' in payload
+    assert '"web_fetch_pages": self.web_fetch_toggle.isChecked()' in payload
