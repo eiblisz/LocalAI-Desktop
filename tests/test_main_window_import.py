@@ -37,3 +37,16 @@ def test_tool_panel_uses_shared_theme_lists():
     source = inspect.getsource(MainWindow._select_tool)
     assert "document_preset_labels()" in source
     assert "workbook_preset_labels()" in source
+
+
+def test_schedule_button_and_scheduler_methods_are_wired():
+    from app.main_window import MainWindow
+
+    tools_source = inspect.getsource(MainWindow._build_tools_panel)
+    check_source = inspect.getsource(MainWindow._check_scheduled_tasks)
+    run_source = inspect.getsource(MainWindow._run_scheduled_task)
+
+    assert 'QPushButton("SCHEDULE")' in tools_source
+    assert "_open_scheduler" in tools_source
+    assert "due_tasks()" in check_source
+    assert "ScheduledTaskWorker" in run_source
