@@ -216,3 +216,15 @@ def test_chat_link_handler_opens_http_links_externally():
     assert 'url.scheme().lower() in {"http", "https"}' in source
     assert "webbrowser.open" in source
     assert "path_from_artifact_url" in source
+
+
+def test_chat_view_wraps_long_urls_without_horizontal_growth():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._build_chat_panel)
+
+    assert "setMinimumWidth(0)" in source
+    assert "ScrollBarAlwaysOff" in source
+    assert "LineWrapMode.WidgetWidth" in source
+    assert "WrapAtWordBoundaryOrAnywhere" in source
+    assert "setDefaultTextOption" in source
