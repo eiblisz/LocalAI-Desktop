@@ -21,8 +21,8 @@ class EbaySearchError(RuntimeError):
 def _price_from_text(text):
     value = str(text or "")
     patterns = [
-        r"(?:EUR|€)s*[d.]+(?:,d{1,2})?",
-        r"[d.]+(?:,d{1,2})?s*(?:EUR|€)",
+        r"(?:EUR|€)\s*[\d.]+(?:,\d{1,2})?",
+        r"[\d.]+(?:,\d{1,2})?\s*(?:EUR|€)",
     ]
     for pattern in patterns:
         match = re.search(pattern, value, flags=re.IGNORECASE)
