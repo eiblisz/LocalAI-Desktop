@@ -20,16 +20,13 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+from .artifact_themes import get_theme
 from .config import OUTPUT_DIR
-from .localization import labels_for_text
+from .localization import is_hungarian, labels_for_text
 
-HEADER_RED = colors.HexColor("#B92F3B")
-DARK_RED = colors.HexColor("#8E1F2D")
-LIGHT_RED = colors.HexColor("#F9EDEF")
-TEXT_DARK = colors.HexColor("#1F2630")
-MUTED = colors.HexColor("#6C737F")
-LIGHT_GREY = colors.HexColor("#F4F6F8")
-MID_GREY = colors.HexColor("#D9DEE5")
+
+def _hex(value):
+    return colors.HexColor("#" + value)
 
 
 def _register_font_family() -> str:
@@ -115,78 +112,79 @@ def _strip_first_h1(text: str) -> str:
     return text
 
 
-def _make_styles(font_name: str, executive: bool = False) -> dict:
+def _make_styles(font_name: str, theme) -> dict:
     styles = getSampleStyleSheet()
+    executive = theme.executive
     body_size = 12.0 if executive else 11.5
     body_leading = 17 if executive else 16
 
     return {
         "body": ParagraphStyle(
-            "LocalAIBodyExecutive" if executive else "LocalAIBody",
+            f"LocalAIBody_{theme.key}",
             parent=styles["BodyText"],
             fontName=font_name,
             fontSize=body_size,
             leading=body_leading,
-            textColor=TEXT_DARK,
+            textColor=_hex(theme.text),
             alignment=TA_LEFT,
             spaceAfter=4 * mm,
         ),
         "h1": ParagraphStyle(
-            "LocalAIH1Executive" if executive else "LocalAIH1",
+            f"LocalAIH1_{theme.key}",
             parent=styles["Heading1"],
             fontName=font_name,
             fontSize=19 if executive else 17,
             leading=24 if executive else 21,
-            textColor=DARK_RED,
+            textColor=_hex(theme.accent_dark),
             spaceBefore=5 * mm,
             spaceAfter=4 * mm,
         ),
         "h2": ParagraphStyle(
-            "LocalAIH2Executive" if executive else "LocalAIH2",
+            f"LocalAIH2_{theme.key}",
             parent=styles["Heading2"],
             fontName=font_name,
             fontSize=16 if executive else 14.5,
             leading=20 if executive else 18,
-            textColor=HEADER_RED,
+            textColor=_hex(theme.accent),
             spaceBefore=4 * mm,
             spaceAfter=3 * mm,
         ),
         "h3": ParagraphStyle(
-            "LocalAIH3Executive" if executive else "LocalAIH3",
+            f"LocalAIH3_{theme.key}",
             parent=styles["Heading3"],
             fontName=font_name,
             fontSize=13.5 if executive else 12.5,
             leading=17,
-            textColor=TEXT_DARK,
+            textColor=_hex(theme.text),
             spaceBefore=3 * mm,
             spaceAfter=2 * mm,
         ),
         "small": ParagraphStyle(
-            "LocalAISmallExecutive" if executive else "LocalAISmall",
+            f"LocalAISmall_{theme.key}",
             parent=styles["BodyText"],
             fontName=font_name,
             fontSize=9.5,
             leading=12,
-            textColor=MUTED,
+            textColor=_hex(theme.muted),
         ),
         "center_title": ParagraphStyle(
-            "LocalAICenterTitle",
+            f"LocalAICenterTitle_{theme.key}",
             parent=styles["Title"],
             fontName=font_name,
             fontSize=26,
             leading=31,
             alignment=TA_CENTER,
-            textColor=TEXT_DARK,
+            textColor=_hex(theme.text),
             spaceAfter=4 * mm,
         ),
         "center_subtitle": ParagraphStyle(
-            "LocalAICenterSubtitle",
+            f"LocalAICenterSubtitle_{theme.key}",
             parent=styles["BodyText"],
             fontName=font_name,
             fontSize=13.5,
             leading=17,
             alignment=TA_CENTER,
-            textColor=MUTED,
+            textColor=_hex(theme.muted),
             spaceAfter=6 * mm,
         ),
     }
@@ -203,7 +201,7 @@ def _markdown_flowables(
     text: str,
     styles: dict,
     available_width: float,
-    accent=HEADER_RED,
+    theme,
     enable_progress: bool = False,
 ) -> list:
     flowables = []
@@ -211,8 +209,7 @@ def _markdown_flowables(
     i = 0
 
     while i < len(lines):
-        raw = lines[i].rstrip()
-        stripped = raw.strip()
+        stripped = lines[i].rstrip().strip()
 
         if not stripped:
             flowables.append(Spacer(1, 2.2 * mm))
@@ -235,7 +232,7 @@ def _markdown_flowables(
                 i += 1
 
             cell_style = ParagraphStyle(
-                "LocalAITableCell",
+                f"LocalAITableCell_{theme.key}",
                 parent=styles["body"],
                 fontSize=max(styles["body"].fontSize - 1.2, 9.5),
                 leading=max(styles["body"].leading - 2, 12),
@@ -251,10 +248,10 @@ def _markdown_flowables(
             table.setStyle(
                 TableStyle(
                     [
-                        ("BACKGROUND", (0, 0), (-1, 0), LIGHT_RED),
-                        ("TEXTCOLOR", (0, 0), (-1, 0), DARK_RED),
+                        ("BACKGROUND", (0, 0), (-1, 0), _hex(theme.accent_light)),
+                        ("TEXTCOLOR", (0, 0), (-1, 0), _hex(theme.accent_dark)),
                         ("FONTNAME", (0, 0), (-1, 0), styles["body"].fontName),
-                        ("GRID", (0, 0), (-1, -1), 0.4, MID_GREY),
+                        ("GRID", (0, 0), (-1, -1), 0.4, _hex(theme.border)),
                         ("VALIGN", (0, 0), (-1, -1), "TOP"),
                         ("LEFTPADDING", (0, 0), (-1, -1), 7),
                         ("RIGHTPADDING", (0, 0), (-1, -1), 7),
@@ -269,12 +266,13 @@ def _markdown_flowables(
         heading = re.match(r"^(#{1,6})\s+(.+)$", stripped)
         if heading:
             level = len(heading.group(1))
-            if level == 1:
-                style = styles["h1"]
-            elif level == 2:
-                style = styles["h2"]
-            else:
-                style = styles["h3"]
+            style = (
+                styles["h1"]
+                if level == 1
+                else styles["h2"]
+                if level == 2
+                else styles["h3"]
+            )
             flowables.append(
                 Paragraph(markdown_to_reportlab(heading.group(2)), style)
             )
@@ -298,8 +296,8 @@ def _markdown_flowables(
             bar.setStyle(
                 TableStyle(
                     [
-                        ("BACKGROUND", (0, 0), (0, 0), accent),
-                        ("BACKGROUND", (1, 0), (1, 0), colors.HexColor("#ECEFF2")),
+                        ("BACKGROUND", (0, 0), (0, 0), _hex(theme.accent)),
+                        ("BACKGROUND", (1, 0), (1, 0), _hex(theme.surface)),
                         ("BOX", (0, 0), (-1, -1), 0, colors.white),
                     ]
                 )
@@ -341,18 +339,19 @@ def _footer(
     canvas,
     page_width: float,
     font_name: str,
-    label: str,
+    preset_label: str,
     labels: dict,
+    theme,
 ) -> None:
-    canvas.setFillColor(MUTED)
-    canvas.setFont(font_name, 9)
+    canvas.setFillColor(_hex(theme.muted))
+    canvas.setFont(font_name, 8.5)
     canvas.drawString(
         18 * mm,
         10 * mm,
         f'{labels["generated_footer"]} '
         + datetime.now().strftime("%Y-%m-%d %H:%M"),
     )
-    canvas.drawCentredString(page_width / 2, 10 * mm, label)
+    canvas.drawCentredString(page_width / 2, 10 * mm, preset_label)
     canvas.drawRightString(
         page_width - 18 * mm,
         10 * mm,
@@ -360,29 +359,55 @@ def _footer(
     )
 
 
-def create_red_professional_pdf(
+def _hero_labels(theme, text, labels):
+    if theme.family == "red":
+        return labels["hero_title"], labels["hero_subtitle"]
+    if is_hungarian(text):
+        return (
+            "CLASSIC EXECUTIVE RIPORT",
+            "Elegáns, nyomtatásbarát helyi dokumentum",
+        )
+    return (
+        "CLASSIC EXECUTIVE REPORT",
+        "Elegant print-friendly local document",
+    )
+
+
+def create_pdf(
     messages: list[dict],
     title: str = "Local AI Report",
+    preset: str = "Red Professional",
     output_dir: Path = OUTPUT_DIR,
 ) -> Path:
+    theme = get_theme(preset)
     output_dir.mkdir(parents=True, exist_ok=True)
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    path = output_dir / f"local_ai_report_{timestamp}.pdf"
+    family = "classic" if theme.family == "classic" else "red"
+    variant = "executive" if theme.executive else "professional"
+    path = output_dir / f"local_ai_{family}_{variant}_{timestamp}.pdf"
 
     font_name = _register_font_family()
     page_width, page_height = A4
     text = _document_text(messages)
     labels = labels_for_text(text)
     document_title = _extract_title(text, title)
-    text = _strip_first_h1(text)
-    styles = _make_styles(font_name, executive=False)
+    body_text = _strip_first_h1(text)
+    styles = _make_styles(font_name, theme)
+
+    if theme.executive:
+        top_margin = 18 * mm
+    elif theme.family == "red":
+        top_margin = 36 * mm
+    else:
+        top_margin = 28 * mm
 
     doc = BaseDocTemplate(
         str(path),
         pagesize=A4,
-        leftMargin=18 * mm,
-        rightMargin=18 * mm,
-        topMargin=36 * mm,
+        leftMargin=20 * mm if theme.executive else 18 * mm,
+        rightMargin=20 * mm if theme.executive else 18 * mm,
+        topMargin=top_margin,
         bottomMargin=18 * mm,
         title=document_title,
     )
@@ -390,76 +415,74 @@ def create_red_professional_pdf(
 
     def draw_page(canvas, _doc):
         canvas.saveState()
-        canvas.setFillColor(HEADER_RED)
-        canvas.rect(
-            0, page_height - 27 * mm, page_width, 27 * mm, fill=1, stroke=0
+
+        if not theme.executive and theme.family == "red":
+            canvas.setFillColor(_hex(theme.accent))
+            canvas.rect(
+                0,
+                page_height - 27 * mm,
+                page_width,
+                27 * mm,
+                fill=1,
+                stroke=0,
+            )
+            canvas.setFillColor(colors.white)
+            canvas.setFont(font_name, 18)
+            canvas.drawString(
+                18 * mm,
+                page_height - 16.5 * mm,
+                document_title[:78],
+            )
+        elif not theme.executive:
+            canvas.setStrokeColor(_hex(theme.accent))
+            canvas.setLineWidth(1.1)
+            canvas.line(
+                18 * mm,
+                page_height - 16 * mm,
+                page_width - 18 * mm,
+                page_height - 16 * mm,
+            )
+            canvas.setFillColor(_hex(theme.text))
+            canvas.setFont(font_name, 16)
+            canvas.drawString(
+                18 * mm,
+                page_height - 12 * mm,
+                document_title[:78],
+            )
+        else:
+            canvas.setStrokeColor(_hex(theme.accent))
+            canvas.setLineWidth(1.5 if theme.family == "classic" else 2.0)
+            canvas.line(
+                20 * mm,
+                page_height - 12 * mm,
+                page_width - 20 * mm,
+                page_height - 12 * mm,
+            )
+
+        _footer(
+            canvas,
+            page_width,
+            font_name,
+            theme.label,
+            labels,
+            theme,
         )
-        canvas.setFillColor(colors.white)
-        canvas.setFont(font_name, 18)
-        canvas.drawString(
-            18 * mm, page_height - 16.5 * mm, document_title[:78]
-        )
-        _footer(canvas, page_width, font_name, "Red Professional", labels)
         canvas.restoreState()
 
     doc.addPageTemplates(
-        [PageTemplate(id="red", frames=[frame], onPage=draw_page)]
+        [PageTemplate(id=theme.key, frames=[frame], onPage=draw_page)]
     )
-    story = _markdown_flowables(
-        text or "No document content.",
-        styles,
-        doc.width,
-        accent=HEADER_RED,
-        enable_progress=False,
-    )
-    doc.build(story)
-    return path
 
-
-def create_red_executive_pdf(
-    messages: list[dict],
-    title: str = "Local AI Executive Report",
-    output_dir: Path = OUTPUT_DIR,
-) -> Path:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    path = output_dir / f"local_ai_executive_{timestamp}.pdf"
-
-    font_name = _register_font_family()
-    page_width, page_height = A4
-    text = _document_text(messages)
-    labels = labels_for_text(text)
-    document_title = _extract_title(text, title)
-    text = _strip_first_h1(text)
-    styles = _make_styles(font_name, executive=True)
-
-    doc = BaseDocTemplate(
-        str(path),
-        pagesize=A4,
-        leftMargin=20 * mm,
-        rightMargin=20 * mm,
-        topMargin=18 * mm,
-        bottomMargin=18 * mm,
-        title=document_title,
-    )
-    frame = Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height, id="body")
-
-    def draw_page(canvas, _doc):
-        canvas.saveState()
-        canvas.setStrokeColor(HEADER_RED)
-        canvas.setLineWidth(2.0)
-        canvas.line(
-            20 * mm,
-            page_height - 12 * mm,
-            page_width - 20 * mm,
-            page_height - 12 * mm,
+    if not theme.executive:
+        story = _markdown_flowables(
+            body_text or "No document content.",
+            styles,
+            doc.width,
+            theme=theme,
+            enable_progress=False,
         )
-        _footer(canvas, page_width, font_name, "Red Executive", labels)
-        canvas.restoreState()
-
-    doc.addPageTemplates(
-        [PageTemplate(id="redExecutive", frames=[frame], onPage=draw_page)]
-    )
+        doc.build(story)
+        return path
 
     hero_title = Paragraph(document_title, styles["center_title"])
     hero_subtitle = Paragraph(
@@ -467,30 +490,43 @@ def create_red_executive_pdf(
         styles["center_subtitle"],
     )
 
+    hero_heading, hero_detail = _hero_labels(theme, text, labels)
+
+    if theme.family == "red":
+        hero_bg = _hex(theme.accent_dark)
+        hero_fg = _hex(theme.hero_foreground)
+        hero_sub_fg = _hex(theme.hero_subtle)
+        hero_box_color = _hex(theme.accent_dark)
+    else:
+        hero_bg = _hex(theme.surface)
+        hero_fg = _hex(theme.accent_dark)
+        hero_sub_fg = _hex(theme.muted)
+        hero_box_color = _hex(theme.border)
+
     hero_main_style = ParagraphStyle(
-        "HeroMain",
+        f"HeroMain_{theme.key}",
         parent=styles["center_subtitle"],
         fontName=font_name,
         fontSize=17,
         leading=22,
         alignment=TA_CENTER,
-        textColor=colors.white,
+        textColor=hero_fg,
         spaceAfter=0,
     )
     hero_sub_style = ParagraphStyle(
-        "HeroSub",
+        f"HeroSub_{theme.key}",
         parent=styles["center_subtitle"],
         fontName=font_name,
         fontSize=11.5,
         leading=15,
         alignment=TA_CENTER,
-        textColor=colors.HexColor("#FFE9EC"),
+        textColor=hero_sub_fg,
         spaceAfter=0,
     )
     hero = Table(
         [
-            [Paragraph("<b>" + html.escape(labels["hero_title"]) + "</b>", hero_main_style)],
-            [Paragraph(html.escape(labels["hero_subtitle"]), hero_sub_style)],
+            [Paragraph("<b>" + html.escape(hero_heading) + "</b>", hero_main_style)],
+            [Paragraph(html.escape(hero_detail), hero_sub_style)],
         ],
         colWidths=[doc.width],
         rowHeights=[14 * mm, 11 * mm],
@@ -498,9 +534,9 @@ def create_red_executive_pdf(
     hero.setStyle(
         TableStyle(
             [
-                ("BACKGROUND", (0, 0), (-1, -1), DARK_RED),
+                ("BACKGROUND", (0, 0), (-1, -1), hero_bg),
                 ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("BOX", (0, 0), (-1, -1), 0, DARK_RED),
+                ("BOX", (0, 0), (-1, -1), 0.7, hero_box_color),
                 ("TOPPADDING", (0, 0), (-1, -1), 0),
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
             ]
@@ -508,18 +544,18 @@ def create_red_executive_pdf(
     )
 
     info_style = ParagraphStyle(
-        "InfoCard",
+        f"InfoCard_{theme.key}",
         parent=styles["small"],
         fontName=font_name,
         fontSize=10.5,
         leading=14,
         alignment=TA_CENTER,
-        textColor=TEXT_DARK,
+        textColor=_hex(theme.text),
     )
     info = Table(
         [[
             Paragraph(
-                f'<b>{html.escape(labels["preset"])}</b><br/>Red Executive',
+                f'<b>{html.escape(labels["preset"])}</b><br/>{html.escape(theme.label)}',
                 info_style,
             ),
             Paragraph(
@@ -540,8 +576,8 @@ def create_red_executive_pdf(
     info.setStyle(
         TableStyle(
             [
-                ("BACKGROUND", (0, 0), (-1, -1), LIGHT_GREY),
-                ("BOX", (0, 0), (-1, -1), 0.5, MID_GREY),
+                ("BACKGROUND", (0, 0), (-1, -1), _hex(theme.surface)),
+                ("BOX", (0, 0), (-1, -1), 0.5, _hex(theme.border)),
                 ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.white),
                 ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
             ]
@@ -549,12 +585,12 @@ def create_red_executive_pdf(
     )
 
     summary_style = ParagraphStyle(
-        "ExecutiveSummary",
+        f"ExecutiveSummary_{theme.key}",
         parent=styles["body"],
         fontName=font_name,
         fontSize=11.5,
         leading=16,
-        textColor=TEXT_DARK,
+        textColor=_hex(theme.text),
         spaceAfter=0,
     )
     summary_box = Table(
@@ -568,8 +604,9 @@ def create_red_executive_pdf(
     summary_box.setStyle(
         TableStyle(
             [
-                ("BACKGROUND", (0, 0), (-1, -1), LIGHT_RED),
-                ("LINEBEFORE", (0, 0), (0, -1), 4, HEADER_RED),
+                ("BACKGROUND", (0, 0), (-1, -1), _hex(theme.accent_light)),
+                ("LINEBEFORE", (0, 0), (0, -1), 3.5, _hex(theme.accent)),
+                ("BOX", (0, 0), (-1, -1), 0.4, _hex(theme.border)),
                 ("LEFTPADDING", (0, 0), (-1, -1), 12),
                 ("RIGHTPADDING", (0, 0), (-1, -1), 12),
                 ("TOPPADDING", (0, 0), (-1, -1), 10),
@@ -592,13 +629,39 @@ def create_red_executive_pdf(
     ]
     story.extend(
         _markdown_flowables(
-            text or "No document content.",
+            body_text or "No document content.",
             styles,
             doc.width,
-            accent=HEADER_RED,
+            theme=theme,
             enable_progress=True,
         )
     )
 
     doc.build(story)
     return path
+
+
+def create_red_professional_pdf(
+    messages: list[dict],
+    title: str = "Local AI Report",
+    output_dir: Path = OUTPUT_DIR,
+) -> Path:
+    return create_pdf(
+        messages,
+        title=title,
+        preset="Red Professional",
+        output_dir=output_dir,
+    )
+
+
+def create_red_executive_pdf(
+    messages: list[dict],
+    title: str = "Local AI Executive Report",
+    output_dir: Path = OUTPUT_DIR,
+) -> Path:
+    return create_pdf(
+        messages,
+        title=title,
+        preset="Red Executive",
+        output_dir=output_dir,
+    )
