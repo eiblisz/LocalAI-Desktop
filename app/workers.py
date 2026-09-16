@@ -41,6 +41,128 @@ class ChatWorker(QObject):
         self._stop_event.set()
 
 
+class ChatWebWorker(QObject):
+    token = Signal(str)
+    finished = Signal()
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        client: OllamaClient,
+        model: str,
+        messages: list[dict],
+        user_prompt: str,
+    ):
+        super().__init__()
+        self.client = client
+        self.model = model
+        self.messages = [dict(message) for message in messages]
+        self.user_prompt = str(user_prompt or "").strip()
+        self._stop_event = threading.Event()
+
+    def _generate_search_query(self):
+        prompt = self.user_prompt[:4000]
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Convert the user's request into one concise web search query. "
+                    "Preserve product names, model names, places, dates, and other "
+                    "important constraints. Prefer English search terms when that "
+                    "improves international web results. Return ONLY the search query, "
+                    "with no explanation and no quotation marks."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ]
+        query = self.client.chat_once(
+            model=self.model,
+            messages=messages,
+        ).strip()
+        query = " ".join(
+            query.splitlines()[0].strip().strip('\"\'').split()
+        )
+        return query[:180] or self.user_prompt[:180]
+
+    @Slot()
+    def run(self):
+        try:
+            if not self.user_prompt:
+                raise RuntimeError("Web chat request is empty.")
+
+            query = self._generate_search_query()
+            payload = search_web(
+                query,
+                max_results=8,
+                fetch_pages=True,
+            )
+            urls = source_urls(payload)
+            if not urls:
+                raise RuntimeError(
+                    "Web search returned no usable public sources."
+                )
+
+            tool_context = web_search_context_text(payload)
+
+            history = [dict(message) for message in self.messages]
+            if history and history[-1].get("role") == "user":
+                history = history[:-1]
+
+            grounded_system = {
+                "role": "system",
+                "content": (
+                    "This response uses read-only web research. For current or "
+                    "external facts, use ONLY the AUTHORIZED WEB TOOL DATA supplied "
+                    "in the final user message. Do not use memory to fill missing "
+                    "current facts. If the sources do not support the requested claim "
+                    "or topic, say so clearly. Never invent prices, specifications, "
+                    "dates, availability, ratings, comparisons, or quotations. "
+                    "Answer the user's actual request, not an adjacent topic."
+                ),
+            }
+            grounded_user = {
+                "role": "user",
+                "content": (
+                    f"USER REQUEST:\n{self.user_prompt}\n\n"
+                    f"AUTHORIZED WEB TOOL DATA:\n{tool_context}"
+                ),
+            }
+
+            stream_messages = (
+                history[:1]
+                + [grounded_system]
+                + history[1:]
+                + [grounded_user]
+            )
+
+            self.client.chat_stream(
+                model=self.model,
+                messages=stream_messages,
+                on_token=self.token.emit,
+                should_stop=self._stop_event.is_set,
+            )
+
+            if self._stop_event.is_set():
+                self.finished.emit()
+                return
+
+            source_lines = "\n".join(
+                f"- {url}" for url in urls[:10]
+            )
+            self.token.emit(
+                "\n\n---\n"
+                f"Search query: {query}\n"
+                "Sources:\n"
+                f"{source_lines}"
+            )
+            self.finished.emit()
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+    def stop(self):
+        self._stop_event.set()
+
+
 class DocumentWorker(QObject):
     finished = Signal(str)
     failed = Signal(str)
