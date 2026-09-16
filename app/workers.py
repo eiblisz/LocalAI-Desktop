@@ -32,3 +32,27 @@ class ChatWorker(QObject):
 
     def stop(self):
         self._stop_event.set()
+
+
+class DocumentWorker(QObject):
+    finished = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, client: OllamaClient, model: str, messages: list[dict]):
+        super().__init__()
+        self.client = client
+        self.model = model
+        self.messages = messages
+
+    @Slot()
+    def run(self):
+        try:
+            content = self.client.chat_once(
+                model=self.model,
+                messages=self.messages,
+            )
+            if not content.strip():
+                raise RuntimeError("The model returned an empty document.")
+            self.finished.emit(content)
+        except Exception as exc:
+            self.failed.emit(str(exc))
