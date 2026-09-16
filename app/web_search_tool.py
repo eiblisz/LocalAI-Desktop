@@ -376,7 +376,7 @@ def _search_ddg_lite(query, limit, timeout):
 
 STOP_TERMS = {
     "the", "and", "for", "with", "from", "this", "that", "latest", "news",
-    "current", "recent", "about", "into", "using", "find", "search",
+    "current", "currently", "recent", "available", "about", "into", "using", "find", "search",
     "keress", "keresd", "meg", "legfrissebb", "fontos", "hirek", "hírek",
     "foglald", "ossze", "össze", "roviden", "röviden", "csak", "konkret",
     "konkrét", "friss", "informaciot", "információt", "irj", "írj",
@@ -399,14 +399,21 @@ def _filter_relevant_results(query, results):
     if not terms:
         return list(results)
 
+    minimum_matches = 1 if len(terms) <= 2 else 2
     relevant = []
+
     for item in results:
         haystack = " ".join([
             str(item.get("title", "")),
             str(item.get("snippet", "")),
             str(item.get("url", "")),
         ]).lower()
-        if any(term in haystack for term in terms):
+
+        matched = {
+            term for term in terms
+            if term in haystack
+        }
+        if len(matched) >= minimum_matches:
             relevant.append(item)
 
     return relevant
