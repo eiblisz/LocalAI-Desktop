@@ -387,6 +387,7 @@ def test_brave_search_api_is_primary_when_key_is_configured(monkeypatch):
     assert seen["url"] == web_search_tool.BRAVE_WEB_SEARCH_URL
     assert seen["headers"]["X-Subscription-Token"] == "secret-test-key"
     assert seen["params"]["country"] == "DE"
+    assert seen["params"]["spellcheck"] is True
 
 
 def test_web_search_skips_brave_when_api_key_is_missing(monkeypatch):
@@ -519,3 +520,43 @@ def test_provider_chain_errors_are_returned_on_fallback(monkeypatch):
     assert payload["provider_chain_errors"] == [
         "Brave Search API: 401 unauthorized"
     ]
+
+
+def test_brave_http_error_is_compact_and_does_not_echo_request_url(monkeypatch):
+    class ErrorResponse:
+        status_code = 422
+        text = ""
+
+        def raise_for_status(self):
+            import requests
+            raise requests.HTTPError(
+                "422 Client Error for url: https://api.search.brave.com/res/v1/web/search?"
+                + "q=" + ("very-long-query-" * 50)
+            )
+
+        def json(self):
+            return {
+                "error": {
+                    "code": "VALIDATION",
+                    "detail": "spellcheck must be a boolean",
+                }
+            }
+
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "secret-test-key")
+    monkeypatch.setattr(
+        web_search_tool.requests,
+        "get",
+        lambda *args, **kwargs: ErrorResponse(),
+    )
+
+    try:
+        web_search_tool._search_brave_api("example", 6, 20.0)
+        assert False, "Expected WebSearchError"
+    except web_search_tool.WebSearchError as exc:
+        message = str(exc)
+
+    assert "HTTP 422" in message
+    assert "VALIDATION" in message
+    assert "spellcheck must be a boolean" in message
+    assert "https://api.search.brave.com" not in message
+    assert len(message) < 400
