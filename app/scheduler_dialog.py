@@ -285,9 +285,20 @@ class SchedulerDialog(QDialog):
         self.tasks_changed.emit()
         return task
 
+    def set_run_status(self, task_id, message, running=False):
+        if task_id and self.current_id and task_id != self.current_id:
+            return
+        self.status_label.setText(message)
+        self.run_button.setEnabled(not running)
+
     def _run_now(self):
         task = self._save_task()
         if task is not None:
+            self.set_run_status(
+                task["id"],
+                "Run requested... waiting for LocalAI.",
+                running=True,
+            )
             self.run_requested.emit(task["id"])
 
     def _delete_task(self):
