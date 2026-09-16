@@ -87,8 +87,11 @@ class ScheduledTaskWorker(QObject):
 
         if task_type == "ebay":
             query = str(self.task.get("ebay_query", "")).strip()
+            prompt_query = str(self.task.get("prompt", "")).strip()
+            if not query or query.lower() in {"ebay", "ebay.de"}:
+                query = prompt_query
             if not query:
-                raise RuntimeError("eBay Search task requires a search query.")
+                raise RuntimeError("eBay Search task requires a query or prompt.")
             payload = search_ebay(
                 query,
                 max_results=int(self.task.get("ebay_max_results", 8) or 8),
