@@ -12,14 +12,15 @@ This project is intentionally independent from QuantAI and EinsteinAI.
 - Local chat with streaming responses
 - Chat history saved locally as JSON
 - File attachment support for text, PDF and DOCX
-- Quick tools panel
-- Working PDF creation tool
-- `Red Professional` PDF preset
-- PDF source: current conversation
+- Active quick tools: PDF, DOCX, Excel, HTML and Summary
+- PDF / DOCX / HTML presets: `Red Professional` and `Red Executive`
+- Styled Excel workbook generation
+- Source modes: current conversation or custom topic
+- Direct artifact actions: OPEN FILE / OPEN FOLDER
 - Stop generation
 - New chat
 
-The DOCX / Excel / Summary buttons are visible in the MVP but are extension points. PDF is fully implemented first.
+All quick-tool buttons are active. Custom-topic generation uses the selected local Ollama model, while current-conversation exports can be created directly where appropriate.
 
 ## Requirements
 
