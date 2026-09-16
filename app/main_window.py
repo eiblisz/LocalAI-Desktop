@@ -840,7 +840,19 @@ class MainWindow(QMainWindow):
         self.status.setText(
             "Web research failed" if self.current_chat_uses_web else "Ollama error"
         )
-        QMessageBox.critical(self, title, message)
+
+        full_message = " ".join(str(message or "").split())
+        summary = full_message
+        if len(summary) > 520:
+            summary = summary[:517].rstrip() + "..."
+
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Critical)
+        dialog.setWindowTitle(title)
+        dialog.setText(summary or "Unknown error")
+        if full_message and full_message != summary:
+            dialog.setDetailedText(full_message)
+        dialog.exec()
 
     def _cleanup_worker(self):
         if self.worker is not None:
