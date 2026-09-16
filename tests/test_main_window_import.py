@@ -50,3 +50,24 @@ def test_schedule_button_and_scheduler_methods_are_wired():
     assert "_open_scheduler" in tools_source
     assert "due_tasks()" in check_source
     assert "ScheduledTaskWorker" in run_source
+
+
+def test_run_now_queues_when_localai_is_busy():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._run_scheduled_task)
+    assert "pending_scheduled_task_id = task_id" in source
+    assert "will start automatically" in source
+    assert "set_run_status" in source
+
+
+def test_pending_schedule_runs_after_worker_cleanup():
+    from app.main_window import MainWindow
+
+    chat_cleanup = inspect.getsource(MainWindow._cleanup_worker)
+    doc_cleanup = inspect.getsource(MainWindow._cleanup_document_worker)
+    pending = inspect.getsource(MainWindow._run_pending_scheduled_task)
+
+    assert "_run_pending_scheduled_task" in chat_cleanup
+    assert "_run_pending_scheduled_task" in doc_cleanup
+    assert "_run_scheduled_task(task_id)" in pending
