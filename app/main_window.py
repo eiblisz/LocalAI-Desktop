@@ -183,6 +183,9 @@ class MainWindow(QMainWindow):
         self.partial_assistant = ""
         self.current_chat_uses_web = False
         self.show_closed = False
+        self.stream_render_timer = QTimer(self)
+        self.stream_render_timer.setSingleShot(True)
+        self.stream_render_timer.timeout.connect(self._render_streaming_chat)
         self.pdf_thread = None
         self.pdf_worker = None
         self.pending_pdf_title = ""
@@ -769,9 +772,12 @@ class MainWindow(QMainWindow):
 
     def _on_token(self, token):
         self.partial_assistant += token
-        self._render_chat(include_partial=True)
+        if not self.stream_render_timer.isActive():
+            self.stream_render_timer.start(90)
 
     def _on_finished(self):
+        if self.stream_render_timer.isActive():
+            self.stream_render_timer.stop()
         if self.partial_assistant.strip():
             self.current_chat["messages"].append(
                 {"role": "assistant", "content": self.partial_assistant}
@@ -784,6 +790,8 @@ class MainWindow(QMainWindow):
         self._load_chat_list()
 
     def _on_failed(self, message):
+        if self.stream_render_timer.isActive():
+            self.stream_render_timer.stop()
         self.stop_button.setEnabled(False)
         title = "Web research error" if self.current_chat_uses_web else "Ollama error"
         self.status.setText(
@@ -814,7 +822,12 @@ class MainWindow(QMainWindow):
             extensions=["fenced_code", "tables", "sane_lists", "nl2br"],
         )
 
-    def _render_chat(self, include_partial=False):
+    def _render_chat(self, include_partial=False, streaming=False):
+        keep_bottom = (
+            True
+            if not streaming
+            else self._chat_is_near_bottom()
+        )
         messages = list(self.current_chat.get("messages", [])) if self.current_chat else []
         if include_partial and self.partial_assistant:
             messages.append({"role": "assistant", "content": self.partial_assistant})
@@ -884,11 +897,23 @@ class MainWindow(QMainWindow):
 
         html_parts.append("</div>")
         self.chat_view.setHtml("".join(html_parts))
-        self._schedule_scroll_to_bottom()
+        if keep_bottom:
+            if streaming:
+                QTimer.singleShot(0, self._scroll_chat_to_bottom)
+            else:
+                self._schedule_scroll_to_bottom()
 
     def _scroll_chat_to_bottom(self):
         scrollbar = self.chat_view.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
+
+    def _chat_is_near_bottom(self, threshold=90):
+        scrollbar = self.chat_view.verticalScrollBar()
+        return (scrollbar.maximum() - scrollbar.value()) <= threshold
+
+    def _render_streaming_chat(self):
+        if self.partial_assistant:
+            self._render_chat(include_partial=True, streaming=True)
 
     def _schedule_scroll_to_bottom(self):
         # QTextBrowser lays out rich HTML after setHtml returns. A delayed
