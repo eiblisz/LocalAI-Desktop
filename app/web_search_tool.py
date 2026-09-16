@@ -23,7 +23,9 @@ def _decode_result_url(url):
         return ""
 
     parsed = urlparse(value)
-    if "duckduckgo.com" in parsed.netloc and parsed.path.startswith("/l/"):
+    if parsed.path.startswith("/l/") and (
+        not parsed.netloc or "duckduckgo.com" in parsed.netloc
+    ):
         target = parse_qs(parsed.query).get("uddg", [""])[0]
         return unquote(target)
     return value
