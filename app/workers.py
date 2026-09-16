@@ -2,6 +2,11 @@ import threading
 
 from PySide6.QtCore import QObject, Signal, Slot
 
+from .computer_status_tool import (
+    computer_status_context_text,
+    get_computer_status,
+)
+from .ebay_tool import ebay_context_text, search_ebay
 from .ollama_client import OllamaClient
 from .weather_tool import get_weather, weather_context_text
 
@@ -69,52 +74,78 @@ class ScheduledTaskWorker(QObject):
         self.client = client
         self.task = dict(task)
 
+    def _build_context(self):
+        task_type = str(self.task.get("task_type", "weather")).strip().lower()
+
+        if task_type == "weather":
+            location = str(self.task.get("location", "")).strip()
+            if not location:
+                raise RuntimeError("Weather task requires a location.")
+            weather = get_weather(location)
+            return weather_context_text(weather)
+
+        if task_type == "ebay":
+            query = str(self.task.get("ebay_query", "")).strip()
+            if not query:
+                raise RuntimeError("eBay Search task requires a search query.")
+            payload = search_ebay(
+                query,
+                max_results=int(self.task.get("ebay_max_results", 8) or 8),
+            )
+            return ebay_context_text(payload)
+
+        if task_type == "computer":
+            return computer_status_context_text(get_computer_status())
+
+        if task_type == "custom":
+            return ""
+
+        raise RuntimeError(f"Unsupported scheduled task type: {task_type}")
+
     @Slot()
     def run(self):
         task_id = self.task.get("id", "")
         try:
             prompt = str(self.task.get("prompt", "")).strip()
             model = str(self.task.get("model", "")).strip()
+            task_type = str(self.task.get("task_type", "weather")).strip().lower()
+
             if not prompt:
                 raise RuntimeError("Scheduled task prompt is empty.")
             if not model:
                 raise RuntimeError("Scheduled task model is not set.")
 
-            permissions = self.task.get("permissions") or {}
-            context_blocks = []
+            tool_context = self._build_context()
 
-            if permissions.get("weather", False):
-                location = str(self.task.get("location", "")).strip()
-                weather = get_weather(location)
-                context_blocks.append(weather_context_text(weather))
-
-            if not context_blocks:
-                raise RuntimeError(
-                    "This scheduled task has no enabled data tool. "
-                    "Enable Weather or add another allowed tool."
+            if tool_context:
+                user_content = (
+                    f"SCHEDULED TASK TYPE: {task_type}\n"
+                    f"SCHEDULED TASK:\n{prompt}\n\n"
+                    f"AUTHORIZED TOOL DATA:\n{tool_context}"
+                )
+                system_content = (
+                    "You are running a scheduled local-assistant task. "
+                    "You do not have arbitrary internet access. Use only the "
+                    "authorized tool data included in the user message for current "
+                    "external facts. Do not invent missing live data. Keep the answer "
+                    "concise unless the task explicitly asks for detail."
+                )
+            else:
+                user_content = (
+                    f"SCHEDULED TASK TYPE: custom\n"
+                    f"SCHEDULED TASK:\n{prompt}"
+                )
+                system_content = (
+                    "You are running a scheduled local-assistant task. "
+                    "No live external data source is attached to this task. "
+                    "Do not claim that you checked current internet data."
                 )
 
-            tool_context = "\n\n".join(context_blocks)
             messages = [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are running a scheduled local-assistant task. "
-                        "You do not have direct internet access. Use only the "
-                        "tool data included below for current external facts. "
-                        "Do not invent missing live data. Keep the answer concise "
-                        "unless the task explicitly asks for detail. Mention the "
-                        "data provider when reporting live weather."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"SCHEDULED TASK:\n{prompt}\n\n"
-                        f"AUTHORIZED TOOL DATA:\n{tool_context}"
-                    ),
-                },
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": user_content},
             ]
+
             content = self.client.chat_once(
                 model=model,
                 messages=messages,
