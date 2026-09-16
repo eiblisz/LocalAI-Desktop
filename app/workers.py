@@ -60,29 +60,40 @@ class ChatWebWorker(QObject):
         self.user_prompt = str(user_prompt or "").strip()
         self._stop_event = threading.Event()
 
-    def _generate_search_query(self):
-        prompt = self.user_prompt[:4000]
+    def _generate_search_queries(self):
+        prompt = self.user_prompt[:5000]
         messages = [
             {
                 "role": "system",
                 "content": (
-                    "Convert the user's request into one concise web search query. "
-                    "Preserve product names, model names, places, dates, and other "
-                    "important constraints. Prefer English search terms when that "
-                    "improves international web results. Return ONLY the search query, "
-                    "with no explanation and no quotation marks."
+                    "Convert the user's request into between one and four concise web "
+                    "search queries. If the user asks several distinct research questions, "
+                    "return one search query for each question. Preserve product names, "
+                    "model names, memory sizes, places, dates, price constraints, and "
+                    "other important details. Prefer English search terms when that "
+                    "improves international results. Return ONLY the queries, one per "
+                    "line, with no numbering, bullets, quotes, or explanation."
                 ),
             },
             {"role": "user", "content": prompt},
         ]
-        query = self.client.chat_once(
+        raw = self.client.chat_once(
             model=self.model,
             messages=messages,
         ).strip()
-        query = " ".join(
-            query.splitlines()[0].strip().strip('\"\'').split()
-        )
-        return query[:180] or self.user_prompt[:180]
+
+        queries = []
+        for line in raw.splitlines():
+            clean = " ".join(line.strip().strip('\"\'').split())
+            clean = clean.lstrip("-*0123456789.) ").strip()
+            if clean and clean not in queries:
+                queries.append(clean[:180])
+            if len(queries) >= 4:
+                break
+
+        if not queries:
+            queries = [self.user_prompt[:180]]
+        return queries
 
     @Slot()
     def run(self):
@@ -90,19 +101,49 @@ class ChatWebWorker(QObject):
             if not self.user_prompt:
                 raise RuntimeError("Web chat request is empty.")
 
-            query = self._generate_search_query()
-            payload = search_web(
-                query,
-                max_results=8,
-                fetch_pages=True,
-            )
-            urls = source_urls(payload)
-            if not urls:
-                raise RuntimeError(
-                    "Web search returned no usable public sources."
-                )
+            queries = self._generate_search_queries()
+            contexts = []
+            urls = []
+            successful_queries = []
+            failed_queries = []
 
-            tool_context = web_search_context_text(payload)
+            for query in queries:
+                if self._stop_event.is_set():
+                    self.finished.emit()
+                    return
+
+                try:
+                    payload = search_web(
+                        query,
+                        max_results=6,
+                        fetch_pages=True,
+                    )
+                except Exception as exc:
+                    failed_queries.append(f"{query}: {exc}")
+                    continue
+
+                query_urls = source_urls(payload)
+                if not query_urls:
+                    failed_queries.append(
+                        f"{query}: no usable public sources"
+                    )
+                    continue
+
+                successful_queries.append(query)
+                contexts.append(
+                    f"SEARCH QUERY: {query}\n"
+                    f"{web_search_context_text(payload)}"
+                )
+                for url in query_urls:
+                    if url not in urls:
+                        urls.append(url)
+
+            if not contexts or not urls:
+                detail = " | ".join(failed_queries[:4])
+                raise RuntimeError(
+                    "Web research returned no usable public sources."
+                    + (f" {detail}" if detail else "")
+                )
 
             history = [dict(message) for message in self.messages]
             if history and history[-1].get("role") == "user":
@@ -111,20 +152,31 @@ class ChatWebWorker(QObject):
             grounded_system = {
                 "role": "system",
                 "content": (
-                    "This response uses read-only web research. For current or "
-                    "external facts, use ONLY the AUTHORIZED WEB TOOL DATA supplied "
-                    "in the final user message. Do not use memory to fill missing "
-                    "current facts. If the sources do not support the requested claim "
-                    "or topic, say so clearly. Never invent prices, specifications, "
-                    "dates, availability, ratings, comparisons, or quotations. "
-                    "Answer the user's actual request, not an adjacent topic."
+                    "This response uses read-only web research. For current or external "
+                    "facts, use ONLY the AUTHORIZED WEB TOOL DATA in the final user "
+                    "message. Do not use memory to fill missing current facts. Answer "
+                    "every distinct part of the user's request separately when possible. "
+                    "If one part has no supporting source, say that explicitly for that "
+                    "part instead of inventing an answer. Never invent prices, "
+                    "specifications, dates, availability, ratings, comparisons, or "
+                    "quotations. Do not answer an adjacent topic."
                 ),
             }
+
+            context_text = "\n\n===== NEXT SEARCH =====\n\n".join(contexts)
+            failure_text = ""
+            if failed_queries:
+                failure_text = (
+                    "\n\nSEARCHES WITHOUT USABLE SOURCES:\n- "
+                    + "\n- ".join(failed_queries[:4])
+                )
+
             grounded_user = {
                 "role": "user",
                 "content": (
                     f"USER REQUEST:\n{self.user_prompt}\n\n"
-                    f"AUTHORIZED WEB TOOL DATA:\n{tool_context}"
+                    f"AUTHORIZED WEB TOOL DATA:\n{context_text}"
+                    f"{failure_text}"
                 ),
             }
 
@@ -147,11 +199,21 @@ class ChatWebWorker(QObject):
                 return
 
             source_lines = "\n".join(
-                f"- {url}" for url in urls[:10]
+                f"- {url}" for url in urls[:12]
             )
+            if len(successful_queries) == 1:
+                query_footer = f"Search query: {successful_queries[0]}"
+            else:
+                query_footer = (
+                    "Search queries:\n"
+                    + "\n".join(
+                        f"- {query}" for query in successful_queries
+                    )
+                )
+
             self.token.emit(
                 "\n\n---\n"
-                f"Search query: {query}\n"
+                f"{query_footer}\n"
                 "Sources:\n"
                 f"{source_lines}"
             )
@@ -161,6 +223,7 @@ class ChatWebWorker(QObject):
 
     def stop(self):
         self._stop_event.set()
+
 
 
 class DocumentWorker(QObject):
