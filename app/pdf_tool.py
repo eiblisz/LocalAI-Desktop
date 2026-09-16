@@ -1,3 +1,5 @@
+import html
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -32,13 +34,24 @@ def _register_font() -> str:
     return "Helvetica"
 
 
-def _escape(text: str) -> str:
-    return (
-        text.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace("\n", "<br/>")
-    )
+def markdown_to_reportlab(text: str) -> str:
+    rendered_lines = []
+    for raw_line in text.splitlines():
+        line = html.escape(raw_line)
+
+        heading = re.match(r"^(#{1,6})\s+(.*)$", line)
+        if heading:
+            line = f"<b>{heading.group(2)}</b>"
+
+        line = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", line)
+        line = re.sub(
+            r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)",
+            r"<i>\1</i>",
+            line,
+        )
+        rendered_lines.append(line)
+
+    return "<br/>".join(rendered_lines)
 
 
 def create_red_professional_pdf(
@@ -74,41 +87,72 @@ def create_red_professional_pdf(
         canvas.drawString(18 * mm, page_height - 15 * mm, title[:72])
         canvas.setFillColor(MUTED)
         canvas.setFont(font_name, 8.5)
-        canvas.drawString(18 * mm, 10 * mm, datetime.now().strftime("Generated %Y-%m-%d %H:%M"))
-        canvas.drawRightString(page_width - 18 * mm, 10 * mm, f"Page {canvas.getPageNumber()}")
+        canvas.drawString(
+            18 * mm,
+            10 * mm,
+            datetime.now().strftime("Generated %Y-%m-%d %H:%M"),
+        )
+        canvas.drawRightString(
+            page_width - 18 * mm,
+            10 * mm,
+            f"Page {canvas.getPageNumber()}",
+        )
         canvas.restoreState()
 
     doc.addPageTemplates([PageTemplate(id="red", frames=[frame], onPage=draw_page)])
 
     styles = getSampleStyleSheet()
     role_style = ParagraphStyle(
-        "Role", parent=styles["Heading3"], fontName=font_name, fontSize=9,
-        leading=11, textColor=HEADER_RED, spaceAfter=3 * mm
+        "Role",
+        parent=styles["Heading3"],
+        fontName=font_name,
+        fontSize=9,
+        leading=11,
+        textColor=HEADER_RED,
+        spaceAfter=3 * mm,
     )
     body_style = ParagraphStyle(
-        "Body", parent=styles["BodyText"], fontName=font_name, fontSize=10,
-        leading=14, textColor=TEXT_DARK, alignment=TA_LEFT, spaceAfter=6 * mm
+        "Body",
+        parent=styles["BodyText"],
+        fontName=font_name,
+        fontSize=10,
+        leading=14,
+        textColor=TEXT_DARK,
+        alignment=TA_LEFT,
+        spaceAfter=6 * mm,
     )
     intro_style = ParagraphStyle(
-        "Intro", parent=styles["BodyText"], fontName=font_name, fontSize=9,
-        leading=12, textColor=MUTED, spaceAfter=8 * mm
+        "Intro",
+        parent=styles["BodyText"],
+        fontName=font_name,
+        fontSize=9,
+        leading=12,
+        textColor=MUTED,
+        spaceAfter=8 * mm,
     )
 
     story = [
-        Paragraph(_escape("Conversation export - Red Professional preset"), intro_style),
+        Paragraph("Red Professional", intro_style),
         Spacer(1, 2 * mm),
     ]
 
-    for message in messages:
+    visible_messages = [
+        message
+        for message in messages
+        if message.get("role", "").lower() not in {"system", "artifact"}
+    ]
+
+    for message in visible_messages:
         role = message.get("role", "assistant").upper()
         content = message.get("content", "")
-        if role == "SYSTEM":
-            continue
-        story.append(Paragraph(_escape(role), role_style))
-        story.append(Paragraph(_escape(content), body_style))
 
-    if not any(m.get("role") != "system" for m in messages):
-        story.append(Paragraph("No conversation content.", body_style))
+        if len(visible_messages) > 1:
+            story.append(Paragraph(html.escape(role), role_style))
+
+        story.append(Paragraph(markdown_to_reportlab(content), body_style))
+
+    if not visible_messages:
+        story.append(Paragraph("No document content.", body_style))
 
     doc.build(story)
     return path
