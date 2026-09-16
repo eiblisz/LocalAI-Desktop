@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from pypdf import PdfReader
+
 from app.pdf_tool import (
     create_red_executive_pdf,
     create_red_professional_pdf,
@@ -45,6 +47,26 @@ def test_red_executive_pdf_created(tmp_path: Path):
     assert path.exists()
     assert path.name.startswith("local_ai_executive_")
     assert path.stat().st_size > 1000
+
+
+def test_hungarian_red_executive_pdf_localizes_fixed_labels(tmp_path: Path):
+    path = create_red_executive_pdf(
+        [{
+            "role": "assistant",
+            "content": (
+                "# Magyar helyi AI riport\n"
+                "Ez egy magyar dokumentum a helyi modellekről és adatokról."
+            ),
+        }],
+        output_dir=tmp_path,
+    )
+    text = "\n".join(
+        page.extract_text() or ""
+        for page in PdfReader(str(path)).pages
+    )
+    assert "Vezetői összefoglaló" in text
+    assert "Futtatás" in text
+    assert "Készült" in text
 
 
 def test_markdown_bold_is_rendered_for_reportlab():
