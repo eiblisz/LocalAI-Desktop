@@ -195,6 +195,7 @@ class MainWindow(QMainWindow):
         self.scheduler_dialog = None
         self.scheduled_thread = None
         self.scheduled_worker = None
+        self.pending_scheduled_task_id = ""
 
         self.setStyleSheet(STYLE)
         self._build_ui()
@@ -691,6 +692,7 @@ class MainWindow(QMainWindow):
             self.thread.deleteLater()
         self.worker = None
         self.thread = None
+        QTimer.singleShot(0, self._run_pending_scheduled_task)
 
     def _stop_generation(self):
         if self.worker is not None:
@@ -839,9 +841,18 @@ class MainWindow(QMainWindow):
             or self.worker is not None
             or self.pdf_worker is not None
         ):
-            self.status.setText(
-                "Schedule postponed: LocalAI is busy with another generation"
+            self.pending_scheduled_task_id = task_id
+            message = (
+                "Queued: LocalAI is busy with another generation. "
+                "This task will start automatically when the model is free."
             )
+            self.status.setText("Schedule queued: waiting for LocalAI")
+            if self.scheduler_dialog is not None:
+                self.scheduler_dialog.set_run_status(
+                    task_id,
+                    message,
+                    running=True,
+                )
             return
 
         try:
@@ -849,7 +860,14 @@ class MainWindow(QMainWindow):
         except KeyError:
             return
 
+        self.pending_scheduled_task_id = ""
         self.status.setText(f'Schedule running: {task.get("name", "task")}')
+        if self.scheduler_dialog is not None:
+            self.scheduler_dialog.set_run_status(
+                task_id,
+                f'Running now: {task.get("name", "Scheduled task")}...',
+                running=True,
+            )
 
         self.scheduled_thread = QThread()
         self.scheduled_worker = ScheduledTaskWorker(self.client, task)
@@ -900,13 +918,20 @@ class MainWindow(QMainWindow):
             chat_id=chat["id"],
         )
 
-        if self.current_chat and self.current_chat.get("id") == chat["id"]:
-            self.current_chat = self.store.load(chat["id"])
-            self._render_chat()
-
+        self.show_closed = False
+        self.current_chat = self.store.load(chat["id"])
+        self._render_chat()
         self._load_chat_list()
         if self.scheduler_dialog is not None:
             self.scheduler_dialog._refresh_list()
+            self.scheduler_dialog.set_run_status(
+                task_id,
+                (
+                    f'Completed successfully. Result opened in '
+                    f'[SCHEDULE] {task.get("name", "Scheduled task")}.'
+                ),
+                running=False,
+            )
         self.status.setText(f'Schedule completed: {task.get("name", "task")}')
 
     def _scheduled_task_failed(self, task_id, message):
@@ -922,6 +947,11 @@ class MainWindow(QMainWindow):
 
         if self.scheduler_dialog is not None:
             self.scheduler_dialog._refresh_list()
+            self.scheduler_dialog.set_run_status(
+                task_id,
+                f"Run failed: {message}",
+                running=False,
+            )
         self.status.setText(f"Schedule failed: {name} - {message}")
 
     def _cleanup_scheduled_worker(self):
@@ -931,6 +961,20 @@ class MainWindow(QMainWindow):
             self.scheduled_thread.deleteLater()
         self.scheduled_worker = None
         self.scheduled_thread = None
+        QTimer.singleShot(0, self._run_pending_scheduled_task)
+
+    def _run_pending_scheduled_task(self):
+        task_id = self.pending_scheduled_task_id
+        if not task_id:
+            return
+        if (
+            self.scheduled_worker is not None
+            or self.worker is not None
+            or self.pdf_worker is not None
+        ):
+            return
+        self.pending_scheduled_task_id = ""
+        self._run_scheduled_task(task_id)
 
     def _select_tool(self, name):
         self.active_tool = name
@@ -1231,6 +1275,7 @@ class MainWindow(QMainWindow):
 
         self.create_pdf_button.setEnabled(True)
         self._select_tool(self.active_tool)
+        QTimer.singleShot(0, self._run_pending_scheduled_task)
 
     def _register_artifact(self, path):
         path = Path(path).resolve()
