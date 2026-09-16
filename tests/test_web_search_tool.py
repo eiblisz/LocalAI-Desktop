@@ -63,9 +63,9 @@ def test_web_search_falls_back_to_bing_html(monkeypatch):
         lambda *args, **kwargs: {
             "provider": "Bing HTML",
             "results": [{
-                "title": "HTML result",
+                "title": "Example HTML result",
                 "url": "https://example.com/html",
-                "snippet": "HTML snippet",
+                "snippet": "Example HTML snippet",
                 "published": "",
                 "page_text": "",
             }],
@@ -78,7 +78,7 @@ def test_web_search_falls_back_to_bing_html(monkeypatch):
     )
 
     assert payload["provider"] == "Bing HTML"
-    assert payload["results"][0]["title"] == "HTML result"
+    assert payload["results"][0]["title"] == "Example HTML result"
 
 
 def test_web_search_falls_back_to_yahoo_after_bing_paths(monkeypatch):
@@ -104,9 +104,9 @@ def test_web_search_falls_back_to_yahoo_after_bing_paths(monkeypatch):
         lambda *args, **kwargs: {
             "provider": "Yahoo Search HTML",
             "results": [{
-                "title": "Yahoo result",
+                "title": "Example Yahoo result",
                 "url": "https://example.com/yahoo",
-                "snippet": "Yahoo snippet",
+                "snippet": "Example Yahoo snippet",
                 "published": "",
                 "page_text": "",
             }],
@@ -119,7 +119,7 @@ def test_web_search_falls_back_to_yahoo_after_bing_paths(monkeypatch):
     )
 
     assert payload["provider"] == "Yahoo Search HTML"
-    assert payload["results"][0]["title"] == "Yahoo result"
+    assert payload["results"][0]["title"] == "Example Yahoo result"
 
 
 def test_web_search_rejects_loopback_urls():
