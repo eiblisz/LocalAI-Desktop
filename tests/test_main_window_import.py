@@ -75,22 +75,21 @@ def test_pending_schedule_runs_after_worker_cleanup():
     assert "_run_scheduled_task(task_id)" in pending
 
 
-def test_schedule_button_has_health_indicator_states():
+def test_schedule_button_stays_neutral_and_task_rows_carry_health():
     from app.main_window import MainWindow
 
-    build_source = inspect.getsource(MainWindow._build_sidebar)
-    health_source = inspect.getsource(MainWindow._schedule_health_state)
-    style_source = inspect.getsource(MainWindow._apply_schedule_button_style)
+    sidebar_source = inspect.getsource(MainWindow._build_sidebar)
+    button_source = inspect.getsource(MainWindow._apply_schedule_button_style)
+    task_source = inspect.getsource(MainWindow._refresh_schedule_task_labels)
 
-    assert 'self.schedule_button = QPushButton("SCHEDULE")' in build_source
-    assert '"idle"' in health_source
-    assert '"error"' in health_source
-    assert '"running"' in health_source
-    assert '"active"' in health_source
-    assert "#315A43" in style_source
-    assert "#6A3035" in style_source
-    assert "RUNNING" in style_source
-
+    assert 'self.schedule_button = QPushButton("SCHEDULE")' in sidebar_source
+    assert "background:#202730" in button_source
+    assert "#315A43" not in button_source
+    assert "#6A3035" not in button_source
+    assert "#86C69A" in task_source
+    assert "#E07A82" in task_source
+    assert "RUNNING" in task_source
+    assert "DISABLED" in task_source
 
 def test_schedule_button_refreshes_after_task_results():
     from app.main_window import MainWindow
@@ -104,14 +103,17 @@ def test_schedule_button_refreshes_after_task_results():
     assert "_refresh_schedule_indicator()" in cleanup_source
 
 
-def test_sidebar_shows_per_type_scheduler_health():
+def test_sidebar_lists_only_saved_tasks_not_predeclared_categories():
     from app.main_window import MainWindow
 
     sidebar = inspect.getsource(MainWindow._build_sidebar)
-    refresh = inspect.getsource(MainWindow._refresh_schedule_type_labels)
+    refresh = inspect.getsource(MainWindow._refresh_schedule_task_labels)
 
-    assert '"weather", "Weather"' in sidebar
-    assert '"ebay", "eBay Search"' in sidebar
-    assert '"computer", "Computer"' in sidebar
-    assert '"custom", "Custom"' in sidebar
-    assert 'last_status") == "failed"' in refresh
+    assert "schedule_task_status_layout" in sidebar
+    assert '("weather", "Weather")' not in sidebar
+    assert '("ebay", "eBay Search")' not in sidebar
+    assert '("computer", "Computer")' not in sidebar
+    assert '("custom", "Custom")' not in sidebar
+    assert "for task in tasks" in refresh
+    assert 'task.get("name", "Scheduled task")' in refresh
+
