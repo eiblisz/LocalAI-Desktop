@@ -4,25 +4,33 @@ from app import web_search_tool
 class SearchResponse:
     def __init__(self, text):
         self.text = text
+        self.encoding = "utf-8"
+        self.is_redirect = False
+        self.is_permanent_redirect = False
+        self.headers = {"Content-Type": "application/rss+xml"}
 
     def raise_for_status(self):
         return None
 
+    def close(self):
+        return None
 
-def test_web_search_parses_public_results(monkeypatch):
-    html = """
-    <html><body>
-      <div class="result">
-        <a class="result__a" href="https://example.com/article">Example result</a>
-        <div class="result__snippet">Fresh information about the topic.</div>
-      </div>
-    </body></html>
+
+def test_web_search_uses_bing_rss_primary(monkeypatch):
+    rss = """<?xml version="1.0"?>
+    <rss><channel>
+      <item>
+        <title>Example result</title>
+        <link>https://example.com/article</link>
+        <description>Fresh information about the topic.</description>
+      </item>
+    </channel></rss>
     """
 
     monkeypatch.setattr(
         web_search_tool.requests,
         "get",
-        lambda *args, **kwargs: SearchResponse(html),
+        lambda *args, **kwargs: SearchResponse(rss),
     )
     monkeypatch.setattr(
         web_search_tool,
@@ -37,10 +45,47 @@ def test_web_search_parses_public_results(monkeypatch):
     )
     text = web_search_tool.web_search_context_text(payload)
 
-    assert payload["provider"] == "DuckDuckGo HTML"
+    assert payload["provider"] == "Bing Web RSS"
     assert payload["results"][0]["title"] == "Example result"
     assert payload["results"][0]["url"] == "https://example.com/article"
     assert "Fresh information about the topic." in text
+
+
+def test_web_search_falls_back_to_bing_news_when_web_empty(monkeypatch):
+    empty = "<?xml version='1.0'?><rss><channel></channel></rss>"
+    news = """<?xml version="1.0"?>
+    <rss><channel>
+      <item>
+        <title>Fresh AI news</title>
+        <link>https://example.com/news</link>
+        <description>Current update.</description>
+      </item>
+    </channel></rss>
+    """
+    calls = []
+
+    def fake_get(url, *args, **kwargs):
+        calls.append(url)
+        if "news/search" in url:
+            return SearchResponse(news)
+        return SearchResponse(empty)
+
+    monkeypatch.setattr(web_search_tool.requests, "get", fake_get)
+    monkeypatch.setattr(
+        web_search_tool,
+        "_is_public_http_url",
+        lambda url: True,
+    )
+
+    payload = web_search_tool.search_web(
+        "AI news",
+        max_results=5,
+        fetch_pages=False,
+    )
+
+    assert payload["provider"] == "Bing News RSS"
+    assert payload["results"][0]["title"] == "Fresh AI news"
+    assert any("news/search" in url for url in calls)
 
 
 def test_web_search_rejects_loopback_urls():
