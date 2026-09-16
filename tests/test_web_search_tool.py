@@ -57,3 +57,11 @@ def test_duckduckgo_redirect_url_is_decoded():
         web_search_tool._decode_result_url(url)
         == "https://example.com/news?a=1"
     )
+
+
+def test_relative_duckduckgo_redirect_url_is_decoded():
+    url = "/l/?uddg=https%3A%2F%2Fexample.com%2Ffresh"
+    assert (
+        web_search_tool._decode_result_url(url)
+        == "https://example.com/fresh"
+    )
