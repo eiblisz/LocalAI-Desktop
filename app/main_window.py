@@ -45,8 +45,10 @@ from .html_tool import create_html
 from .ollama_client import OllamaClient
 from .pdf_tool import create_pdf
 from .resource_monitor import format_resource_summary, get_system_metrics
+from .scheduler_dialog import SchedulerDialog
+from .scheduler_store import ScheduledTaskStore
 from .storage import ChatStore
-from .workers import ChatWorker, DocumentWorker
+from .workers import ChatWorker, DocumentWorker, ScheduledTaskWorker
 
 
 STYLE = """
@@ -188,6 +190,10 @@ class MainWindow(QMainWindow):
         self.pending_source_text = ""
         self.active_tool = "PDF"
         self.last_artifact_path = None
+        self.scheduler_store = ScheduledTaskStore()
+        self.scheduler_dialog = None
+        self.scheduled_thread = None
+        self.scheduled_worker = None
 
         self.setStyleSheet(STYLE)
         self._build_ui()
@@ -199,6 +205,11 @@ class MainWindow(QMainWindow):
         self.resource_timer.timeout.connect(self._refresh_resources)
         self.resource_timer.start(1000)
         self._refresh_resources()
+
+        self.scheduler_timer = QTimer(self)
+        self.scheduler_timer.timeout.connect(self._check_scheduled_tasks)
+        self.scheduler_timer.start(30000)
+        QTimer.singleShot(3000, self._check_scheduled_tasks)
 
     def _build_ui(self):
         central = QWidget()
@@ -343,6 +354,11 @@ class MainWindow(QMainWindow):
             )
             self.tool_buttons[text] = button
             layout.addWidget(button)
+
+        schedule_button = QPushButton("SCHEDULE")
+        schedule_button.setObjectName("toolButton")
+        schedule_button.clicked.connect(self._open_scheduler)
+        layout.addWidget(schedule_button)
 
         layout.addSpacing(10)
         self.tool_options_label = QLabel("PDF OPTIONS")
@@ -778,6 +794,133 @@ class MainWindow(QMainWindow):
         except Exception:
             self.resource_label.setText("CPU -- | RAM -- | GPU -- | VRAM --")
 
+    def _scheduler_models(self):
+        return [
+            self.model_combo.itemText(index)
+            for index in range(self.model_combo.count())
+            if self.model_combo.itemText(index)
+            and not self.model_combo.itemText(index).startswith("No Ollama")
+        ]
+
+    def _open_scheduler(self):
+        if self.scheduler_dialog is None:
+            self.scheduler_dialog = SchedulerDialog(
+                self.scheduler_store,
+                models=self._scheduler_models(),
+                parent=self,
+            )
+            self.scheduler_dialog.run_requested.connect(
+                lambda task_id: self._run_scheduled_task(task_id)
+            )
+        else:
+            self.scheduler_dialog.set_models(self._scheduler_models())
+            self.scheduler_dialog._refresh_list()
+
+        self.scheduler_dialog.show()
+        self.scheduler_dialog.raise_()
+        self.scheduler_dialog.activateWindow()
+
+    def _check_scheduled_tasks(self):
+        if self.scheduled_worker is not None:
+            return
+
+        due = self.scheduler_store.due_tasks()
+        if due:
+            self._run_scheduled_task(due[0]["id"])
+
+    def _run_scheduled_task(self, task_id):
+        if self.scheduled_worker is not None:
+            self.status.setText("Schedule: another task is already running")
+            return
+
+        try:
+            task = self.scheduler_store.get(task_id)
+        except KeyError:
+            return
+
+        self.status.setText(f'Schedule running: {task.get("name", "task")}')
+
+        self.scheduled_thread = QThread()
+        self.scheduled_worker = ScheduledTaskWorker(self.client, task)
+        self.scheduled_worker.moveToThread(self.scheduled_thread)
+
+        self.scheduled_thread.started.connect(self.scheduled_worker.run)
+        self.scheduled_worker.finished.connect(self._scheduled_task_finished)
+        self.scheduled_worker.failed.connect(self._scheduled_task_failed)
+        self.scheduled_worker.finished.connect(self.scheduled_thread.quit)
+        self.scheduled_worker.failed.connect(self.scheduled_thread.quit)
+        self.scheduled_thread.finished.connect(self._cleanup_scheduled_worker)
+        self.scheduled_thread.start()
+
+    def _scheduled_task_chat(self, task):
+        chat_id = task.get("chat_id", "")
+        if chat_id:
+            try:
+                return self.store.load(chat_id)
+            except Exception:
+                pass
+
+        chat = self.store.new_chat(task.get("model", ""))
+        chat["title"] = f'[SCHEDULE] {task.get("name", "Scheduled task")}'[:80]
+        chat["model"] = task.get("model", "")
+        self.store.save(chat)
+        return chat
+
+    def _scheduled_task_finished(self, task_id, content):
+        try:
+            task = self.scheduler_store.get(task_id)
+        except KeyError:
+            return
+
+        chat = self._scheduled_task_chat(task)
+        stamp = __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M")
+        chat["messages"].append({
+            "role": "assistant",
+            "content": (
+                f"## Scheduled run - {stamp}\n\n"
+                f"**Task:** {task.get('name', 'Scheduled task')}\n\n"
+                f"{content}"
+            ),
+        })
+        self.store.save(chat)
+        self.scheduler_store.mark_result(
+            task_id,
+            status="success",
+            chat_id=chat["id"],
+        )
+
+        if self.current_chat and self.current_chat.get("id") == chat["id"]:
+            self.current_chat = self.store.load(chat["id"])
+            self._render_chat()
+
+        self._load_chat_list()
+        if self.scheduler_dialog is not None:
+            self.scheduler_dialog._refresh_list()
+        self.status.setText(f'Schedule completed: {task.get("name", "task")}')
+
+    def _scheduled_task_failed(self, task_id, message):
+        try:
+            task = self.scheduler_store.mark_result(
+                task_id,
+                status="failed",
+                error=message,
+            )
+            name = task.get("name", "task")
+        except Exception:
+            name = "task"
+
+        if self.scheduler_dialog is not None:
+            self.scheduler_dialog._refresh_list()
+        self.status.setText(f"Schedule failed: {name} - {message}")
+
+    def _cleanup_scheduled_worker(self):
+        if self.scheduled_worker is not None:
+            self.scheduled_worker.deleteLater()
+        if self.scheduled_thread is not None:
+            self.scheduled_thread.deleteLater()
+        self.scheduled_worker = None
+        self.scheduled_thread = None
+
     def _select_tool(self, name):
         self.active_tool = name
         self.tool_options_label.setText(f"{name} OPTIONS")
@@ -1136,4 +1279,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         if self.worker is not None:
             self.worker.stop()
+        if self.scheduled_thread is not None:
+            self.scheduled_thread.quit()
+            self.scheduled_thread.wait(1500)
         event.accept()
