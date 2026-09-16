@@ -1,6 +1,7 @@
 import base64
 import html
 import ipaddress
+import os
 import socket
 import re
 import xml.etree.ElementTree as ET
@@ -12,6 +13,7 @@ from bs4 import BeautifulSoup
 
 from .browser_web_tool import browser_read_pages, browser_search
 
+BRAVE_WEB_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
 BING_WEB_RSS_URL = "https://www.bing.com/search"
 BING_NEWS_RSS_URL = "https://www.bing.com/news/search"
 YAHOO_SEARCH_URL = "https://search.yahoo.com/search"
@@ -206,6 +208,88 @@ def _parse_bing_rss(xml_text, limit):
             break
 
     return results
+
+
+def _brave_api_key():
+    return os.environ.get("BRAVE_SEARCH_API_KEY", "").strip()
+
+
+def brave_search_configured():
+    return bool(_brave_api_key())
+
+
+def _search_brave_api(query, limit, timeout):
+    api_key = _brave_api_key()
+    if not api_key:
+        raise WebSearchError("Brave Search API key is not configured.")
+
+    params = {
+        "q": query,
+        "count": limit,
+        "country": os.environ.get(
+            "BRAVE_SEARCH_COUNTRY",
+            "DE",
+        ).strip().upper() or "DE",
+        "safesearch": "moderate",
+        "spellcheck": 1,
+    }
+    search_lang = os.environ.get(
+        "BRAVE_SEARCH_LANG",
+        "",
+    ).strip()
+    if search_lang:
+        params["search_lang"] = search_lang
+
+    response = requests.get(
+        BRAVE_WEB_SEARCH_URL,
+        params=params,
+        headers={
+            "Accept": "application/json",
+            "Accept-Encoding": "gzip",
+            "X-Subscription-Token": api_key,
+            "User-Agent": USER_AGENT,
+        },
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    payload = response.json()
+
+    results = []
+    for item in (payload.get("web") or {}).get("results") or []:
+        title = " ".join(
+            str(item.get("title", "")).split()
+        )
+        url = str(item.get("url", "")).strip()
+        description = " ".join(
+            str(item.get("description", "")).split()
+        )
+
+        extra_snippets = [
+            " ".join(str(value).split())
+            for value in item.get("extra_snippets") or []
+            if str(value).strip()
+        ]
+        snippet = " ".join(
+            [value for value in [description, *extra_snippets] if value]
+        )
+
+        if not title or not _is_public_http_url(url):
+            continue
+
+        results.append({
+            "title": title,
+            "url": url,
+            "snippet": snippet,
+            "published": str(item.get("age", "")).strip(),
+            "page_text": "",
+        })
+        if len(results) >= limit:
+            break
+
+    return {
+        "provider": "Brave Search API",
+        "results": results,
+    }
 
 
 def _search_bing_rss(query, limit, timeout, news=False):
@@ -527,14 +611,23 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
         raise WebSearchError("A web search query is required.")
 
     limit = max(1, min(int(max_results or 6), 10))
-    attempts = [
+    attempts = []
+    if brave_search_configured():
+        attempts.append(
+            (
+                "Brave Search API",
+                lambda: _search_brave_api(clean, limit, timeout),
+            )
+        )
+
+    attempts.extend([
         ("Bing Web RSS", lambda: _search_bing_rss(clean, limit, timeout, news=False)),
         ("Bing HTML", lambda: _search_bing_html(clean, limit, timeout)),
         ("Bing News RSS", lambda: _search_bing_rss(clean, limit, timeout, news=True)),
         ("Yahoo Search HTML", lambda: _search_yahoo_html(clean, limit, timeout)),
         ("DuckDuckGo Lite", lambda: _search_ddg_lite(clean, limit, timeout)),
         ("Edge Browser / Bing", lambda: browser_search(clean, limit, timeout)),
-    ]
+    ])
     errors = []
 
     for name, provider_call in attempts:
