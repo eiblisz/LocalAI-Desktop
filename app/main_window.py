@@ -1,15 +1,19 @@
+import html
 from pathlib import Path
 
+import markdown
 from PySide6.QtCore import QThread, Qt
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSplitter,
@@ -41,6 +45,11 @@ QLabel#brand {
     font-size: 19px;
     font-weight: 700;
 }
+QLabel#chatTitle {
+    font-size: 17px;
+    font-weight: 700;
+    color: #F4F6F8;
+}
 QLabel#muted {
     color: #9099A6;
     font-size: 12px;
@@ -49,7 +58,7 @@ QPushButton {
     background: #202730;
     border: 1px solid #323C48;
     border-radius: 10px;
-    padding: 10px 14px;
+    padding: 9px 13px;
     color: #F4F6F8;
 }
 QPushButton:hover {
@@ -64,8 +73,13 @@ QPushButton#primary:hover {
     background: #D24A57;
 }
 QPushButton#toolButton {
-    min-height: 60px;
+    min-height: 44px;
     font-weight: 700;
+}
+QPushButton#subtleButton {
+    background: transparent;
+    border: 1px solid #2D3742;
+    color: #AAB2BD;
 }
 QComboBox {
     background: #171D24;
@@ -86,7 +100,7 @@ QListWidget {
 QListWidget::item {
     background: transparent;
     border-radius: 9px;
-    padding: 10px;
+    padding: 11px;
     margin: 2px 0;
 }
 QListWidget::item:selected {
@@ -95,17 +109,32 @@ QListWidget::item:selected {
 QTextBrowser {
     background: #0F1318;
     border: none;
-    padding: 20px;
+    padding: 18px;
+    font-size: 15px;
 }
 QTextEdit {
     background: #161C23;
     border: 1px solid #35404C;
     border-radius: 12px;
     padding: 10px;
+    font-size: 14px;
 }
 QSplitter::handle {
     background: #252D36;
     width: 1px;
+}
+QMenu {
+    background: #1B222A;
+    color: #EEF1F5;
+    border: 1px solid #35404C;
+    padding: 5px;
+}
+QMenu::item {
+    padding: 7px 22px;
+    border-radius: 5px;
+}
+QMenu::item:selected {
+    background: #2A3440;
 }
 """
 
@@ -123,6 +152,7 @@ class MainWindow(QMainWindow):
         self.thread = None
         self.worker = None
         self.partial_assistant = ""
+        self.show_closed = False
 
         self.setStyleSheet(STYLE)
         self._build_ui()
@@ -165,7 +195,7 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self._build_sidebar())
         splitter.addWidget(self._build_chat_panel())
         splitter.addWidget(self._build_tools_panel())
-        splitter.setSizes([260, 850, 310])
+        splitter.setSizes([300, 840, 280])
         splitter.setStretchFactor(1, 1)
         root.addWidget(splitter, 1)
 
@@ -187,9 +217,18 @@ class MainWindow(QMainWindow):
 
         self.chat_list = QListWidget()
         self.chat_list.itemClicked.connect(self._chat_selected)
+        self.chat_list.itemDoubleClicked.connect(self._rename_chat_item)
+        self.chat_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.chat_list.customContextMenuRequested.connect(self._chat_context_menu)
         layout.addWidget(self.chat_list, 1)
 
-        note = QLabel("Stored locally on this PC")
+        self.closed_button = QPushButton("CLOSED CHATS")
+        self.closed_button.setObjectName("subtleButton")
+        self.closed_button.clicked.connect(self._toggle_closed_chats)
+        layout.addWidget(self.closed_button)
+
+        note = QLabel("Right-click a chat to rename, pin or close it.")
+        note.setWordWrap(True)
         note.setObjectName("muted")
         layout.addWidget(note)
         return frame
@@ -198,6 +237,15 @@ class MainWindow(QMainWindow):
         frame = QFrame()
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(0, 0, 0, 0)
+
+        header = QFrame()
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(18, 10, 18, 4)
+        self.chat_title = QLabel("Local AI")
+        self.chat_title.setObjectName("chatTitle")
+        header_layout.addWidget(self.chat_title)
+        header_layout.addStretch()
+        layout.addWidget(header)
 
         self.chat_view = QTextBrowser()
         self.chat_view.setOpenExternalLinks(False)
@@ -249,7 +297,7 @@ class MainWindow(QMainWindow):
                 )
             layout.addWidget(button)
 
-        layout.addSpacing(12)
+        layout.addSpacing(10)
         options = QLabel("PDF OPTIONS")
         options.setObjectName("muted")
         layout.addWidget(options)
@@ -297,11 +345,35 @@ class MainWindow(QMainWindow):
             self.model_combo.addItem("No Ollama model found")
 
     def _load_chat_list(self):
+        selected_id = self.current_chat.get("id") if self.current_chat else None
+        all_chats = self.store.list_chats(include_closed=True)
+        closed_count = sum(1 for chat in all_chats if chat.get("closed", False))
+
+        self.closed_button.setText(
+            "BACK TO CHATS" if self.show_closed else f"CLOSED CHATS ({closed_count})"
+        )
+
+        chats = [
+            chat
+            for chat in all_chats
+            if bool(chat.get("closed", False)) == self.show_closed
+        ]
+
         self.chat_list.clear()
-        for chat in self.store.list_chats():
-            item = QListWidgetItem(chat.get("title", "New chat"))
+        selected_row = -1
+        for row, chat in enumerate(chats):
+            title = chat.get("title", "New chat")
+            if chat.get("pinned", False):
+                title = f"[PIN] {title}"
+            item = QListWidgetItem(title)
             item.setData(Qt.UserRole, chat["id"])
+            item.setToolTip("Right-click for chat actions")
             self.chat_list.addItem(item)
+            if chat["id"] == selected_id:
+                selected_row = row
+
+        if selected_row >= 0:
+            self.chat_list.setCurrentRow(selected_row)
 
     def _ensure_chat(self):
         chats = self.store.list_chats()
@@ -310,8 +382,10 @@ class MainWindow(QMainWindow):
         else:
             self.current_chat = self.store.new_chat(self.model_combo.currentText())
         self._render_chat()
+        self._load_chat_list()
 
     def _new_chat(self):
+        self.show_closed = False
         self.current_chat = self.store.new_chat(self.model_combo.currentText())
         self.attachment_context = []
         self._load_chat_list()
@@ -325,6 +399,86 @@ class MainWindow(QMainWindow):
             if index >= 0:
                 self.model_combo.setCurrentIndex(index)
         self.attachment_context = []
+        self._render_chat()
+
+    def _toggle_closed_chats(self):
+        self.show_closed = not self.show_closed
+        self._load_chat_list()
+
+    def _chat_context_menu(self, pos):
+        item = self.chat_list.itemAt(pos)
+        if item is None:
+            return
+
+        chat = self.store.load(item.data(Qt.UserRole))
+        menu = QMenu(self)
+
+        rename_action = menu.addAction("Rename")
+        pin_action = menu.addAction("Unpin" if chat.get("pinned", False) else "Pin")
+        close_action = menu.addAction("Reopen" if chat.get("closed", False) else "Close")
+
+        chosen = menu.exec(self.chat_list.mapToGlobal(pos))
+        if chosen == rename_action:
+            self._rename_chat_item(item)
+        elif chosen == pin_action:
+            self._set_chat_pinned(chat["id"], not chat.get("pinned", False))
+        elif chosen == close_action:
+            self._set_chat_closed(chat["id"], not chat.get("closed", False))
+
+    def _rename_chat_item(self, item):
+        chat_id = item.data(Qt.UserRole)
+        chat = self.store.load(chat_id)
+        title, ok = QInputDialog.getText(
+            self,
+            "Rename chat",
+            "Chat name:",
+            text=chat.get("title", ""),
+        )
+        if not ok or not title.strip():
+            return
+
+        updated = self.store.rename(chat_id, title)
+        if self.current_chat and self.current_chat.get("id") == chat_id:
+            self.current_chat = updated
+        self._load_chat_list()
+        self._render_chat()
+
+    def _set_chat_pinned(self, chat_id, pinned):
+        updated = self.store.set_pinned(chat_id, pinned)
+        if self.current_chat and self.current_chat.get("id") == chat_id:
+            self.current_chat = updated
+        self._load_chat_list()
+
+    def _set_chat_closed(self, chat_id, closed):
+        if (
+            closed
+            and self.worker is not None
+            and self.current_chat
+            and self.current_chat.get("id") == chat_id
+        ):
+            QMessageBox.warning(
+                self,
+                "Chat is active",
+                "Stop the current response before closing this chat.",
+            )
+            return
+
+        updated = self.store.set_closed(chat_id, closed)
+        if self.current_chat and self.current_chat.get("id") == chat_id:
+            self.current_chat = updated
+
+        if closed and not self.show_closed and self.current_chat.get("id") == chat_id:
+            open_chats = self.store.list_chats()
+            if open_chats:
+                self.current_chat = open_chats[0]
+            else:
+                self.current_chat = self.store.new_chat(self.model_combo.currentText())
+
+        if not closed:
+            self.show_closed = False
+            self.current_chat = updated
+
+        self._load_chat_list()
         self._render_chat()
 
     def _model_changed(self, model):
@@ -359,6 +513,10 @@ class MainWindow(QMainWindow):
         if not model or model.startswith("No Ollama"):
             QMessageBox.warning(self, "Ollama", "Start Ollama and install a model first.")
             return
+
+        if self.current_chat.get("closed", False):
+            self.current_chat["closed"] = False
+            self.show_closed = False
 
         if self.attachment_context:
             blocks = []
@@ -435,15 +593,35 @@ class MainWindow(QMainWindow):
             self.worker.stop()
             self.stop_button.setEnabled(False)
 
+    @staticmethod
+    def _markdown_to_html(content):
+        safe = html.escape(content)
+        return markdown.markdown(
+            safe,
+            extensions=["fenced_code", "tables", "sane_lists", "nl2br"],
+        )
+
     def _render_chat(self, include_partial=False):
         messages = list(self.current_chat.get("messages", [])) if self.current_chat else []
         if include_partial and self.partial_assistant:
             messages.append({"role": "assistant", "content": self.partial_assistant})
 
-        html_parts = ["<div style='font-family: Segoe UI; max-width: 900px;'>"]
+        if self.current_chat:
+            title = self.current_chat.get("title", "Local AI")
+            if self.current_chat.get("pinned", False):
+                title = f"[PIN] {title}"
+            if self.current_chat.get("closed", False):
+                title = f"{title} [CLOSED]"
+            self.chat_title.setText(title)
+        else:
+            self.chat_title.setText("Local AI")
+
+        html_parts = [
+            "<div style='font-family: Segoe UI; font-size:15px; color:#EDF0F3;'>"
+        ]
         if not messages:
             html_parts.append(
-                "<div style='margin:40px 10px;color:#8F99A6;'>"
+                "<div style='margin:36px 10px;color:#8F99A6;'>"
                 "<h2 style='color:#F1F3F5;'>Local AI</h2>"
                 "<p>Select an Ollama model above and start chatting.</p>"
                 "</div>"
@@ -451,27 +629,25 @@ class MainWindow(QMainWindow):
 
         for message in messages:
             role = message.get("role", "assistant")
-            content = (
-                message.get("content", "")
-                .replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-                .replace("\n", "<br>")
-            )
+            rendered = self._markdown_to_html(message.get("content", ""))
 
             if role == "user":
-                bg = "#25303C"
+                bg = "#242E39"
                 label = "YOU"
+                border = "#334150"
             else:
-                bg = "#1A2027"
+                bg = "#171D23"
                 label = "LOCAL AI"
+                border = "#2C3540"
 
             html_parts.append(
-                f"<div style='background:{bg};border:1px solid #303A45;"
-                "border-radius:12px;padding:16px;margin:12px 4px;'>"
-                f"<div style='font-size:11px;color:#C94A57;font-weight:700;"
-                f"margin-bottom:8px;'>{label}</div>"
-                f"<div style='color:#EDF0F3;line-height:1.45;'>{content}</div>"
+                f"<div style='background:{bg};border:1px solid {border};"
+                "border-radius:12px;padding:17px;margin:12px 6px 18px 6px;'>"
+                f"<div style='font-size:11px;color:#D24A57;font-weight:700;"
+                f"margin-bottom:9px;'>{label}</div>"
+                "<div style='font-size:15px;line-height:1.55;'>"
+                f"{rendered}"
+                "</div>"
                 "</div>"
             )
 
