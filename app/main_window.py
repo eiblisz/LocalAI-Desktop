@@ -1,4 +1,5 @@
 import html
+import webbrowser
 from datetime import datetime
 from pathlib import Path
 
@@ -1571,12 +1572,16 @@ class MainWindow(QMainWindow):
 
     def _open_artifact_link(self, url):
         try:
+            if url.scheme().lower() in {"http", "https"}:
+                webbrowser.open(url.toString(), new=2)
+                return
+
             target = path_from_artifact_url(url.toString())
             open_file(target)
         except Exception as exc:
             QMessageBox.critical(
                 self,
-                "Open file error",
+                "Open link error",
                 str(exc),
             )
 
