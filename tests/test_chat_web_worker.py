@@ -279,3 +279,109 @@ def test_chat_web_worker_appends_markdown_result_links(monkeypatch):
         in combined
     )
     assert "Web results / sources:" in combined
+
+
+def test_search_again_uses_previous_user_request_context(monkeypatch):
+    class FollowupClient(DummyWebClient):
+        def chat_once(self, model, messages, timeout=600.0):
+            self.once_calls.append((model, messages))
+            system = messages[0]["content"]
+            user = messages[1]["content"]
+
+            assert "follow-up asking to search again" in system
+            assert "PREVIOUS USER REQUEST" in user
+            assert "2x32GB DDR4 1000 EUR alatt" in user
+            assert "CURRENT USER REQUEST" in user
+            assert "most keress ra ujra" in user
+            return "2x32GB DDR4 Germany under 1000 EUR"
+
+    monkeypatch.setattr(
+        workers,
+        "search_web",
+        lambda query, max_results=6, fetch_pages=True: {
+            "provider": "test",
+            "query": query,
+            "results": [{
+                "title": "64GB DDR4 kit",
+                "url": "https://example.com/ram",
+                "snippet": "2x32GB DDR4 kit EUR 150",
+            }],
+        },
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: ["https://example.com/ram"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_entries",
+        lambda payload, limit=10: [{
+            "title": "64GB DDR4 kit",
+            "url": "https://example.com/ram",
+        }],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: "WEB SEARCH TOOL DATA",
+    )
+
+    client = FollowupClient()
+    tokens = []
+    failed = []
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [
+            {"role": "system", "content": "Base system"},
+            {"role": "user", "content": "2x32GB DDR4 1000 EUR alatt"},
+            {"role": "assistant", "content": "Previous answer"},
+            {"role": "user", "content": "most keress ra ujra"},
+        ],
+        "most keress ra ujra",
+    )
+    worker.token.connect(tokens.append)
+    worker.failed.connect(failed.append)
+    worker.run()
+
+    assert not failed
+    assert "Search query: 2x32GB DDR4 Germany under 1000 EUR" in "".join(tokens)
+
+
+def test_literal_search_again_query_is_rejected_and_falls_back_to_previous_request():
+    class BadFollowupClient(DummyWebClient):
+        def chat_once(self, model, messages, timeout=600.0):
+            self.once_calls.append((model, messages))
+            return "Keressel Ra Ujra plot summary"
+
+    worker = workers.ChatWebWorker(
+        BadFollowupClient(),
+        "qwen-test",
+        [
+            {"role": "system", "content": "Base system"},
+            {"role": "user", "content": "64GB DDR4 RAM 200 EUR alatt"},
+            {"role": "assistant", "content": "Previous answer"},
+            {"role": "user", "content": "keress ra ujra"},
+        ],
+        "keress ra ujra",
+    )
+
+    assert worker._generate_search_queries() == [
+        "64GB DDR4 RAM 200 EUR alatt"
+    ]
+
+
+def test_hungarian_conversation_forces_hungarian_final_answer():
+    worker = workers.ChatWebWorker(
+        DummyWebClient(),
+        "qwen-test",
+        [
+            {"role": "system", "content": "Base system"},
+            {"role": "user", "content": "Keress nekem 64GB DDR4 memoriat"},
+        ],
+        "most keress ra ujra",
+    )
+
+    instruction = worker._conversation_language_instruction()
+    assert "Hungarian" in instruction
