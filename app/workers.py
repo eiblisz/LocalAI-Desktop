@@ -66,23 +66,115 @@ class ChatWebWorker(QObject):
         self.user_prompt = str(user_prompt or "").strip()
         self._stop_event = threading.Event()
 
+    def _recent_user_requests(self, limit=4):
+        requests = []
+        for message in reversed(self.messages):
+            if message.get("role") != "user":
+                continue
+
+            text = str(message.get("content", "")).strip()
+            if not text or text == self.user_prompt:
+                continue
+
+            requests.append(text[:1200])
+            if len(requests) >= limit:
+                break
+
+        return list(reversed(requests))
+
+    def _is_research_followup(self):
+        normalized = " ".join(self.user_prompt.lower().split())
+        markers = [
+            "keress rá újra",
+            "keress ra ujra",
+            "keress újra",
+            "keress ujra",
+            "nézd meg újra",
+            "nezd meg ujra",
+            "nézd meg megint",
+            "nezd meg megint",
+            "keress rá megint",
+            "keress ra megint",
+            "arra keress",
+            "erre keress",
+            "ugyanazt",
+            "ugyan ezt",
+            "próbáld újra",
+            "probald ujra",
+            "most újra",
+            "most ujra",
+            "search again",
+            "look it up again",
+            "try again",
+            "same search",
+        ]
+        return any(marker in normalized for marker in markers)
+
+    def _conversation_language_instruction(self):
+        sample_parts = [
+            self.user_prompt,
+            *self._recent_user_requests(limit=3),
+        ]
+        sample = " ".join(sample_parts).lower()
+        hungarian_markers = [
+            " keress", " nézd", " nezd", " most ", " újra", " ujra",
+            " alatt", " mennyi", " milyen", " nekem", " legyen",
+            " kapható", " kaphato", " ár", " ar ", " videokárty",
+            " videokarty", " memória", " memoria",
+        ]
+        if any(marker in f" {sample} " for marker in hungarian_markers):
+            return (
+                "The user is speaking Hungarian. The final answer must be in Hungarian."
+            )
+        return (
+            "Answer in the same language the user is using in the conversation."
+        )
+
     def _generate_search_queries(self):
         prompt = self.user_prompt[:5000]
+        recent_requests = self._recent_user_requests()
+        history_text = "\n\n".join(
+            f"PREVIOUS USER REQUEST {index + 1}:\n{text}"
+            for index, text in enumerate(recent_requests)
+        )
+
+        followup_rule = ""
+        if self._is_research_followup():
+            followup_rule = (
+                "IMPORTANT: The current request is a follow-up asking to search again. "
+                "Resolve words such as 'again', 'same', 'arra', 'erre', 'újra', or "
+                "'megint' from the PREVIOUS USER REQUESTS. Never treat the literal "
+                "phrase 'keress rá újra' / 'search again' as a title, person, book, "
+                "movie, or search subject. Re-run the actual previous research topic, "
+                "preserving its product specs, quantities, price limits, location, and "
+                "other constraints. "
+            )
+
         messages = [
             {
                 "role": "system",
                 "content": (
-                    "Convert the user's request into between one and four concise web "
-                    "search queries. If the user asks several distinct research questions, "
-                    "return one search query for each question. Preserve product names, "
-                    "model names, memory sizes, places, dates, price constraints, and "
-                    "other important details. Prefer English search terms when that "
-                    "improves international results. Return ONLY the queries, one per "
-                    "line, with no numbering, bullets, quotes, or explanation."
+                    "Convert the CURRENT USER REQUEST into between one and four concise "
+                    "web search queries. Use PREVIOUS USER REQUESTS only to resolve "
+                    "references and follow-up wording. "
+                    + followup_rule
+                    + "If the user asks several distinct research questions, return one "
+                    "query for each question. Preserve product names, model names, memory "
+                    "sizes, places, dates, price constraints, and other important details. "
+                    "Prefer English search terms when that improves international results. "
+                    "Return ONLY the queries, one per line, with no numbering, bullets, "
+                    "quotes, commentary, guessed media/book categories, or explanation."
                 ),
             },
-            {"role": "user", "content": prompt},
+            {
+                "role": "user",
+                "content": (
+                    f"{history_text}\n\n" if history_text else ""
+                )
+                + f"CURRENT USER REQUEST:\n{prompt}",
+            },
         ]
+
         raw = self.client.chat_once(
             model=self.model,
             messages=messages,
@@ -102,7 +194,10 @@ class ChatWebWorker(QObject):
                 break
 
         if not queries:
-            queries = [self.user_prompt[:180]]
+            if self._is_research_followup() and recent_requests:
+                queries = [recent_requests[-1][:180]]
+            else:
+                queries = [self.user_prompt[:180]]
         return queries
 
     @Slot()
@@ -180,7 +275,8 @@ class ChatWebWorker(QObject):
                     "specific product, offer, article, or result, include its provided "
                     "source URL in the same bullet or sentence using Markdown link syntax. "
                     "Do not say you cannot browse the web; the authorized web data has "
-                    "already been collected for you."
+                    "already been collected for you. "
+                    + self._conversation_language_instruction()
                 ),
             }
 
