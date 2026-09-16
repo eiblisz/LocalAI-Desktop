@@ -131,3 +131,24 @@ def test_zebra_rows_and_autofilter_are_applied(tmp_path: Path):
     assert ws.freeze_panes == "A5"
     assert ws.row_dimensions[4].height == 30
     assert ws.row_dimensions[5].height == 24
+
+
+def test_classic_workbook_uses_classic_palette(tmp_path: Path):
+    payload = (
+        '{"title":"Classic Workbook","sheets":['
+        '{"name":"Data","headers":["Name","Status"],'
+        '"rows":[["A","Ready"],["B","Done"]]}]}'
+    )
+    path = create_structured_excel(
+        payload,
+        output_dir=tmp_path,
+        preset="Classic Workbook",
+    )
+    wb = load_workbook(path)
+    ws = wb["Data"]
+
+    assert path.name.startswith("local_ai_classic_workbook_")
+    assert "Classic Workbook" in ws["A2"].value
+    assert ws["A1"].fill.fgColor.rgb.endswith("2F3A4A")
+    assert ws["A4"].fill.fgColor.rgb.endswith("44546A")
+    assert not ws["A1"].fill.fgColor.rgb.endswith("8E1F2D")
