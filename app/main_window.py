@@ -49,7 +49,7 @@ from .resource_monitor import format_resource_summary, get_system_metrics
 from .scheduler_dialog import SchedulerDialog
 from .scheduler_store import ScheduledTaskStore
 from .storage import ChatStore
-from .workers import ChatWorker, DocumentWorker, ScheduledTaskWorker
+from .workers import ChatWebWorker, ChatWorker, DocumentWorker, ScheduledTaskWorker
 
 
 STYLE = """
@@ -181,6 +181,7 @@ class MainWindow(QMainWindow):
         self.thread = None
         self.worker = None
         self.partial_assistant = ""
+        self.current_chat_uses_web = False
         self.show_closed = False
         self.pdf_thread = None
         self.pdf_worker = None
@@ -338,6 +339,15 @@ class MainWindow(QMainWindow):
         attach = QPushButton("Attach")
         attach.clicked.connect(self._attach_file)
         input_row.addWidget(attach)
+
+        self.web_button = QPushButton("WEB AUTO")
+        self.web_button.setCheckable(True)
+        self.web_button.setToolTip(
+            "WEB AUTO searches only when the message clearly asks for current web information. "
+            "Toggle to WEB ON to force read-only web research."
+        )
+        self.web_button.toggled.connect(self._web_button_toggled)
+        input_row.addWidget(self.web_button)
 
         self.input = QTextEdit()
         self.input.setPlaceholderText("Write a message...")
@@ -623,6 +633,61 @@ class MainWindow(QMainWindow):
         self.attachment_context.append({"name": Path(path).name, "content": text})
         self.input.insertPlainText(f"\n[Attached: {Path(path).name}]\n")
 
+    def _web_button_toggled(self, checked):
+        self.web_button.setText("WEB ON" if checked else "WEB AUTO")
+        if checked:
+            self.web_button.setStyleSheet(
+                "QPushButton {"
+                "background:#315A43;"
+                "border:1px solid #5F9C73;"
+                "border-radius:10px;"
+                "padding:9px 13px;"
+                "color:#F4F6F8;"
+                "font-weight:700;"
+                "}"
+            )
+            self.web_button.setToolTip(
+                "WEB ON: the next chat messages use read-only web research."
+            )
+        else:
+            self.web_button.setStyleSheet("")
+            self.web_button.setToolTip(
+                "WEB AUTO searches only when the message clearly asks for current web information. "
+                "Toggle to WEB ON to force read-only web research."
+            )
+
+    def _looks_like_web_request(self, text):
+        normalized = " ".join(str(text or "").lower().split())
+        markers = [
+            "keress rá",
+            "keress ra",
+            "keresd meg",
+            "keress nekem",
+            "nézd meg online",
+            "nezd meg online",
+            "nézz utána",
+            "nezz utana",
+            "interneten",
+            "az interneten",
+            "weben",
+            "web-en",
+            "online",
+            "legfrissebb",
+            "friss hírek",
+            "friss hirek",
+            "aktuális ár",
+            "aktualis ar",
+            "most mennyi",
+            "look up",
+            "search for",
+            "search the web",
+            "find online",
+            "browse the web",
+            "latest news",
+            "current price",
+        ]
+        return any(marker in normalized for marker in markers)
+
     def _send(self):
         text = self.input.toPlainText().strip()
         if not text or self.worker is not None:
@@ -665,9 +730,30 @@ class MainWindow(QMainWindow):
                 messages_for_model.append(message)
         messages_for_model.append({"role": "user", "content": text_for_model})
 
+        use_web = (
+            self.web_button.isChecked()
+            or self._looks_like_web_request(text)
+        )
+
         self.partial_assistant = ""
+        self.current_chat_uses_web = use_web
         self.thread = QThread()
-        self.worker = ChatWorker(self.client, model, messages_for_model)
+
+        if use_web:
+            self.status.setText("Web research...")
+            self.worker = ChatWebWorker(
+                self.client,
+                model,
+                messages_for_model,
+                text_for_model,
+            )
+        else:
+            self.worker = ChatWorker(
+                self.client,
+                model,
+                messages_for_model,
+            )
+
         self.worker.moveToThread(self.thread)
 
         self.thread.started.connect(self.worker.run)
@@ -693,12 +779,17 @@ class MainWindow(QMainWindow):
             self.store.save(self.current_chat)
         self.partial_assistant = ""
         self.stop_button.setEnabled(False)
+        self.status.setText("Ollama connected")
         self._render_chat()
         self._load_chat_list()
 
     def _on_failed(self, message):
         self.stop_button.setEnabled(False)
-        QMessageBox.critical(self, "Ollama error", message)
+        title = "Web research error" if self.current_chat_uses_web else "Ollama error"
+        self.status.setText(
+            "Web research failed" if self.current_chat_uses_web else "Ollama error"
+        )
+        QMessageBox.critical(self, title, message)
 
     def _cleanup_worker(self):
         if self.worker is not None:
@@ -707,6 +798,7 @@ class MainWindow(QMainWindow):
             self.thread.deleteLater()
         self.worker = None
         self.thread = None
+        self.current_chat_uses_web = False
         QTimer.singleShot(0, self._run_pending_scheduled_task)
 
     def _stop_generation(self):
