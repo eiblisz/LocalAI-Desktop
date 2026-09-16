@@ -1,11 +1,29 @@
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 
 def artifact_url(path) -> str:
     return Path(path).resolve().as_uri()
+
+
+def path_from_artifact_url(url: str) -> Path:
+    parsed = urlparse(url)
+    if parsed.scheme.lower() != "file":
+        raise ValueError("Only local file:// artifact URLs are supported.")
+
+    raw_path = unquote(parsed.path)
+
+    if sys.platform.startswith("win"):
+        if parsed.netloc:
+            return Path(f"//{parsed.netloc}{raw_path}")
+        if re.match(r"^/[A-Za-z]:/", raw_path):
+            raw_path = raw_path[1:]
+
+    return Path(raw_path)
 
 
 def open_file(path) -> None:
