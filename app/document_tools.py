@@ -37,12 +37,15 @@ Do not return Markdown, explanations, or code fences.
 FACTUALITY RULES:
 - Never invent benchmark scores, hardware requirements, release dates, prices,
   percentages, capacities, model specifications, or other factual measurements.
-- Use concrete numerical facts only when the user supplied them in the request
-  or they are present in provided source content.
-- If a requested factual value is unavailable, put "Unknown" or "Not provided"
-  in the relevant cell instead of guessing.
+- Any concrete numeric value must already appear in the user's request or in
+  provided source content. Do not infer or recall numeric facts from memory.
+- If a numeric fact is not explicitly present in the request/source, write
+  "Nincs megadva" for Hungarian output or "Not provided" for English output.
+- Do not silently complete missing years, RAM/VRAM, CPU/GPU requirements,
+  storage, benchmark scores, percentages, prices, latency, speed, context size,
+  parameter counts, capacities, or dates.
 - Hypothetical/demo values are allowed only when the user explicitly asks for
-  examples and they must be clearly labeled as hypothetical.
+  examples and every such cell must be clearly labeled as hypothetical.
 """
 
 SUMMARY_SYSTEM_PROMPT = """You are a concise summarization assistant.
