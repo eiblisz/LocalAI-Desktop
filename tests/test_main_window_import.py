@@ -228,3 +228,25 @@ def test_chat_view_wraps_long_urls_without_horizontal_growth():
     assert "LineWrapMode.WidgetWidth" in source
     assert "WrapAtWordBoundaryOrAnywhere" in source
     assert "setDefaultTextOption" in source
+
+
+def test_chat_view_wraps_long_urls_without_horizontal_growth():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._build_chat_panel)
+
+    assert "setMinimumWidth(0)" in source
+    assert "ScrollBarAlwaysOff" in source
+    assert "WidgetWidth" in source
+    assert "WrapAtWordBoundaryOrAnywhere" in source
+
+
+def test_long_error_dialog_uses_bounded_summary_and_details():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._on_failed)
+
+    assert "len(summary) > 520" in source
+    assert "summary[:517]" in source
+    assert "setDetailedText(full_message)" in source
+    assert "QMessageBox.critical(self, title, message)" not in source
