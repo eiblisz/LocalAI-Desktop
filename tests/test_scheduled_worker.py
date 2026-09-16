@@ -161,24 +161,43 @@ def test_custom_scheduled_worker_can_use_web_search(monkeypatch):
     assert "WEB SEARCH TOOL DATA" in client.calls[0][1][-1]["content"]
 
 
-def test_custom_web_search_falls_back_to_prompt_for_query(monkeypatch):
+def test_custom_web_search_generates_targeted_query_when_blank(monkeypatch):
     seen = {}
+
+    monkeypatch.setattr(
+        workers.ScheduledTaskWorker,
+        "_generate_search_query",
+        lambda self, prompt, model: "local AI models Ollama Qwen news",
+    )
 
     def fake_search(query, max_results=6, fetch_pages=True):
         seen["query"] = query
-        return {"provider": "DuckDuckGo HTML", "query": query, "results": []}
+        return {
+            "provider": "Bing Web RSS",
+            "query": query,
+            "results": [{
+                "title": "Qwen local model update",
+                "url": "https://example.com/qwen",
+                "snippet": "Fresh local AI model news",
+            }],
+        }
 
     monkeypatch.setattr(workers, "search_web", fake_search)
     monkeypatch.setattr(
         workers,
         "web_search_context_text",
-        lambda payload: "WEB SEARCH TOOL DATA",
+        lambda payload: "WEB SEARCH TOOL DATA\nQwen update",
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: ["https://example.com/qwen"],
     )
 
     _client, completed, failed = _run_worker({
         "id": "custom-web-2",
         "task_type": "custom",
-        "prompt": "latest local AI developments",
+        "prompt": "Keresd meg a legfrissebb fontos híreket a lokális AI modellekről.",
         "model": "qwen-test",
         "web_search_enabled": True,
         "web_query": "",
@@ -186,7 +205,9 @@ def test_custom_web_search_falls_back_to_prompt_for_query(monkeypatch):
 
     assert not failed
     assert completed
-    assert seen["query"] == "latest local AI developments"
+    assert seen["query"] == "local AI models Ollama Qwen news"
+    assert "Search query: local AI models Ollama Qwen news" in completed[0][1]
+    assert "https://example.com/qwen" in completed[0][1]
 
 
 def test_ebay_generic_query_uses_task_prompt(monkeypatch):
@@ -219,3 +240,45 @@ def test_ebay_generic_query_uses_task_prompt(monkeypatch):
     assert not failed
     assert completed
     assert seen["query"] == "keress 32gb-os videokartyat mindegy melyik tipus"
+
+
+def test_web_result_system_prompt_requires_source_grounding(monkeypatch):
+    monkeypatch.setattr(
+        workers,
+        "search_web",
+        lambda query, max_results=6, fetch_pages=True: {
+            "provider": "Bing Web RSS",
+            "query": query,
+            "results": [{
+                "title": "Relevant result",
+                "url": "https://example.com/relevant",
+                "snippet": "Relevant source data",
+            }],
+        },
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: "WEB SEARCH TOOL DATA\nRelevant source data",
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: ["https://example.com/relevant"],
+    )
+
+    client, completed, failed = _run_worker({
+        "id": "grounded-1",
+        "task_type": "custom",
+        "prompt": "Summarize current local AI news.",
+        "model": "qwen-test",
+        "web_search_enabled": True,
+        "web_query": "local AI Qwen news",
+    })
+
+    assert not failed
+    system = client.calls[-1][1][0]["content"]
+    assert "use ONLY the AUTHORIZED TOOL DATA" in system
+    assert "no relevant sources were found" in system
+    assert "Never invent scores, ratings, prices" in system
+    assert "https://example.com/relevant" in completed[0][1]
