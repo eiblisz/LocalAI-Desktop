@@ -3,6 +3,7 @@ from pathlib import Path
 from docx import Document
 
 from app.docx_tool import (
+    create_docx,
     create_red_executive_docx,
     create_red_professional_docx,
 )
@@ -26,7 +27,7 @@ def test_red_executive_docx_created(tmp_path: Path):
         output_dir=tmp_path,
     )
     assert path.exists()
-    assert path.name.startswith("local_ai_executive_")
+    assert path.name.startswith("local_ai_red_executive_")
 
 
 def test_hungarian_red_executive_docx_localizes_fixed_labels(tmp_path: Path):
@@ -112,3 +113,37 @@ def test_bullet_markdown_bold_is_rendered(tmp_path: Path):
     bullet = next(p for p in doc.paragraphs if "Adatvédelem" in p.text)
     assert "**" not in bullet.text
     assert any(run.bold and "Adatvédelem" in run.text for run in bullet.runs)
+
+
+def test_classic_executive_docx_has_classic_identity(tmp_path: Path):
+    path = create_docx(
+        [{
+            "role": "assistant",
+            "content": "# Classic DOCX\n## Overview\nPrintable content.",
+        }],
+        preset="Classic Executive",
+        output_dir=tmp_path,
+        model_name="qwen-test",
+    )
+    doc = Document(path)
+    table_text = "\n".join(
+        cell.text
+        for table in doc.tables
+        for row in table.rows
+        for cell in row.cells
+    )
+
+    assert path.name.startswith("local_ai_classic_executive_")
+    assert "CLASSIC EXECUTIVE REPORT" in table_text
+    assert "RED EXECUTIVE REPORT" not in table_text
+    assert "Classic Executive" in table_text
+
+
+def test_classic_professional_docx_created(tmp_path: Path):
+    path = create_docx(
+        [{"role": "assistant", "content": "# Formal Document\nBody text."}],
+        preset="Classic Professional",
+        output_dir=tmp_path,
+    )
+    assert path.exists()
+    assert path.name.startswith("local_ai_classic_professional_")
