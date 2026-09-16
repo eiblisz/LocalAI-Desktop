@@ -760,46 +760,99 @@ class MainWindow(QMainWindow):
         except Exception:
             self.resource_label.setText("CPU -- | RAM -- | GPU -- | VRAM --")
 
-    def _pdf_creator(self):
-        if self.pdf_preset.currentText() == "Red Executive":
-            return create_red_executive_pdf
-        return create_red_professional_pdf
+    def _select_tool(self, name):
+        self.active_tool = name
+        self.tool_options_label.setText(f"{name} OPTIONS")
 
-    def _pdf_selected(self):
-        self.pdf_preset.setFocus()
+        self.pdf_preset.blockSignals(True)
+        self.pdf_preset.clear()
+
+        if name in {"PDF", "DOCX", "HTML"}:
+            self.pdf_preset.addItems(["Red Professional", "Red Executive"])
+            self.preset_label.show()
+            self.pdf_preset.show()
+        elif name == "EXCEL":
+            self.pdf_preset.addItem("Red Executive Workbook")
+            self.preset_label.show()
+            self.pdf_preset.show()
+        else:
+            self.pdf_preset.addItem("Local Summary")
+            self.preset_label.hide()
+            self.pdf_preset.hide()
+
+        self.pdf_preset.blockSignals(False)
+
+        if name == "SUMMARY":
+            self.create_pdf_button.setText("GENERATE SUMMARY")
+            self.tool_info.setText(
+                "Summarize the current conversation or create a concise brief "
+                "from a custom topic."
+            )
+        elif name == "EXCEL":
+            self.create_pdf_button.setText("CREATE EXCEL")
+            self.tool_info.setText(
+                "Current conversation creates a formatted workbook. "
+                "Custom topic lets the local model design structured sheets and rows."
+            )
+        else:
+            self.create_pdf_button.setText(f"CREATE {name}")
+            self.tool_info.setText(
+                "Choose the current conversation or let the selected local model "
+                "write a standalone artifact from your topic."
+            )
+
+        placeholder_map = {
+            "PDF": (
+                "Example: Create a 3-page report about local AI assistants, "
+                "with benefits, limitations and practical examples."
+            ),
+            "DOCX": (
+                "Example: Create a professional Word document with title, "
+                "sections, bullet points and conclusion."
+            ),
+            "HTML": (
+                "Example: Create a standalone HTML report about the selected topic."
+            ),
+            "EXCEL": (
+                "Example: Create an Excel workbook comparing local AI models, "
+                "with columns for model, strengths, weaknesses and status."
+            ),
+            "SUMMARY": (
+                "Example: Summarize the key facts and recommendations about this topic."
+            ),
+        }
+        self.pdf_topic.setPlaceholderText(placeholder_map.get(name, "Topic / instructions"))
+        self._pdf_source_changed(self.pdf_source.currentText())
 
     def _pdf_source_changed(self, source):
         custom = source == "Custom topic"
         self.pdf_topic_label.setVisible(custom)
         self.pdf_topic.setVisible(custom)
 
-    def _create_pdf(self):
-        if not self.current_chat or self.pdf_worker is not None:
-            return
+    def _artifact_creator(self, tool, preset):
+        executive = preset == "Red Executive"
 
-        source = self.pdf_source.currentText()
-
-        if source == "Current conversation":
-            try:
-                path = self._pdf_creator()(
-                    self.current_chat.get("messages", []),
-                    title=self.current_chat.get("title") or "Local AI Report",
-                )
-            except Exception as exc:
-                QMessageBox.critical(self, "PDF error", str(exc))
-                return
-            self._register_artifact(path)
-            return
-
-        topic = self.pdf_topic.toPlainText().strip()
-        if not topic:
-            QMessageBox.warning(
-                self,
-                "PDF topic",
-                "Enter a topic or instructions for the document first.",
+        if tool == "PDF":
+            return (
+                create_red_executive_pdf
+                if executive
+                else create_red_professional_pdf
             )
-            return
+        if tool == "DOCX":
+            return (
+                create_red_executive_docx
+                if executive
+                else create_red_professional_docx
+            )
+        if tool == "HTML":
+            return lambda messages, title: create_red_html(
+                messages,
+                title=title,
+                executive=executive,
+            )
+        return None
 
+    def _selected_model(self):
         model = self.model_combo.currentText().strip()
         if not model or model.startswith("No Ollama"):
             QMessageBox.warning(
@@ -807,9 +860,106 @@ class MainWindow(QMainWindow):
                 "Ollama",
                 "Start Ollama and select a local model first.",
             )
+            return None
+        return model
+
+    def _create_selected_tool(self):
+        if not self.current_chat or self.pdf_worker is not None:
             return
 
-        self.pending_pdf_title = topic_title(topic)
+        tool = self.active_tool
+        preset = self.pdf_preset.currentText()
+        source = self.pdf_source.currentText()
+        title = self.current_chat.get("title") or "Local AI Document"
+        messages = self.current_chat.get("messages", [])
+
+        if source == "Current conversation":
+            if tool == "SUMMARY":
+                source_text = conversation_text(messages)
+                if not source_text.strip():
+                    QMessageBox.warning(
+                        self,
+                        "Summary",
+                        "There is no conversation content to summarize yet.",
+                    )
+                    return
+                model = self._selected_model()
+                if not model:
+                    return
+                self._start_document_worker(
+                    model,
+                    build_summary_messages(source_text),
+                    tool,
+                    title,
+                    preset,
+                )
+                return
+
+            try:
+                if tool == "EXCEL":
+                    path = create_conversation_excel(
+                        messages,
+                        title=title,
+                    )
+                else:
+                    creator = self._artifact_creator(tool, preset)
+                    if creator is None:
+                        raise RuntimeError(f"Unsupported tool: {tool}")
+                    path = creator(messages, title=title)
+            except Exception as exc:
+                QMessageBox.critical(
+                    self,
+                    f"{tool} error",
+                    str(exc),
+                )
+                return
+
+            self._register_artifact(path)
+            return
+
+        topic = self.pdf_topic.toPlainText().strip()
+        if not topic:
+            QMessageBox.warning(
+                self,
+                f"{tool} topic",
+                "Enter a topic or instructions first.",
+            )
+            return
+
+        model = self._selected_model()
+        if not model:
+            return
+
+        if tool == "EXCEL":
+            worker_messages = build_excel_messages(topic)
+        elif tool == "SUMMARY":
+            worker_messages = build_summary_messages(
+                "Create a concise self-contained brief about this topic or request:\n\n"
+                + topic
+            )
+        else:
+            worker_messages = build_document_messages(topic)
+
+        self._start_document_worker(
+            model,
+            worker_messages,
+            tool,
+            topic_title(topic),
+            preset,
+        )
+
+    def _start_document_worker(
+        self,
+        model,
+        messages,
+        tool,
+        title,
+        preset,
+    ):
+        self.pending_pdf_title = title
+        self.pending_tool = tool
+        self.pending_preset = preset
+
         self.create_pdf_button.setEnabled(False)
         self.create_pdf_button.setText("GENERATING...")
 
@@ -817,42 +967,80 @@ class MainWindow(QMainWindow):
         self.pdf_worker = DocumentWorker(
             self.client,
             model,
-            build_document_messages(topic),
+            messages,
         )
         self.pdf_worker.moveToThread(self.pdf_thread)
 
         self.pdf_thread.started.connect(self.pdf_worker.run)
-        self.pdf_worker.finished.connect(self._on_pdf_document_ready)
-        self.pdf_worker.failed.connect(self._on_pdf_generation_failed)
+        self.pdf_worker.finished.connect(self._on_document_ready)
+        self.pdf_worker.failed.connect(self._on_document_generation_failed)
         self.pdf_worker.finished.connect(self.pdf_thread.quit)
         self.pdf_worker.failed.connect(self.pdf_thread.quit)
-        self.pdf_thread.finished.connect(self._cleanup_pdf_worker)
+        self.pdf_thread.finished.connect(self._cleanup_document_worker)
         self.pdf_thread.start()
 
-    def _on_pdf_document_ready(self, content):
-        try:
-            path = self._pdf_creator()(
-                [{"role": "assistant", "content": content}],
-                title=self.pending_pdf_title or "Local AI Document",
+    def _on_document_ready(self, content):
+        tool = self.pending_tool
+        preset = self.pending_preset
+        title = self.pending_pdf_title or "Local AI Document"
+
+        if tool == "SUMMARY":
+            self.current_chat["messages"].append(
+                {
+                    "role": "assistant",
+                    "content": "## Summary\n\n" + content.strip(),
+                }
             )
-        except Exception as exc:
-            QMessageBox.critical(self, "PDF error", str(exc))
+            self.store.save(self.current_chat)
+            self._render_chat()
+            self._load_chat_list()
             return
+
+        try:
+            if tool == "EXCEL":
+                path = create_structured_excel(
+                    content,
+                    title=title,
+                )
+            else:
+                creator = self._artifact_creator(tool, preset)
+                if creator is None:
+                    raise RuntimeError(f"Unsupported tool: {tool}")
+                path = creator(
+                    [{"role": "assistant", "content": content}],
+                    title=title,
+                )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                f"{tool} error",
+                str(exc),
+            )
+            return
+
         self._register_artifact(path)
 
-    def _on_pdf_generation_failed(self, message):
-        QMessageBox.critical(self, "Document generation error", message)
+    def _on_document_generation_failed(self, message):
+        QMessageBox.critical(
+            self,
+            "Document generation error",
+            message,
+        )
 
-    def _cleanup_pdf_worker(self):
+    def _cleanup_document_worker(self):
         if self.pdf_worker is not None:
             self.pdf_worker.deleteLater()
         if self.pdf_thread is not None:
             self.pdf_thread.deleteLater()
+
         self.pdf_worker = None
         self.pdf_thread = None
         self.pending_pdf_title = ""
+        self.pending_tool = ""
+        self.pending_preset = ""
+
         self.create_pdf_button.setEnabled(True)
-        self.create_pdf_button.setText("CREATE PDF")
+        self._select_tool(self.active_tool)
 
     def _register_artifact(self, path):
         path = Path(path).resolve()
@@ -880,7 +1068,11 @@ class MainWindow(QMainWindow):
         try:
             open_file(self.last_artifact_path)
         except Exception as exc:
-            QMessageBox.critical(self, "Open file error", str(exc))
+            QMessageBox.critical(
+                self,
+                "Open file error",
+                str(exc),
+            )
 
     def _open_last_artifact_folder(self):
         if not self.last_artifact_path:
@@ -888,17 +1080,14 @@ class MainWindow(QMainWindow):
         try:
             open_folder(self.last_artifact_path)
         except Exception as exc:
-            QMessageBox.critical(self, "Open folder error", str(exc))
+            QMessageBox.critical(
+                self,
+                "Open folder error",
+                str(exc),
+            )
 
     def _open_artifact_url(self, url: QUrl):
         QDesktopServices.openUrl(url)
-
-    def _tool_placeholder(self, name):
-        QMessageBox.information(
-            self,
-            name,
-            f"{name} is reserved in the MVP. PDF is the first fully implemented document tool.",
-        )
 
     def closeEvent(self, event):
         if self.worker is not None:
