@@ -127,3 +127,63 @@ def test_unknown_scheduled_task_type_fails_closed():
     assert failed
     assert "unsupported scheduled task type" in failed[0][1].lower()
     assert not client.calls
+
+
+def test_custom_scheduled_worker_can_use_web_search(monkeypatch):
+    monkeypatch.setattr(
+        workers,
+        "search_web",
+        lambda query, max_results=6, fetch_pages=True: {
+            "provider": "DuckDuckGo HTML",
+            "query": query,
+            "results": [{"title": "Fresh result"}],
+        },
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: "WEB SEARCH TOOL DATA\nFresh result",
+    )
+
+    client, completed, failed = _run_worker({
+        "id": "custom-web-1",
+        "task_type": "custom",
+        "prompt": "Summarize current AI news.",
+        "model": "qwen-test",
+        "web_search_enabled": True,
+        "web_query": "AI news",
+        "web_max_results": 5,
+        "web_fetch_pages": True,
+    })
+
+    assert not failed
+    assert completed
+    assert "WEB SEARCH TOOL DATA" in client.calls[0][1][-1]["content"]
+
+
+def test_custom_web_search_falls_back_to_prompt_for_query(monkeypatch):
+    seen = {}
+
+    def fake_search(query, max_results=6, fetch_pages=True):
+        seen["query"] = query
+        return {"provider": "DuckDuckGo HTML", "query": query, "results": []}
+
+    monkeypatch.setattr(workers, "search_web", fake_search)
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: "WEB SEARCH TOOL DATA",
+    )
+
+    _client, completed, failed = _run_worker({
+        "id": "custom-web-2",
+        "task_type": "custom",
+        "prompt": "latest local AI developments",
+        "model": "qwen-test",
+        "web_search_enabled": True,
+        "web_query": "",
+    })
+
+    assert not failed
+    assert completed
+    assert seen["query"] == "latest local AI developments"
