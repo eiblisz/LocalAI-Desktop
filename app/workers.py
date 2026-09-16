@@ -130,6 +130,22 @@ class ChatWebWorker(QObject):
             "Answer in the same language the user is using in the conversation."
         )
 
+    def _query_is_literal_followup_command(self, query):
+        normalized = " ".join(str(query or "").lower().split())
+        bad_markers = [
+            "keress ra ujra",
+            "keress rá újra",
+            "keress ujra",
+            "keress újra",
+            "nezd meg ujra",
+            "nézd meg újra",
+            "search again",
+            "look it up again",
+            "try again",
+            "same search",
+        ]
+        return any(marker in normalized for marker in bad_markers)
+
     def _generate_search_queries(self):
         prompt = self.user_prompt[:5000]
         recent_requests = self._recent_user_requests()
@@ -188,7 +204,14 @@ class ChatWebWorker(QObject):
                 "",
                 clean,
             ).strip()
-            if clean and clean not in queries:
+            if (
+                clean
+                and clean not in queries
+                and not (
+                    self._is_research_followup()
+                    and self._query_is_literal_followup_command(clean)
+                )
+            ):
                 queries.append(clean[:180])
             if len(queries) >= 4:
                 break
