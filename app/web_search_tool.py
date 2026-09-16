@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 
 BING_WEB_RSS_URL = "https://www.bing.com/search"
 BING_NEWS_RSS_URL = "https://www.bing.com/news/search"
+YAHOO_SEARCH_URL = "https://search.yahoo.com/search"
 DDG_LITE_URL = "https://lite.duckduckgo.com/lite/"
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -195,6 +196,127 @@ def _search_bing_rss(query, limit, timeout, news=False):
     }
 
 
+def _search_bing_html(query, limit, timeout):
+    response = requests.get(
+        BING_WEB_RSS_URL,
+        params={"q": query, "count": limit},
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml",
+        },
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    soup = BeautifulSoup(response.text, "html.parser")
+
+    results = []
+    for block in soup.select("li.b_algo, div.b_algo"):
+        link = block.select_one("h2 a, h3 a")
+        if link is None:
+            continue
+
+        title = link.get_text(" ", strip=True)
+        url = str(link.get("href", "")).strip()
+        snippet_node = block.select_one(
+            ".b_caption p, .b_snippet, p"
+        )
+        snippet = (
+            snippet_node.get_text(" ", strip=True)
+            if snippet_node is not None
+            else ""
+        )
+
+        if not title or not _is_public_http_url(url):
+            continue
+
+        results.append({
+            "title": title,
+            "url": url,
+            "snippet": snippet,
+            "published": "",
+            "page_text": "",
+        })
+        if len(results) >= limit:
+            break
+
+    return {
+        "provider": "Bing HTML",
+        "results": results,
+    }
+
+
+def _decode_yahoo_result_url(url):
+    value = str(url or "").strip()
+    if not value:
+        return ""
+
+    parsed = urlparse(value)
+    host = (parsed.hostname or "").lower()
+    if "search.yahoo.com" in host or host.endswith(".yahoo.com"):
+        marker = "/RU="
+        if marker in parsed.path:
+            encoded = parsed.path.split(marker, 1)[1].split("/RK=", 1)[0]
+            return unquote(encoded)
+    return value
+
+
+def _search_yahoo_html(query, limit, timeout):
+    response = requests.get(
+        YAHOO_SEARCH_URL,
+        params={"p": query, "n": limit},
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml",
+        },
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    soup = BeautifulSoup(response.text, "html.parser")
+
+    results = []
+    blocks = soup.select(
+        "div.dd.algo, div.algo, li div.compTitle"
+    )
+    if not blocks:
+        blocks = soup.select("div#web ol.searchCenterMiddle > li")
+
+    for block in blocks:
+        link = block.select_one(
+            "h3 a, .compTitle a, a"
+        )
+        if link is None:
+            continue
+
+        title = link.get_text(" ", strip=True)
+        url = _decode_yahoo_result_url(link.get("href", ""))
+        snippet_node = block.select_one(
+            ".compText p, .compText, .fc-falcon, p"
+        )
+        snippet = (
+            snippet_node.get_text(" ", strip=True)
+            if snippet_node is not None
+            else ""
+        )
+
+        if not title or not _is_public_http_url(url):
+            continue
+
+        results.append({
+            "title": title,
+            "url": url,
+            "snippet": snippet,
+            "published": "",
+            "page_text": "",
+        })
+        if len(results) >= limit:
+            break
+
+    return {
+        "provider": "Yahoo Search HTML",
+        "results": results,
+    }
+
+
 def _search_ddg_lite(query, limit, timeout):
     response = requests.post(
         DDG_LITE_URL,
@@ -268,7 +390,9 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
     limit = max(1, min(int(max_results or 6), 10))
     attempts = [
         ("Bing Web RSS", lambda: _search_bing_rss(clean, limit, timeout, news=False)),
+        ("Bing HTML", lambda: _search_bing_html(clean, limit, timeout)),
         ("Bing News RSS", lambda: _search_bing_rss(clean, limit, timeout, news=True)),
+        ("Yahoo Search HTML", lambda: _search_yahoo_html(clean, limit, timeout)),
         ("DuckDuckGo Lite", lambda: _search_ddg_lite(clean, limit, timeout)),
     ]
     errors = []
