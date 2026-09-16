@@ -9,6 +9,7 @@ from .computer_status_tool import (
 from .ebay_tool import ebay_context_text, search_ebay
 from .ollama_client import OllamaClient
 from .weather_tool import get_weather, weather_context_text
+from .web_search_tool import search_web, web_search_context_text
 
 
 class ChatWorker(QObject):
@@ -98,7 +99,19 @@ class ScheduledTaskWorker(QObject):
             return computer_status_context_text(get_computer_status())
 
         if task_type == "custom":
-            return ""
+            if not bool(self.task.get("web_search_enabled", False)):
+                return ""
+
+            query = (
+                str(self.task.get("web_query", "")).strip()
+                or str(self.task.get("prompt", "")).strip()
+            )
+            payload = search_web(
+                query,
+                max_results=int(self.task.get("web_max_results", 6) or 6),
+                fetch_pages=bool(self.task.get("web_fetch_pages", True)),
+            )
+            return web_search_context_text(payload)
 
         raise RuntimeError(f"Unsupported scheduled task type: {task_type}")
 
