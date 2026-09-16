@@ -215,6 +215,38 @@ def browser_search(query, max_results=6, timeout=20.0):
         }
 
 
+def browser_read_html(url, timeout=20.0):
+    if not _is_public_http_url(url):
+        raise BrowserToolError("Only public http/https pages can be opened.")
+
+    with _browser_context(timeout_ms=int(timeout * 1000)) as context:
+        page = context.new_page()
+        response = page.goto(
+            url,
+            wait_until="domcontentloaded",
+            timeout=int(timeout * 1000),
+        )
+
+        if response is not None and response.status >= 400:
+            raise BrowserToolError(
+                f"Page returned HTTP {response.status}."
+            )
+
+        page.wait_for_timeout(900)
+        if not _is_public_http_url(page.url):
+            raise BrowserToolError(
+                "Page redirected to a non-public address."
+            )
+
+        body_text = page.locator("body").inner_text(timeout=5000)
+        if _page_is_blocked(body_text):
+            raise BrowserToolError(
+                "Page requested human verification."
+            )
+
+        return page.content()
+
+
 def browser_read_page(url, timeout=20.0, max_chars=8000):
     if not _is_public_http_url(url):
         raise BrowserToolError("Only public http/https pages can be read.")
