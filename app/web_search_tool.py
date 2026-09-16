@@ -233,7 +233,7 @@ def _search_brave_api(query, limit, timeout):
             "DE",
         ).strip().upper() or "DE",
         "safesearch": "moderate",
-        "spellcheck": 1,
+        "spellcheck": True,
     }
     search_lang = os.environ.get(
         "BRAVE_SEARCH_LANG",
@@ -253,7 +253,29 @@ def _search_brave_api(query, limit, timeout):
         },
         timeout=timeout,
     )
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        status = getattr(response, "status_code", "?")
+        detail = ""
+        code = ""
+        try:
+            error_payload = response.json()
+            error = error_payload.get("error") or {}
+            detail = " ".join(str(error.get("detail", "")).split())
+            code = " ".join(str(error.get("code", "")).split())
+        except Exception:
+            detail = " ".join(str(getattr(response, "text", "") or "").split())
+
+        parts = [f"HTTP {status}"]
+        if code:
+            parts.append(code)
+        if detail:
+            parts.append(detail[:280])
+        raise WebSearchError(
+            "Brave Search API " + ": ".join(parts)
+        ) from exc
+
     payload = response.json()
 
     results = []
