@@ -15,15 +15,30 @@ def _parse_iso(value):
         return None
 
 
-def _next_daily(now, hhmm):
+def _time_parts(hhmm):
     try:
-        hour, minute = [int(part) for part in str(hhmm).split(":", 1)]
+        return [int(part) for part in str(hhmm).split(":", 1)]
     except Exception:
-        hour, minute = 8, 0
+        return [8, 0]
 
+
+def _next_daily(now, hhmm):
+    hour, minute = _time_parts(hhmm)
     candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
     if candidate <= now:
         candidate += timedelta(days=1)
+    return candidate
+
+
+def _next_weekly(now, weekday, hhmm):
+    hour, minute = _time_parts(hhmm)
+    target = max(0, min(int(weekday or 0), 6))
+    days_ahead = (target - now.weekday()) % 7
+    candidate = (
+        now + timedelta(days=days_ahead)
+    ).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if candidate <= now:
+        candidate += timedelta(days=7)
     return candidate
 
 
@@ -33,6 +48,13 @@ def compute_next_run(task, now=None):
 
     if frequency == "daily":
         return _next_daily(now, task.get("daily_time", "08:00"))
+
+    if frequency == "weekly":
+        return _next_weekly(
+            now,
+            task.get("weekly_day", 0),
+            task.get("daily_time", "08:00"),
+        )
 
     interval = max(1, int(task.get("interval_hours", 1) or 1))
     return now + timedelta(hours=interval)
@@ -71,6 +93,7 @@ class ScheduledTaskStore:
         task.setdefault("frequency", "hourly")
         task.setdefault("interval_hours", 1)
         task.setdefault("daily_time", "08:00")
+        task.setdefault("weekly_day", 0)
         task.setdefault("enabled", True)
         permissions = task.setdefault("permissions", {"weather": False})
         if "task_type" not in task:
