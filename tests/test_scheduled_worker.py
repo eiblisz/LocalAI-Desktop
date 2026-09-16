@@ -7,17 +7,25 @@ class DummyClient:
 
     def chat_once(self, model, messages, timeout=600.0):
         self.calls.append((model, messages))
-        return "It may rain later. Data source: Open-Meteo."
+        return "Scheduled result."
 
 
-def test_scheduled_worker_injects_authorized_weather_data(monkeypatch):
+def _run_worker(task):
+    client = DummyClient()
+    completed = []
+    failed = []
+    worker = workers.ScheduledTaskWorker(client, task)
+    worker.finished.connect(lambda task_id, text: completed.append((task_id, text)))
+    worker.failed.connect(lambda task_id, text: failed.append((task_id, text)))
+    worker.run()
+    return client, completed, failed
+
+
+def test_scheduled_worker_injects_weather_data(monkeypatch):
     monkeypatch.setattr(
         workers,
         "get_weather",
-        lambda location: {
-            "provider": "Open-Meteo",
-            "location": {"name": location},
-        },
+        lambda location: {"provider": "Open-Meteo", "location": {"name": location}},
     )
     monkeypatch.setattr(
         workers,
@@ -25,49 +33,97 @@ def test_scheduled_worker_injects_authorized_weather_data(monkeypatch):
         lambda weather: "WEATHER TOOL DATA\nTemperature: 18 C",
     )
 
-    client = DummyClient()
-    task = {
-        "id": "task-1",
-        "name": "Weather",
+    client, completed, failed = _run_worker({
+        "id": "weather-1",
+        "task_type": "weather",
         "prompt": "Tell me if rain is likely.",
         "model": "qwen-test",
         "location": "Bad Nenndorf",
-        "permissions": {"weather": True},
-    }
-
-    completed = []
-    failed = []
-    worker = workers.ScheduledTaskWorker(client, task)
-    worker.finished.connect(lambda task_id, text: completed.append((task_id, text)))
-    worker.failed.connect(lambda task_id, text: failed.append((task_id, text)))
-    worker.run()
+    })
 
     assert not failed
-    assert completed == [
-        ("task-1", "It may rain later. Data source: Open-Meteo.")
-    ]
-    assert client.calls
-    model, messages = client.calls[0]
-    assert model == "qwen-test"
-    assert "AUTHORIZED TOOL DATA" in messages[-1]["content"]
-    assert "WEATHER TOOL DATA" in messages[-1]["content"]
+    assert completed == [("weather-1", "Scheduled result.")]
+    assert "WEATHER TOOL DATA" in client.calls[0][1][-1]["content"]
 
 
-def test_scheduled_worker_fails_closed_without_permission():
-    client = DummyClient()
-    task = {
-        "id": "task-2",
-        "prompt": "Check something live.",
+def test_scheduled_worker_injects_ebay_results(monkeypatch):
+    monkeypatch.setattr(
+        workers,
+        "search_ebay",
+        lambda query, max_results=8: {
+            "provider": "eBay.de public search",
+            "query": query,
+            "results": [{"title": "RAM kit", "price": "100 EUR"}],
+        },
+    )
+    monkeypatch.setattr(
+        workers,
+        "ebay_context_text",
+        lambda payload: "EBAY SEARCH TOOL DATA\nRAM kit | 100 EUR",
+    )
+
+    client, completed, failed = _run_worker({
+        "id": "ebay-1",
+        "task_type": "ebay",
+        "prompt": "Summarize interesting offers.",
         "model": "qwen-test",
-        "permissions": {"weather": False},
-    }
+        "ebay_query": "64GB DDR4",
+        "ebay_max_results": 5,
+    })
 
-    failed = []
-    worker = workers.ScheduledTaskWorker(client, task)
-    worker.failed.connect(lambda task_id, text: failed.append((task_id, text)))
-    worker.run()
+    assert not failed
+    assert completed
+    assert "EBAY SEARCH TOOL DATA" in client.calls[0][1][-1]["content"]
 
+
+def test_scheduled_worker_injects_computer_status(monkeypatch):
+    monkeypatch.setattr(
+        workers,
+        "get_computer_status",
+        lambda: {"cpu_percent": 42},
+    )
+    monkeypatch.setattr(
+        workers,
+        "computer_status_context_text",
+        lambda payload: "COMPUTER STATUS TOOL DATA\nCPU usage: 42%",
+    )
+
+    client, completed, failed = _run_worker({
+        "id": "computer-1",
+        "task_type": "computer",
+        "prompt": "Tell me if the PC needs attention.",
+        "model": "qwen-test",
+    })
+
+    assert not failed
+    assert completed
+    assert "COMPUTER STATUS TOOL DATA" in client.calls[0][1][-1]["content"]
+
+
+def test_custom_scheduled_worker_has_no_live_tool_context():
+    client, completed, failed = _run_worker({
+        "id": "custom-1",
+        "task_type": "custom",
+        "prompt": "Write a short reminder.",
+        "model": "qwen-test",
+    })
+
+    assert not failed
+    assert completed
+    user_message = client.calls[0][1][-1]["content"]
+    assert "AUTHORIZED TOOL DATA" not in user_message
+    assert "SCHEDULED TASK TYPE: custom" in user_message
+
+
+def test_unknown_scheduled_task_type_fails_closed():
+    client, completed, failed = _run_worker({
+        "id": "bad-1",
+        "task_type": "unknown",
+        "prompt": "Do something.",
+        "model": "qwen-test",
+    })
+
+    assert not completed
     assert failed
-    assert failed[0][0] == "task-2"
-    assert "no enabled data tool" in failed[0][1].lower()
+    assert "unsupported scheduled task type" in failed[0][1].lower()
     assert not client.calls
