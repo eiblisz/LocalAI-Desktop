@@ -40,7 +40,7 @@ class SchedulerDialog(QDialog):
         self.current_id = ""
 
         self.setWindowTitle("Scheduled Tasks")
-        self.resize(920, 680)
+        self.resize(960, 720)
         self._build_ui()
         self.set_models(self.models)
         self._refresh_list()
@@ -66,8 +66,8 @@ class SchedulerDialog(QDialog):
 
         right = QVBoxLayout()
         intro = QLabel(
-            "All recurring automations live here. Each task gets only the data source "
-            "selected by its Task type; the local model does not receive arbitrary internet access."
+            "All recurring automations live here. Weather and eBay use their own "
+            "bounded data sources. Custom tasks can optionally use read-only Web Search."
         )
         intro.setWordWrap(True)
         intro.setStyleSheet("color:#9099A6;")
@@ -91,7 +91,7 @@ class SchedulerDialog(QDialog):
         self.prompt_edit.setPlaceholderText(
             "Example: Summarize the result and tell me only if something needs attention."
         )
-        self.prompt_edit.setFixedHeight(115)
+        self.prompt_edit.setFixedHeight(110)
         form.addRow("Prompt", self.prompt_edit)
 
         self.location_label = QLabel("Weather location")
@@ -112,13 +112,45 @@ class SchedulerDialog(QDialog):
         self.ebay_results_spin.setValue(8)
         form.addRow(self.ebay_results_label, self.ebay_results_spin)
 
+        self.web_search_label = QLabel("Web Search")
+        self.web_search_toggle = QPushButton("WEB SEARCH OFF")
+        self.web_search_toggle.setCheckable(True)
+        self.web_search_toggle.toggled.connect(self._web_search_toggled)
+        form.addRow(self.web_search_label, self.web_search_toggle)
+
+        self.web_query_label = QLabel("Search query")
+        self.web_query_edit = QLineEdit()
+        self.web_query_edit.setPlaceholderText(
+            "Optional - leave blank to search using the task prompt"
+        )
+        form.addRow(self.web_query_label, self.web_query_edit)
+
+        self.web_results_label = QLabel("Search results")
+        self.web_results_spin = QSpinBox()
+        self.web_results_spin.setRange(1, 10)
+        self.web_results_spin.setValue(6)
+        form.addRow(self.web_results_label, self.web_results_spin)
+
+        self.web_fetch_label = QLabel("Read pages")
+        self.web_fetch_toggle = QPushButton("READ TOP PAGES ON")
+        self.web_fetch_toggle.setCheckable(True)
+        self.web_fetch_toggle.setChecked(True)
+        self.web_fetch_toggle.toggled.connect(
+            lambda checked: self.web_fetch_toggle.setText(
+                "READ TOP PAGES ON" if checked else "READ TOP PAGES OFF"
+            )
+        )
+        form.addRow(self.web_fetch_label, self.web_fetch_toggle)
+
         self.data_access_label = QLabel("")
         self.data_access_label.setWordWrap(True)
         self.data_access_label.setStyleSheet("color:#9099A6;")
         form.addRow("Data access", self.data_access_label)
 
         self.frequency_combo = QComboBox()
-        self.frequency_combo.addItems(["Hourly", "Daily", "Weekly"])
+        self.frequency_combo.addItems(
+            ["Hourly", "Daily", "Weekly", "Custom interval"]
+        )
         self.frequency_combo.currentTextChanged.connect(self._frequency_changed)
         form.addRow("Frequency", self.frequency_combo)
 
@@ -147,6 +179,17 @@ class SchedulerDialog(QDialog):
         self.daily_time.setDisplayFormat("HH:mm")
         self.daily_time.setTime(QTime(8, 0))
         form.addRow(self.daily_time_label, self.daily_time)
+
+        self.custom_interval_label = QLabel("Custom interval")
+        custom_interval_row = QHBoxLayout()
+        self.custom_interval_spin = QSpinBox()
+        self.custom_interval_spin.setRange(1, 10080)
+        self.custom_interval_spin.setValue(15)
+        self.custom_interval_unit = QComboBox()
+        self.custom_interval_unit.addItems(["Minutes", "Hours", "Days"])
+        custom_interval_row.addWidget(self.custom_interval_spin, 1)
+        custom_interval_row.addWidget(self.custom_interval_unit, 1)
+        form.addRow(self.custom_interval_label, custom_interval_row)
 
         self.enabled_checkbox = QPushButton("ENABLED")
         self.enabled_checkbox.setCheckable(True)
@@ -205,6 +248,21 @@ class SchedulerDialog(QDialog):
             if index >= 0:
                 self.model_combo.setCurrentIndex(index)
 
+    def _schedule_text(self, task):
+        frequency = task.get("frequency", "hourly")
+        if frequency == "daily":
+            return f"daily {task.get('daily_time', '08:00')}"
+        if frequency == "weekly":
+            weekday = [
+                "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"
+            ][max(0, min(int(task.get("weekly_day", 0) or 0), 6))]
+            return f"weekly {weekday} {task.get('daily_time', '08:00')}"
+        if frequency == "custom_interval":
+            value = task.get("custom_interval_value", 15)
+            unit = task.get("custom_interval_unit", "minutes")
+            return f"every {value} {unit}"
+        return f"every {task.get('interval_hours', 1)}h"
+
     def _refresh_list(self):
         selected_id = self.current_id
         self.task_list.clear()
@@ -215,7 +273,7 @@ class SchedulerDialog(QDialog):
             task_type = task.get("task_type", "weather")
             type_label = TASK_TYPES.get(task_type, task_type.upper())
 
-            if last_status == "failed":
+            if last_status == "failed" and enabled:
                 dot = "●"
                 color = QColor("#D46A72")
             elif enabled:
@@ -225,20 +283,10 @@ class SchedulerDialog(QDialog):
                 dot = "○"
                 color = QColor("#7F8995")
 
-            if task.get("frequency") == "daily":
-                schedule = f"daily {task.get('daily_time', '08:00')}"
-            elif task.get("frequency") == "weekly":
-                weekday = [
-                    "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"
-                ][max(0, min(int(task.get("weekly_day", 0) or 0), 6))]
-                schedule = f"weekly {weekday} {task.get('daily_time', '08:00')}"
-            else:
-                schedule = f"every {task.get('interval_hours', 1)}h"
-
             next_run = task.get("next_run_at") or "not scheduled"
             text = (
                 f"{dot} [{type_label}] {task.get('name', 'Scheduled task')} "
-                f"| {schedule} | next {next_run}"
+                f"| {self._schedule_text(task)} | next {next_run}"
             )
             item = QListWidgetItem(text)
             item.setForeground(color)
@@ -247,7 +295,6 @@ class SchedulerDialog(QDialog):
 
             if task["id"] == selected_id:
                 self.task_list.setCurrentItem(item)
-
 
     def _task_selected(self, item):
         task = self.store.get(item.data(Qt.UserRole))
@@ -258,6 +305,16 @@ class SchedulerDialog(QDialog):
         self.ebay_query_edit.setText(task.get("ebay_query", ""))
         self.ebay_results_spin.setValue(
             max(1, min(int(task.get("ebay_max_results", 8) or 8), 20))
+        )
+        self.web_search_toggle.setChecked(
+            bool(task.get("web_search_enabled", False))
+        )
+        self.web_query_edit.setText(task.get("web_query", ""))
+        self.web_results_spin.setValue(
+            max(1, min(int(task.get("web_max_results", 6) or 6), 10))
+        )
+        self.web_fetch_toggle.setChecked(
+            bool(task.get("web_fetch_pages", True))
         )
 
         task_type = task.get("task_type", "weather")
@@ -272,15 +329,27 @@ class SchedulerDialog(QDialog):
 
         frequency = task.get("frequency", "hourly")
         self.frequency_combo.setCurrentText(
-            "Weekly"
+            "Custom interval"
+            if frequency == "custom_interval"
+            else "Weekly"
             if frequency == "weekly"
             else "Daily"
             if frequency == "daily"
             else "Hourly"
         )
-        self.interval_spin.setValue(max(1, int(task.get("interval_hours", 1) or 1)))
+        self.interval_spin.setValue(
+            max(1, int(task.get("interval_hours", 1) or 1))
+        )
         self.weekly_day_combo.setCurrentIndex(
             max(0, min(int(task.get("weekly_day", 0) or 0), 6))
+        )
+        self.custom_interval_spin.setValue(
+            max(1, int(task.get("custom_interval_value", 15) or 15))
+        )
+        unit = str(task.get("custom_interval_unit", "minutes")).title()
+        unit_index = self.custom_interval_unit.findText(unit)
+        self.custom_interval_unit.setCurrentIndex(
+            unit_index if unit_index >= 0 else 0
         )
 
         parsed = QTime.fromString(task.get("daily_time", "08:00"), "HH:mm")
@@ -297,6 +366,7 @@ class SchedulerDialog(QDialog):
         if last_error:
             text += f" | error: {last_error}"
         self.status_label.setText(text)
+        self._frequency_changed(self.frequency_combo.currentText())
         self._task_type_changed(self.task_type_combo.currentText())
 
     def _new_task(self):
@@ -306,10 +376,16 @@ class SchedulerDialog(QDialog):
         self.location_edit.clear()
         self.ebay_query_edit.clear()
         self.ebay_results_spin.setValue(8)
+        self.web_search_toggle.setChecked(False)
+        self.web_query_edit.clear()
+        self.web_results_spin.setValue(6)
+        self.web_fetch_toggle.setChecked(True)
         self.task_type_combo.setCurrentText("Weather")
         self.frequency_combo.setCurrentText("Hourly")
         self.interval_spin.setValue(1)
         self.weekly_day_combo.setCurrentIndex(0)
+        self.custom_interval_spin.setValue(15)
+        self.custom_interval_unit.setCurrentText("Minutes")
         self.daily_time.setTime(QTime(8, 0))
         self.enabled_checkbox.setChecked(True)
         self.enabled_checkbox.setText("ENABLED")
@@ -320,26 +396,43 @@ class SchedulerDialog(QDialog):
     def _frequency_changed(self, value):
         hourly = value == "Hourly"
         weekly = value == "Weekly"
+        custom = value == "Custom interval"
 
         self.every_label.setVisible(hourly)
         self.interval_spin.setVisible(hourly)
         self.weekly_day_label.setVisible(weekly)
         self.weekly_day_combo.setVisible(weekly)
-        self.daily_time_label.setVisible(not hourly)
-        self.daily_time.setVisible(not hourly)
+        self.daily_time_label.setVisible(value in {"Daily", "Weekly"})
+        self.daily_time.setVisible(value in {"Daily", "Weekly"})
+        self.custom_interval_label.setVisible(custom)
+        self.custom_interval_spin.setVisible(custom)
+        self.custom_interval_unit.setVisible(custom)
 
-    def _task_type_changed(self, label):
-        task_type = TYPE_KEYS_BY_LABEL.get(label, "weather")
-        weather = task_type == "weather"
-        ebay = task_type == "ebay"
+    def _web_search_toggled(self, checked):
+        self.web_search_toggle.setText(
+            "WEB SEARCH ON" if checked else "WEB SEARCH OFF"
+        )
+        custom = (
+            TYPE_KEYS_BY_LABEL.get(
+                self.task_type_combo.currentText(),
+                "weather",
+            )
+            == "custom"
+        )
+        details = custom and checked
+        self.web_query_label.setVisible(details)
+        self.web_query_edit.setVisible(details)
+        self.web_results_label.setVisible(details)
+        self.web_results_spin.setVisible(details)
+        self.web_fetch_label.setVisible(details)
+        self.web_fetch_toggle.setVisible(details)
+        self._update_data_access_text()
 
-        self.location_label.setVisible(weather)
-        self.location_edit.setVisible(weather)
-        self.ebay_query_label.setVisible(ebay)
-        self.ebay_query_edit.setVisible(ebay)
-        self.ebay_results_label.setVisible(ebay)
-        self.ebay_results_spin.setVisible(ebay)
-
+    def _update_data_access_text(self):
+        task_type = TYPE_KEYS_BY_LABEL.get(
+            self.task_type_combo.currentText(),
+            "weather",
+        )
         descriptions = {
             "weather": (
                 "Open-Meteo only: current conditions and a 12-hour forecast "
@@ -354,11 +447,34 @@ class SchedulerDialog(QDialog):
                 "and C: disk usage. No internet required."
             ),
             "custom": (
-                "No external live data source. The model runs your recurring prompt "
-                "using its local knowledge only."
+                "Read-only Web Search is enabled. Search results and up to three "
+                "public result pages can be passed to the model."
+                if self.web_search_toggle.isChecked()
+                else
+                "Local-only custom task. No live external data source is attached."
             ),
         }
         self.data_access_label.setText(descriptions[task_type])
+
+    def _task_type_changed(self, label):
+        task_type = TYPE_KEYS_BY_LABEL.get(label, "weather")
+        weather = task_type == "weather"
+        ebay = task_type == "ebay"
+        custom = task_type == "custom"
+
+        self.location_label.setVisible(weather)
+        self.location_edit.setVisible(weather)
+        self.ebay_query_label.setVisible(ebay)
+        self.ebay_query_edit.setVisible(ebay)
+        self.ebay_results_label.setVisible(ebay)
+        self.ebay_results_spin.setVisible(ebay)
+        self.web_search_label.setVisible(custom)
+        self.web_search_toggle.setVisible(custom)
+
+        self._web_search_toggled(
+            self.web_search_toggle.isChecked() if custom else False
+        )
+        self._update_data_access_text()
 
     def _task_payload(self):
         name = " ".join(self.name_edit.text().strip().split())
@@ -366,6 +482,7 @@ class SchedulerDialog(QDialog):
         model = self.model_combo.currentText().strip()
         location = " ".join(self.location_edit.text().strip().split())
         ebay_query = " ".join(self.ebay_query_edit.text().strip().split())
+        web_query = " ".join(self.web_query_edit.text().strip().split())
         task_type = TYPE_KEYS_BY_LABEL.get(
             self.task_type_combo.currentText(),
             "weather",
@@ -393,6 +510,20 @@ class SchedulerDialog(QDialog):
         enabled = self.enabled_checkbox.isChecked()
         self.enabled_checkbox.setText("ENABLED" if enabled else "DISABLED")
 
+        frequency = (
+            "custom_interval"
+            if self.frequency_combo.currentText() == "Custom interval"
+            else "weekly"
+            if self.frequency_combo.currentText() == "Weekly"
+            else "daily"
+            if self.frequency_combo.currentText() == "Daily"
+            else "hourly"
+        )
+        web_enabled = (
+            task_type == "custom"
+            and self.web_search_toggle.isChecked()
+        )
+
         task.update({
             "name": name,
             "task_type": task_type,
@@ -401,21 +532,22 @@ class SchedulerDialog(QDialog):
             "location": location if task_type == "weather" else "",
             "ebay_query": ebay_query if task_type == "ebay" else "",
             "ebay_max_results": self.ebay_results_spin.value(),
-            "frequency": (
-                "weekly"
-                if self.frequency_combo.currentText() == "Weekly"
-                else "daily"
-                if self.frequency_combo.currentText() == "Daily"
-                else "hourly"
-            ),
+            "web_search_enabled": web_enabled,
+            "web_query": web_query if web_enabled else "",
+            "web_max_results": self.web_results_spin.value(),
+            "web_fetch_pages": self.web_fetch_toggle.isChecked(),
+            "frequency": frequency,
             "interval_hours": self.interval_spin.value(),
             "daily_time": self.daily_time.time().toString("HH:mm"),
             "weekly_day": self.weekly_day_combo.currentIndex(),
+            "custom_interval_value": self.custom_interval_spin.value(),
+            "custom_interval_unit": self.custom_interval_unit.currentText().lower(),
             "enabled": enabled,
             "permissions": {
                 "weather": task_type == "weather",
                 "ebay": task_type == "ebay",
                 "computer": task_type == "computer",
+                "web_search": web_enabled,
             },
             "next_run_at": "",
         })
