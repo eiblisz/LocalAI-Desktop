@@ -23,6 +23,26 @@ class OllamaClient:
         payload = response.json()
         return [item["name"] for item in payload.get("models", []) if item.get("name")]
 
+    def chat_once(
+        self,
+        model: str,
+        messages: list[dict],
+        timeout: float = 600.0,
+    ) -> str:
+        payload = {
+            "model": model,
+            "messages": messages,
+            "stream": False,
+        }
+        response = requests.post(
+            f"{self.base_url}/api/chat",
+            json=payload,
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        item = response.json()
+        return item.get("message", {}).get("content", "")
+
     def chat_stream(
         self,
         model: str,
