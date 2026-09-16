@@ -79,3 +79,31 @@ def test_compute_weekly_rolls_one_week_when_time_has_passed():
         "daily_time": "18:30",
     }
     assert compute_next_run(task, now) == datetime(2026, 9, 25, 18, 30, 0)
+
+
+def test_compute_custom_interval_minutes():
+    now = datetime(2026, 9, 16, 14, 0, 0)
+    task = {
+        "frequency": "custom_interval",
+        "custom_interval_value": 15,
+        "custom_interval_unit": "minutes",
+    }
+    assert compute_next_run(task, now) == datetime(2026, 9, 16, 14, 15, 0)
+
+
+def test_compute_custom_interval_hours_and_days():
+    now = datetime(2026, 9, 16, 14, 0, 0)
+
+    hours = {
+        "frequency": "custom_interval",
+        "custom_interval_value": 6,
+        "custom_interval_unit": "hours",
+    }
+    days = {
+        "frequency": "custom_interval",
+        "custom_interval_value": 2,
+        "custom_interval_unit": "days",
+    }
+
+    assert compute_next_run(hours, now) == datetime(2026, 9, 16, 20, 0, 0)
+    assert compute_next_run(days, now) == datetime(2026, 9, 18, 14, 0, 0)
