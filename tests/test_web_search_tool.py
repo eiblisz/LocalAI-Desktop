@@ -265,3 +265,27 @@ def test_source_urls_are_deduplicated():
         "https://example.com/a",
         "https://example.com/b",
     ]
+
+
+def test_relevance_filter_rejects_single_weak_match_for_specific_query():
+    results = [
+        {
+            "title": "My Hero Ultra Rumble discussion",
+            "url": "https://reddit.com/r/MyHeroUltraRumble/example",
+            "snippet": "A game discussion with unrelated content.",
+        },
+        {
+            "title": "32GB GPU graphics card workstation options",
+            "url": "https://example.com/gpu",
+            "snippet": "Professional graphics cards with 32GB memory.",
+        },
+    ]
+
+    filtered = web_search_tool._filter_relevant_results(
+        "32GB GPU graphics card",
+        results,
+    )
+
+    assert [item["url"] for item in filtered] == [
+        "https://example.com/gpu"
+    ]
