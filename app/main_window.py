@@ -184,9 +184,11 @@ class MainWindow(QMainWindow):
         self.partial_assistant = ""
         self.current_chat_uses_web = False
         self.show_closed = False
-        self.stream_render_timer = QTimer(self)
-        self.stream_render_timer.setSingleShot(True)
-        self.stream_render_timer.timeout.connect(self._render_streaming_chat)
+        self.thinking_phase = 0
+        self.thinking_base_text = "Gondolkodik"
+        self.thinking_timer = QTimer(self)
+        self.thinking_timer.setInterval(450)
+        self.thinking_timer.timeout.connect(self._pulse_thinking_indicator)
         self.pdf_thread = None
         self.pdf_worker = None
         self.pending_pdf_title = ""
@@ -336,6 +338,14 @@ class MainWindow(QMainWindow):
         self.chat_view.setOpenExternalLinks(False)
         self.chat_view.anchorClicked.connect(self._open_artifact_link)
         layout.addWidget(self.chat_view, 1)
+
+        self.thinking_label = QLabel("")
+        self.thinking_label.setFixedHeight(26)
+        self.thinking_label.setContentsMargins(18, 0, 18, 0)
+        self.thinking_label.setStyleSheet(
+            "color:#7FAE8C;font-size:12px;font-weight:600;"
+        )
+        layout.addWidget(self.thinking_label)
 
         input_row = QHBoxLayout()
         input_row.setContentsMargins(12, 10, 12, 12)
@@ -791,16 +801,14 @@ class MainWindow(QMainWindow):
         self.thread.finished.connect(self._cleanup_worker)
 
         self.stop_button.setEnabled(True)
+        self._start_thinking_indicator(use_web)
         self.thread.start()
 
     def _on_token(self, token):
         self.partial_assistant += token
-        if not self.stream_render_timer.isActive():
-            self.stream_render_timer.start(90)
 
     def _on_finished(self):
-        if self.stream_render_timer.isActive():
-            self.stream_render_timer.stop()
+        self._stop_thinking_indicator()
         if self.partial_assistant.strip():
             self.current_chat["messages"].append(
                 {"role": "assistant", "content": self.partial_assistant}
@@ -813,8 +821,7 @@ class MainWindow(QMainWindow):
         self._load_chat_list()
 
     def _on_failed(self, message):
-        if self.stream_render_timer.isActive():
-            self.stream_render_timer.stop()
+        self._stop_thinking_indicator()
         self.stop_button.setEnabled(False)
         title = "Web research error" if self.current_chat_uses_web else "Ollama error"
         self.status.setText(
@@ -830,12 +837,42 @@ class MainWindow(QMainWindow):
         self.worker = None
         self.thread = None
         self.current_chat_uses_web = False
+        self._stop_thinking_indicator()
         QTimer.singleShot(0, self._run_pending_scheduled_task)
 
     def _stop_generation(self):
         if self.worker is not None:
             self.worker.stop()
             self.stop_button.setEnabled(False)
+            self._stop_thinking_indicator()
+
+    def _start_thinking_indicator(self, use_web=False):
+        self.thinking_base_text = (
+            "Keres es gondolkodik"
+            if use_web
+            else "Gondolkodik"
+        )
+        self.thinking_phase = 0
+        self.thinking_label.setText(self.thinking_base_text + ".")
+        self.thinking_label.setStyleSheet(
+            "color:#7FAE8C;font-size:12px;font-weight:600;"
+        )
+        self.thinking_timer.start()
+
+    def _pulse_thinking_indicator(self):
+        self.thinking_phase = (self.thinking_phase + 1) % 4
+        dots = "." * max(1, self.thinking_phase)
+        colors = ["#6E9D7C", "#82B493", "#9BC7AA", "#82B493"]
+        self.thinking_label.setText(self.thinking_base_text + dots)
+        self.thinking_label.setStyleSheet(
+            f"color:{colors[self.thinking_phase]};"
+            "font-size:12px;font-weight:600;"
+        )
+
+    def _stop_thinking_indicator(self):
+        self.thinking_timer.stop()
+        self.thinking_phase = 0
+        self.thinking_label.setText("")
 
     @staticmethod
     def _markdown_to_html(content):
