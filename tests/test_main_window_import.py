@@ -159,3 +159,25 @@ def test_web_chat_failure_gets_distinct_status():
     source = inspect.getsource(MainWindow._on_failed)
     assert "Web research error" in source
     assert "Web research failed" in source
+
+
+def test_streaming_chat_is_throttled_instead_of_full_render_per_token():
+    from app.main_window import MainWindow
+
+    token_source = inspect.getsource(MainWindow._on_token)
+    render_source = inspect.getsource(MainWindow._render_chat)
+    stream_source = inspect.getsource(MainWindow._render_streaming_chat)
+
+    assert "stream_render_timer.start(90)" in token_source
+    assert "_render_chat(include_partial=True)" not in token_source
+    assert "streaming=False" in render_source
+    assert "_chat_is_near_bottom()" in render_source
+    assert "include_partial=True, streaming=True" in stream_source
+
+
+def test_streaming_does_not_force_bottom_when_user_scrolled_up():
+    from app.main_window import MainWindow
+
+    render_source = inspect.getsource(MainWindow._render_chat)
+    assert "if keep_bottom:" in render_source
+    assert "if streaming:" in render_source
