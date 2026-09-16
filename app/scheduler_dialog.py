@@ -235,7 +235,11 @@ class SchedulerDialog(QDialog):
             raise ValueError("Prompt is required.")
         if not model:
             raise ValueError("Select an Ollama model.")
-        if self.weather_checkbox.isChecked() and not location:
+        if not self.weather_checkbox.isChecked():
+            raise ValueError(
+                "Enable at least one data tool. Weather is the available tool in this version."
+            )
+        if not location:
             raise ValueError("Weather permission requires a location.")
 
         if self.current_id:
