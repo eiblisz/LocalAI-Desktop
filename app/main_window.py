@@ -5,6 +5,7 @@ from pathlib import Path
 
 import markdown
 from PySide6.QtCore import QThread, QTimer, Qt
+from PySide6.QtGui import QTextOption
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -336,6 +337,18 @@ class MainWindow(QMainWindow):
         self.chat_view = QTextBrowser()
         self.chat_view.setOpenLinks(False)
         self.chat_view.setOpenExternalLinks(False)
+        self.chat_view.setMinimumWidth(0)
+        self.chat_view.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.chat_view.setLineWrapMode(
+            QTextEdit.LineWrapMode.WidgetWidth
+        )
+        text_option = self.chat_view.document().defaultTextOption()
+        text_option.setWrapMode(
+            QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere
+        )
+        self.chat_view.document().setDefaultTextOption(text_option)
         self.chat_view.anchorClicked.connect(self._open_artifact_link)
         layout.addWidget(self.chat_view, 1)
 
