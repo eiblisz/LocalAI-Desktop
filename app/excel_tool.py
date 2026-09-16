@@ -6,18 +6,9 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
+from .artifact_themes import get_theme
 from .config import OUTPUT_DIR
 from .localization import is_hungarian
-
-RED = "B92F3B"
-DARK_RED = "8E1F2D"
-LIGHT_RED = "F9EDEF"
-LIGHT_GREY = "F4F6F8"
-ZEBRA = "FAFBFC"
-WHITE = "FFFFFF"
-TEXT = "1F2630"
-MUTED = "6C737F"
-BORDER = "D9DEE5"
 
 FACTUAL_HEADER_MARKERS = (
     "year", "release", "date", "kiadás", "megjelenés", "dátum",
@@ -119,6 +110,7 @@ def sanitize_structured_payload(payload, source_text=""):
 def _style_sheet(
     ws,
     title,
+    theme,
     columns=1,
     model_name="",
     source_label="Custom topic",
@@ -137,9 +129,9 @@ def _style_sheet(
         name="Arial",
         size=20,
         bold=True,
-        color=WHITE,
+        color=theme.hero_foreground,
     )
-    ws["A1"].fill = PatternFill("solid", fgColor=DARK_RED)
+    ws["A1"].fill = PatternFill("solid", fgColor=theme.accent_dark)
     ws["A1"].alignment = Alignment(
         vertical="center",
         horizontal="left",
@@ -154,7 +146,7 @@ def _style_sheet(
         end_column=end_col,
     )
     meta = (
-        f"Red Executive Workbook  ·  "
+        f"{theme.label}  ·  "
         f"Generated {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     )
     if model_name:
@@ -167,9 +159,9 @@ def _style_sheet(
         name="Arial",
         size=9,
         italic=True,
-        color=MUTED,
+        color=theme.muted,
     )
-    ws["A2"].fill = PatternFill("solid", fgColor=LIGHT_GREY)
+    ws["A2"].fill = PatternFill("solid", fgColor=theme.surface)
     ws["A2"].alignment = Alignment(
         vertical="center",
         horizontal="left",
@@ -178,10 +170,14 @@ def _style_sheet(
     ws.row_dimensions[2].height = 22
 
     ws.freeze_panes = "A5"
+    ws.print_options.horizontalCentered = False
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
 
 
-def _style_table(ws, header_row=4):
-    thin = Side(style="thin", color=BORDER)
+def _style_table(ws, theme, header_row=4):
+    thin = Side(style="thin", color=theme.border)
 
     for cell in ws[header_row]:
         if cell.value is not None:
@@ -189,9 +185,9 @@ def _style_table(ws, header_row=4):
                 name="Arial",
                 size=11,
                 bold=True,
-                color=WHITE,
+                color=theme.hero_foreground,
             )
-            cell.fill = PatternFill("solid", fgColor=RED)
+            cell.fill = PatternFill("solid", fgColor=theme.accent)
             cell.alignment = Alignment(
                 vertical="center",
                 horizontal="left",
@@ -214,7 +210,7 @@ def _style_table(ws, header_row=4):
             cell.font = Font(
                 name="Arial",
                 size=10.5,
-                color=TEXT,
+                color=theme.text,
             )
             cell.alignment = Alignment(
                 vertical="top",
@@ -222,10 +218,10 @@ def _style_table(ws, header_row=4):
                 wrap_text=True,
             )
             cell.border = Border(
-                bottom=Side(style="hair", color="E6E9ED"),
+                bottom=Side(style="hair", color=theme.border),
             )
             if zebra:
-                cell.fill = PatternFill("solid", fgColor=ZEBRA)
+                cell.fill = PatternFill("solid", fgColor=theme.zebra)
 
         ws.row_dimensions[row_index].height = 24
 
@@ -258,15 +254,14 @@ def _auto_width(
         ws.column_dimensions[letter].width = width
 
 
-def _finish_table(ws, header_row=4):
-    _style_table(ws, header_row=header_row)
+def _finish_table(ws, theme, header_row=4):
+    _style_table(ws, theme, header_row=header_row)
     _auto_width(ws, min_row=header_row)
 
     if ws.max_column and ws.max_row >= header_row:
         end = get_column_letter(ws.max_column)
-        ws.auto_filter.ref = (
-            f"A{header_row}:{end}{ws.max_row}"
-        )
+        ws.auto_filter.ref = f"A{header_row}:{end}{ws.max_row}"
+        ws.print_area = f"A1:{end}{ws.max_row}"
 
 
 def create_conversation_excel(
@@ -274,10 +269,13 @@ def create_conversation_excel(
     title="Local AI Conversation",
     output_dir=OUTPUT_DIR,
     model_name="",
+    preset="Red Executive Workbook",
 ):
+    theme = get_theme(preset)
     output_dir.mkdir(parents=True, exist_ok=True)
+    prefix = "classic" if theme.family == "classic" else "red"
     path = output_dir / (
-        "local_ai_workbook_"
+        f"local_ai_{prefix}_workbook_"
         + datetime.now().strftime("%Y%m%d_%H%M%S")
         + ".xlsx"
     )
@@ -289,6 +287,7 @@ def create_conversation_excel(
     _style_sheet(
         ws,
         title,
+        theme,
         columns=3,
         model_name=model_name,
         source_label="Current conversation",
@@ -307,7 +306,7 @@ def create_conversation_excel(
             message.get("path", "") if role == "artifact" else "",
         ])
 
-    _finish_table(ws)
+    _finish_table(ws, theme)
     wb.save(path)
     return path
 
@@ -318,10 +317,13 @@ def create_structured_excel(
     output_dir=OUTPUT_DIR,
     source_text="",
     model_name="",
+    preset="Red Executive Workbook",
 ):
+    theme = get_theme(preset)
     output_dir.mkdir(parents=True, exist_ok=True)
+    prefix = "classic" if theme.family == "classic" else "red"
     path = output_dir / (
-        "local_ai_workbook_"
+        f"local_ai_{prefix}_workbook_"
         + datetime.now().strftime("%Y%m%d_%H%M%S")
         + ".xlsx"
     )
@@ -371,6 +373,7 @@ def create_structured_excel(
         _style_sheet(
             ws,
             workbook_title,
+            theme,
             columns=len(headers),
             model_name=model_name,
             source_label="Custom topic",
@@ -385,7 +388,7 @@ def create_structured_excel(
             else:
                 ws.append([row])
 
-        _finish_table(ws)
+        _finish_table(ws, theme)
 
     wb.save(path)
     return path
