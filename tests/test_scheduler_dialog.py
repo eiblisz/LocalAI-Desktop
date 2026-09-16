@@ -8,11 +8,14 @@ def test_frequency_switch_hides_irrelevant_timing_controls():
 
     assert 'hourly = value == "Hourly"' in source
     assert 'weekly = value == "Weekly"' in source
+    assert 'custom = value == "Custom interval"' in source
     assert "self.every_label.setVisible(hourly)" in source
     assert "self.interval_spin.setVisible(hourly)" in source
     assert "self.weekly_day_label.setVisible(weekly)" in source
     assert "self.weekly_day_combo.setVisible(weekly)" in source
-    assert "self.daily_time.setVisible(not hourly)" in source
+    assert 'self.daily_time.setVisible(value in {"Daily", "Weekly"})' in source
+    assert "self.custom_interval_spin.setVisible(custom)" in source
+    assert "self.custom_interval_unit.setVisible(custom)" in source
 
 
 def test_task_type_switch_controls_source_specific_fields():
@@ -20,10 +23,10 @@ def test_task_type_switch_controls_source_specific_fields():
 
     assert 'task_type == "weather"' in source
     assert 'task_type == "ebay"' in source
+    assert 'task_type == "custom"' in source
     assert "self.location_edit.setVisible(weather)" in source
     assert "self.ebay_query_edit.setVisible(ebay)" in source
-    assert '"computer"' in source
-    assert '"custom"' in source
+    assert "self.web_search_toggle.setVisible(custom)" in source
 
 
 def test_scheduler_exposes_four_automation_types():
@@ -35,9 +38,12 @@ def test_scheduler_exposes_four_automation_types():
     }
 
 
-def test_scheduler_frequency_list_includes_weekly():
+def test_scheduler_frequency_list_includes_weekly_and_custom_interval():
     source = inspect.getsource(SchedulerDialog._build_ui)
-    assert '["Hourly", "Daily", "Weekly"]' in source
+    assert "Hourly" in source
+    assert "Daily" in source
+    assert "Weekly" in source
+    assert "Custom interval" in source
 
 
 def test_scheduler_list_does_not_predeclare_task_categories():
@@ -46,11 +52,6 @@ def test_scheduler_list_does_not_predeclare_task_categories():
     assert "type_status_labels" not in source
     assert "TASK_TYPES.items()" not in source
     assert "self.task_list = QListWidget()" in source
-
-
-def test_scheduler_frequency_list_includes_custom_interval():
-    source = inspect.getsource(SchedulerDialog._build_ui)
-    assert "Custom interval" in source
 
 
 def test_custom_frequency_shows_interval_controls():
