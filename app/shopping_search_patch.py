@@ -1,5 +1,15 @@
 import re
+import unicodedata
 from urllib.parse import parse_qs, urlparse
+
+
+def _fold_token(value):
+    normalized = unicodedata.normalize("NFKD", str(value or "").lower())
+    ascii_text = "".join(
+        char for char in normalized
+        if not unicodedata.combining(char)
+    )
+    return re.sub(r"[^a-z0-9]+", "", ascii_text)
 
 
 def _kit_total_capacity(exact_kit):
@@ -68,7 +78,7 @@ def _shopping_topic_terms(web_search_tool, query):
     }
     terms = []
     for term in web_search_tool._query_terms(query):
-        folded = web_search_tool._normalized_spec_text(term)
+        folded = _fold_token(term)
         if term.isdigit() or folded in ignored:
             continue
         if folded and folded not in terms:
@@ -87,7 +97,7 @@ def _has_exact_topic_token(web_search_tool, query, item):
         str(item.get("page_text", "")),
     ]).lower()
     evidence_tokens = {
-        web_search_tool._normalized_spec_text(token)
+        _fold_token(token)
         for token in re.findall(r"\w+", evidence, flags=re.UNICODE)
         if token
     }
