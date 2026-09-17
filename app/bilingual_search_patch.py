@@ -114,24 +114,24 @@ def install_bilingual_search_patch(workers_module):
         return queries[:2]
 
     def _generate_search_queries(self):
-        base_queries = original_generate(self)
+        # Decide whether this is an independent bilingual shopping search BEFORE
+        # calling the legacy generator. The legacy path can collapse constrained
+        # single-topic queries back to the raw authority, which made the later
+        # bilingual decision depend on an unnecessary first model call.
+        should_expand = (
+            _looks_hungarian(self)
+            and _looks_like_shopping_request(self)
+            and not self._needs_previous_search_context()
+            and not self._has_multiple_research_topics()
+            and not _has_explicit_market(self)
+        )
 
-        if not _looks_hungarian(self):
-            return base_queries
-        if not _looks_like_shopping_request(self):
-            return base_queries
-        if self._needs_previous_search_context():
-            return base_queries
-        if self._has_multiple_research_topics():
-            return base_queries
-        if _has_explicit_market(self):
-            return base_queries
+        if should_expand:
+            localized_queries = _generate_bilingual_market_queries(self)
+            if len(localized_queries) == 2:
+                return localized_queries
 
-        localized_queries = _generate_bilingual_market_queries(self)
-        if len(localized_queries) == 2:
-            return localized_queries
-
-        return base_queries
+        return original_generate(self)
 
     worker_class._generate_bilingual_market_queries = _generate_bilingual_market_queries
     worker_class._generate_search_queries = _generate_search_queries
