@@ -31,9 +31,6 @@ def _looks_like_shopping_request(worker):
 def _has_explicit_market(worker):
     text = worker._fold_text(worker.user_prompt)
 
-    # Hungarian country names normally contain "orszag" (for example
-    # Nemetorszagban, Magyarorszagon, Franciaorszagbol). Treat those as
-    # explicit market authority and do not broaden them automatically.
     if re.search(r"\b[a-z0-9]*orszag[a-z0-9]*\b", text):
         return True
 
@@ -50,12 +47,10 @@ def _has_explicit_market(worker):
 
 
 def _clean_query_line(raw):
-    for line in str(raw or "").splitlines():
-        clean = " ".join(line.strip().strip('"\'').split())
-        clean = re.sub(r"^(?:[-*•]\s+|\d{1,2}[.)]\s+)", "", clean).strip()
-        if clean:
-            return clean[:240]
-    return ""
+    clean = " ".join(str(raw or "").strip().strip('"\'').split())
+    clean = re.sub(r"^(?:[-*•]\s+|\d{1,2}[.)]\s+)", "", clean).strip()
+    clean = re.sub(r"^(?:HU|DE)\s*:\s*", "", clean, flags=re.IGNORECASE)
+    return clean[:240]
 
 
 def install_bilingual_search_patch(workers_module):
@@ -65,19 +60,23 @@ def install_bilingual_search_patch(workers_module):
 
     original_generate = worker_class._generate_search_queries
 
-    def _generate_german_market_query(self):
+    def _generate_bilingual_market_queries(self):
         authority = self._search_constraint_authority()
         messages = [
             {
                 "role": "system",
                 "content": (
-                    "Translate the search intent into exactly one concise German-language "
-                    "web search query for the German market. Preserve the exact topic, "
-                    "product/model names, quantities, dimensions, technical specs, dates, "
-                    "numbers, currencies, and price limits. Do not substitute products, "
-                    "brands, countries, sizes, or constraints. Add Deutschland as a market "
-                    "signal when appropriate. Return ONLY the query, with no numbering, "
-                    "quotes, commentary, or explanation."
+                    "Create exactly two concise shopping web search queries for the SAME "
+                    "product intent. Line 1 must start with 'HU:' and use natural Hungarian "
+                    "product terminology suitable for Hungarian shops. Line 2 must start "
+                    "with 'DE:' and use natural German product terminology suitable for "
+                    "German shops, adding Deutschland as a market signal. Preserve the "
+                    "exact product identity, quantities, dimensions, technical specs, "
+                    "dates, numbers, currencies, and price limits. Normalize Hungarian "
+                    "inflected wording into the normal product noun when useful (for "
+                    "example 'teas kannat' -> 'teaskanna'). Never substitute the product, "
+                    "brand, size, specification, or price constraint. Return ONLY the two "
+                    "query lines and no explanation."
                 ),
             },
             {
@@ -88,16 +87,31 @@ def install_bilingual_search_patch(workers_module):
         try:
             raw = self.client.chat_once(model=self.model, messages=messages).strip()
         except Exception:
-            return ""
+            return []
 
-        query = _clean_query_line(raw)
-        if not query:
-            return ""
+        hu_query = ""
+        de_query = ""
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if re.match(r"^HU\s*:", stripped, flags=re.IGNORECASE):
+                hu_query = _clean_query_line(stripped)
+            elif re.match(r"^DE\s*:", stripped, flags=re.IGNORECASE):
+                de_query = _clean_query_line(stripped)
 
-        query = self._preserve_search_constraints(query)
-        if "deutschland" not in self._fold_text(query):
-            query = f"{query} Deutschland".strip()
-        return query[:260]
+        if hu_query:
+            hu_query = self._preserve_search_constraints(hu_query)
+        if de_query:
+            de_query = self._preserve_search_constraints(de_query)
+            if "deutschland" not in self._fold_text(de_query):
+                de_query = f"{de_query} Deutschland".strip()[:260]
+
+        queries = []
+        for query in [hu_query, de_query]:
+            if query and self._fold_text(query) not in {
+                self._fold_text(item) for item in queries
+            }:
+                queries.append(query[:260])
+        return queries[:2]
 
     def _generate_search_queries(self):
         base_queries = original_generate(self)
@@ -113,21 +127,12 @@ def install_bilingual_search_patch(workers_module):
         if _has_explicit_market(self):
             return base_queries
 
-        # Keep the user's Hungarian shopping request as canonical authority. The
-        # German expansion is additive only, so it cannot replace or relax it.
-        hungarian_query = self._preserve_search_constraints(
-            self._search_constraint_authority()
-        )
-        german_query = _generate_german_market_query(self)
+        localized_queries = _generate_bilingual_market_queries(self)
+        if len(localized_queries) == 2:
+            return localized_queries
 
-        queries = [hungarian_query]
-        if (
-            german_query
-            and self._fold_text(german_query) != self._fold_text(hungarian_query)
-        ):
-            queries.append(german_query)
-        return queries[:2]
+        return base_queries
 
-    worker_class._generate_german_market_query = _generate_german_market_query
+    worker_class._generate_bilingual_market_queries = _generate_bilingual_market_queries
     worker_class._generate_search_queries = _generate_search_queries
     worker_class._bilingual_search_patch_installed = True
