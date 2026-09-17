@@ -15,3 +15,13 @@ _install_answer_price_equivalence_patch(_evidence_verifier)
 
 del _install_answer_price_equivalence_patch
 del _evidence_verifier
+
+from . import workers as _workers
+from .verified_fallback_patch import (
+    install_verified_fallback_patch as _install_verified_fallback_patch,
+)
+
+_install_verified_fallback_patch(_workers)
+
+del _install_verified_fallback_patch
+del _workers
