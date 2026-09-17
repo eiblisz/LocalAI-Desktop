@@ -362,6 +362,34 @@ class ChatWebWorker(QObject):
             "specifications are not shown."
         )
 
+    @staticmethod
+    def _evidence_diagnostic(ledgers, limit=6):
+        lines = []
+        for index, ledger in enumerate(list(ledgers or [])[:limit], start=1):
+            fields = ledger.get("fields") or {}
+            issues = []
+            for name in ledger.get("required") or []:
+                field = fields.get(name) or {}
+                status = str(field.get("status") or "UNKNOWN")
+                if status == "VERIFIED":
+                    continue
+                reason = " ".join(str(field.get("evidence") or "no evidence").split())
+                if len(reason) > 90:
+                    reason = reason[:87].rstrip() + "..."
+                issues.append(f"{name}={status} ({reason})")
+
+            if not issues:
+                continue
+
+            title = " ".join(str(ledger.get("title") or "(untitled)").split())
+            if len(title) > 100:
+                title = title[:97].rstrip() + "..."
+            lines.append(
+                f"{index}. {title} -> "
+                + "; ".join(issues[:4])
+            )
+        return "\n".join(lines)
+
     @Slot()
     def run(self):
         try:
@@ -446,11 +474,18 @@ class ChatWebWorker(QObject):
 
             if not contexts or not urls:
                 if constrained_rejections:
+                    diagnostic = self._evidence_diagnostic(evidence_ledgers)
+                    diagnostic_text = (
+                        "\nEvidence diagnostic:\n" + diagnostic
+                        if diagnostic
+                        else ""
+                    )
                     self.token.emit(self._safe_evidence_failure())
                     self.token.emit(
                         "\n\n---\n"
                         f"Search query: {constrained_rejections[0]}\n"
                         "Evidence verification: FAIL-CLOSED (0 accepted products)"
+                        f"{diagnostic_text}"
                     )
                     self.finished.emit()
                     return
