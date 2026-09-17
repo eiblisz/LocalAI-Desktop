@@ -485,3 +485,104 @@ def test_chat_web_worker_footer_reports_provider_and_brave_fallback(monkeypatch)
     combined = "".join(tokens)
     assert "Search provider: Bing Web RSS" in combined
     assert "Brave fallback: 401 Client Error" in combined
+
+
+def test_new_explicit_search_does_not_inherit_previous_topic():
+    class TopicSwitchClient(DummyWebClient):
+        def chat_once(self, model, messages, timeout=600.0):
+            self.once_calls.append((model, messages))
+            user = messages[1]["content"]
+            assert "PREVIOUS USER REQUEST" not in user
+            assert "2x32GB DDR4" not in user
+            assert "teas kannakat" in user
+            return "tea kettles Germany"
+
+    worker = workers.ChatWebWorker(
+        TopicSwitchClient(),
+        "qwen-test",
+        [
+            {"role": "system", "content": "Base system"},
+            {"role": "user", "content": "Keress 2x32GB DDR4 RAM-ot 700 EUR alatt"},
+            {"role": "assistant", "content": "Previous RAM answer"},
+            {"role": "user", "content": "mondom teas kannakat keressel"},
+        ],
+        "mondom teas kannakat keressel",
+    )
+
+    assert worker._generate_search_queries() == ["tea kettles Germany"]
+
+
+def test_new_web_topic_excludes_previous_chat_history_from_grounded_answer(monkeypatch):
+    class TopicSwitchClient(DummyWebClient):
+        def chat_once(self, model, messages, timeout=600.0):
+            self.once_calls.append((model, messages))
+            return "tea kettles Germany"
+
+    monkeypatch.setattr(
+        workers,
+        "search_web",
+        lambda query, max_results=6, fetch_pages=True: {
+            "provider": "Brave Search API",
+            "query": query,
+            "results": [{
+                "title": "Tea kettle",
+                "url": "https://example.com/tea-kettle",
+                "snippet": "Tea kettle available in Germany",
+            }],
+        },
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: ["https://example.com/tea-kettle"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_entries",
+        lambda payload, limit=6: [{
+            "title": "Tea kettle",
+            "url": "https://example.com/tea-kettle",
+        }],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: "Tea kettle Germany",
+    )
+
+    client = TopicSwitchClient()
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [
+            {"role": "system", "content": "Base system"},
+            {"role": "user", "content": "Keress 2x32GB DDR4 RAM-ot 700 EUR alatt"},
+            {"role": "assistant", "content": "Previous RAM answer"},
+            {"role": "user", "content": "mondom teas kannakat keressel"},
+        ],
+        "mondom teas kannakat keressel",
+    )
+    worker.run()
+
+    streamed_messages = client.stream_calls[0][1]
+    combined = "\n".join(message["content"] for message in streamed_messages)
+    assert "2x32GB DDR4" not in combined
+    assert "Previous RAM answer" not in combined
+    assert "mondom teas kannakat keressel" in combined
+    assert "Tea kettle Germany" in combined
+
+
+def test_referential_followup_still_keeps_previous_context():
+    worker = workers.ChatWebWorker(
+        DummyWebClient(),
+        "qwen-test",
+        [
+            {"role": "system", "content": "Base system"},
+            {"role": "user", "content": "Keress teaskannakat"},
+            {"role": "assistant", "content": "Previous answer"},
+            {"role": "user", "content": "ebbol keress olcsobbat"},
+        ],
+        "ebbol keress olcsobbat",
+    )
+
+    assert worker._needs_previous_search_context()
