@@ -25,10 +25,15 @@ from . import workers as _workers
 from .verified_fallback_patch import (
     install_verified_fallback_patch as _install_verified_fallback_patch,
 )
+from .bilingual_search_patch import (
+    install_bilingual_search_patch as _install_bilingual_search_patch,
+)
 
 _install_verified_fallback_patch(_workers)
+_install_bilingual_search_patch(_workers)
 
 del _install_verified_fallback_patch
+del _install_bilingual_search_patch
 del _workers
 
 from . import main_window as _main_window
