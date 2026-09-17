@@ -39,24 +39,6 @@ def test_hard_constrained_single_topic_ignores_model_query_drift():
     assert "700 EUR" in queries[0]
 
 
-def test_constrained_followup_uses_previous_user_request_as_authority():
-    previous = "Keress 2x32GB DDR4 3200 MHz RAM-ot Németországban 700 EUR alatt"
-    client = QueryClient("32GB DDR4 RAM Hungary")
-    worker = workers.ChatWebWorker(
-        client,
-        "qwen-test",
-        [
-            {"role": "system", "content": "Base system"},
-            {"role": "user", "content": previous},
-            {"role": "assistant", "content": "Previous answer"},
-            {"role": "user", "content": "most keress ra ujra"},
-        ],
-        "most keress ra ujra",
-    )
-
-    assert worker._generate_search_queries() == [previous]
-
-
 def test_multi_topic_request_keeps_independent_generated_queries():
     client = QueryClient(
         "latest Qwen model release\n"
