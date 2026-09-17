@@ -12,6 +12,22 @@ def _looks_hungarian(worker):
     return any(marker in padded for marker in markers)
 
 
+def _looks_like_shopping_request(worker):
+    text = worker._fold_text(worker.user_prompt)
+    padded = f" {text} "
+
+    if re.search(r"(?:€|\$)|\b\d+(?:[.,]\d+)?\s*(?:eur|usd)\b", text):
+        return True
+
+    markers = [
+        " ar ", " ara ", " arak ", " mennyibe ", " alatt ", " felett ",
+        " olcso", " ajanlat", " kaphato", " vasar", " megven", " venni ",
+        " webshop", " bolt ", " termek", " kit ", " keszlet", " price ",
+        " buy ", " shop ", " offer ",
+    ]
+    return any(marker in padded for marker in markers)
+
+
 def _has_explicit_market(worker):
     text = worker._fold_text(worker.user_prompt)
 
@@ -88,6 +104,8 @@ def install_bilingual_search_patch(workers_module):
 
         if not _looks_hungarian(self):
             return base_queries
+        if not _looks_like_shopping_request(self):
+            return base_queries
         if self._needs_previous_search_context():
             return base_queries
         if self._has_multiple_research_topics():
@@ -95,8 +113,8 @@ def install_bilingual_search_patch(workers_module):
         if _has_explicit_market(self):
             return base_queries
 
-        # Keep the user's Hungarian request as canonical authority. The German
-        # expansion is additive only, so it cannot replace or relax the source query.
+        # Keep the user's Hungarian shopping request as canonical authority. The
+        # German expansion is additive only, so it cannot replace or relax it.
         hungarian_query = self._preserve_search_constraints(
             self._search_constraint_authority()
         )
