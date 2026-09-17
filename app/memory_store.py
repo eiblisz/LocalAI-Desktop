@@ -1,0 +1,360 @@
+import re
+import sqlite3
+import uuid
+from datetime import datetime
+from pathlib import Path
+
+from .config import ROOT_DIR
+
+
+DEFAULT_MEMORY_DB = ROOT_DIR / "data" / "memory.sqlite3"
+
+ALLOWED_CATEGORIES = {
+    "USER_PROFILE",
+    "PROJECT",
+    "PREFERENCE",
+    "RULE",
+    "LESSON",
+    "WORKING",
+}
+
+ALLOWED_IMPORTANCE = {
+    "IGNORE",
+    "SESSION_ONLY",
+    "REMEMBER",
+    "IMPORTANT",
+    "PINNED",
+}
+
+ALLOWED_STATUS = {
+    "active",
+    "superseded",
+    "archived",
+    "deleted",
+}
+
+_SECRET_KEY_TOKENS = {
+    "api_key",
+    "apikey",
+    "password",
+    "passwd",
+    "pwd",
+    "secret",
+    "token",
+    "access_token",
+    "refresh_token",
+    "private_key",
+    "privatekey",
+    "otp",
+    "one_time_password",
+    "auth_cookie",
+    "cookie",
+    "session_cookie",
+    "pin",
+    "cvv",
+    "cvc",
+    "iban",
+    "bank_account",
+    "banking_secret",
+}
+
+_SECRET_VALUE_PATTERNS = [
+    re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |)?PRIVATE KEY-----", re.IGNORECASE),
+    re.compile(r"\b(?:sk|pk)_[A-Za-z0-9_-]{20,}\b"),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b", re.IGNORECASE),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{16,}\b", re.IGNORECASE),
+    re.compile(r"\b(?:otp|one[- ]?time password)\s*[:=]\s*\d{4,10}\b", re.IGNORECASE),
+]
+
+
+def _now():
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def _clean(value):
+    return " ".join(str(value or "").strip().split())
+
+
+def _normalize_key(value):
+    return re.sub(r"[^a-z0-9]+", "_", _clean(value).lower()).strip("_")
+
+
+def secret_memory_reason(*, key="", value="", subject=""):
+    normalized_key = _normalize_key(key)
+    normalized_subject = _normalize_key(subject)
+
+    for token in _SECRET_KEY_TOKENS:
+        if token == normalized_key or token in normalized_key.split("_"):
+            return f"secret key field: {token}"
+        if token == normalized_subject or token in normalized_subject.split("_"):
+            return f"secret subject field: {token}"
+
+    text = str(value or "")
+    for pattern in _SECRET_VALUE_PATTERNS:
+        if pattern.search(text):
+            return "secret value pattern"
+
+    return ""
+
+
+def is_secret_memory_candidate(*, key="", value="", subject=""):
+    return bool(secret_memory_reason(key=key, value=value, subject=subject))
+
+
+class MemoryStore:
+    def __init__(self, path: Path = DEFAULT_MEMORY_DB):
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._initialize()
+
+    def _connect(self):
+        connection = sqlite3.connect(self.path)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        return connection
+
+    def _initialize(self):
+        with self._connect() as db:
+            db.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS memories (
+                    id TEXT PRIMARY KEY,
+                    category TEXT NOT NULL,
+                    scope TEXT NOT NULL,
+                    subject TEXT NOT NULL,
+                    key TEXT NOT NULL,
+                    value TEXT NOT NULL,
+                    importance TEXT NOT NULL,
+                    confidence REAL NOT NULL DEFAULT 1.0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    last_used_at TEXT,
+                    source_chat_id TEXT,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    supersedes_id TEXT,
+                    FOREIGN KEY (supersedes_id) REFERENCES memories(id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_memories_scope_status
+                ON memories(scope, status);
+
+                CREATE INDEX IF NOT EXISTS idx_memories_lookup
+                ON memories(category, scope, subject, key, status);
+
+                CREATE TABLE IF NOT EXISTS memory_sources (
+                    id TEXT PRIMARY KEY,
+                    memory_id TEXT NOT NULL,
+                    source_type TEXT NOT NULL,
+                    source_ref TEXT,
+                    excerpt TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS memory_links (
+                    id TEXT PRIMARY KEY,
+                    memory_id TEXT NOT NULL,
+                    related_memory_id TEXT NOT NULL,
+                    relation TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE,
+                    FOREIGN KEY (related_memory_id) REFERENCES memories(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS memory_conflicts (
+                    id TEXT PRIMARY KEY,
+                    memory_id TEXT NOT NULL,
+                    conflicting_memory_id TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'open',
+                    resolution TEXT,
+                    created_at TEXT NOT NULL,
+                    resolved_at TEXT,
+                    FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conflicting_memory_id) REFERENCES memories(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS lessons (
+                    id TEXT PRIMARY KEY,
+                    scope TEXT NOT NULL,
+                    subject TEXT NOT NULL,
+                    rule TEXT NOT NULL,
+                    importance TEXT NOT NULL DEFAULT 'REMEMBER',
+                    confidence REAL NOT NULL DEFAULT 1.0,
+                    source_chat_id TEXT,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                """
+            )
+
+    @staticmethod
+    def _validate_enum(name, value, allowed):
+        if value not in allowed:
+            raise ValueError(f"invalid {name}: {value}")
+
+    @staticmethod
+    def _row_to_dict(row):
+        return dict(row) if row is not None else None
+
+    def add_memory(
+        self,
+        *,
+        category,
+        scope,
+        subject,
+        key,
+        value,
+        importance="REMEMBER",
+        confidence=1.0,
+        source_chat_id=None,
+        supersedes_id=None,
+    ):
+        category = _clean(category).upper()
+        scope = _clean(scope)
+        subject = _clean(subject)
+        key = _clean(key)
+        value = _clean(value)
+        importance = _clean(importance).upper()
+
+        self._validate_enum("category", category, ALLOWED_CATEGORIES)
+        self._validate_enum("importance", importance, ALLOWED_IMPORTANCE)
+
+        if not scope or not subject or not key or not value:
+            raise ValueError("scope, subject, key, and value are required")
+
+        reason = secret_memory_reason(key=key, value=value, subject=subject)
+        if reason:
+            raise ValueError(f"secret memory rejected: {reason}")
+
+        confidence = float(confidence)
+        if confidence < 0.0 or confidence > 1.0:
+            raise ValueError("confidence must be between 0.0 and 1.0")
+
+        memory_id = uuid.uuid4().hex
+        now = _now()
+
+        with self._connect() as db:
+            if supersedes_id:
+                current = db.execute(
+                    "SELECT id, status FROM memories WHERE id = ?",
+                    (supersedes_id,),
+                ).fetchone()
+                if current is None:
+                    raise KeyError(supersedes_id)
+                db.execute(
+                    "UPDATE memories SET status = 'superseded', updated_at = ? WHERE id = ?",
+                    (now, supersedes_id),
+                )
+
+            db.execute(
+                """
+                INSERT INTO memories (
+                    id, category, scope, subject, key, value, importance,
+                    confidence, created_at, updated_at, last_used_at,
+                    source_chat_id, status, supersedes_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 'active', ?)
+                """,
+                (
+                    memory_id,
+                    category,
+                    scope,
+                    subject,
+                    key,
+                    value,
+                    importance,
+                    confidence,
+                    now,
+                    now,
+                    source_chat_id,
+                    supersedes_id,
+                ),
+            )
+
+        return self.get_memory(memory_id)
+
+    def get_memory(self, memory_id):
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM memories WHERE id = ?",
+                (memory_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(memory_id)
+        return self._row_to_dict(row)
+
+    def list_memories(
+        self,
+        *,
+        scope=None,
+        category=None,
+        statuses=("active",),
+        include_session_only=True,
+    ):
+        clauses = []
+        params = []
+
+        if scope is not None:
+            clauses.append("scope = ?")
+            params.append(_clean(scope))
+
+        if category is not None:
+            category = _clean(category).upper()
+            self._validate_enum("category", category, ALLOWED_CATEGORIES)
+            clauses.append("category = ?")
+            params.append(category)
+
+        statuses = tuple(statuses or ())
+        for status in statuses:
+            self._validate_enum("status", status, ALLOWED_STATUS)
+        if statuses:
+            placeholders = ",".join("?" for _ in statuses)
+            clauses.append(f"status IN ({placeholders})")
+            params.extend(statuses)
+
+        if not include_session_only:
+            clauses.append("importance != 'SESSION_ONLY'")
+
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        query = (
+            "SELECT * FROM memories"
+            + where
+            + " ORDER BY CASE importance "
+              "WHEN 'PINNED' THEN 5 WHEN 'IMPORTANT' THEN 4 "
+              "WHEN 'REMEMBER' THEN 3 WHEN 'SESSION_ONLY' THEN 2 ELSE 1 END DESC, "
+              "updated_at DESC"
+        )
+
+        with self._connect() as db:
+            rows = db.execute(query, params).fetchall()
+        return [self._row_to_dict(row) for row in rows]
+
+    def archive_memory(self, memory_id):
+        return self._set_status(memory_id, "archived")
+
+    def delete_memory(self, memory_id):
+        return self._set_status(memory_id, "deleted")
+
+    def _set_status(self, memory_id, status):
+        self._validate_enum("status", status, ALLOWED_STATUS)
+        now = _now()
+        with self._connect() as db:
+            cursor = db.execute(
+                "UPDATE memories SET status = ?, updated_at = ? WHERE id = ?",
+                (status, now, memory_id),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(memory_id)
+        return self.get_memory(memory_id)
+
+    def mark_used(self, memory_id):
+        now = _now()
+        with self._connect() as db:
+            cursor = db.execute(
+                "UPDATE memories SET last_used_at = ?, updated_at = ? WHERE id = ?",
+                (now, now, memory_id),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(memory_id)
+        return self.get_memory(memory_id)
