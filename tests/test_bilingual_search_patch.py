@@ -1,4 +1,7 @@
+import pytest
+
 from app import workers
+from app.bilingual_search_patch import _BILINGUAL_QUERY_SCHEMA
 
 
 class SequenceClient:
@@ -6,8 +9,8 @@ class SequenceClient:
         self.responses = list(responses)
         self.calls = []
 
-    def chat_once(self, model, messages, timeout=600.0):
-        self.calls.append((model, messages))
+    def chat_once(self, model, messages, timeout=600.0, response_format=None):
+        self.calls.append((model, messages, response_format))
         if not self.responses:
             raise AssertionError("Unexpected extra model call")
         return self.responses.pop(0)
@@ -16,7 +19,8 @@ class SequenceClient:
 def test_new_hungarian_search_adds_normalized_hungarian_and_german_queries():
     prompt = "Keress nekem teas kannat 100 EUR alatt."
     client = SequenceClient([
-        "HU: teaskanna 100 EUR alatt\nDE: Teekanne unter 100 EUR kaufen Deutschland",
+        '{"hu_query":"teaskanna 100 EUR alatt",'
+        '"de_query":"Teekanne unter 100 EUR kaufen Deutschland"}',
     ])
     worker = workers.ChatWebWorker(
         client,
@@ -33,6 +37,27 @@ def test_new_hungarian_search_adds_normalized_hungarian_and_german_queries():
     ]
     assert len(client.calls) == 1
     assert "SEARCH AUTHORITY:" in client.calls[0][1][-1]["content"]
+    assert client.calls[0][2] == _BILINGUAL_QUERY_SCHEMA
+
+
+def test_invalid_bilingual_plan_fails_closed_without_legacy_query_fallback():
+    prompt = "Keress nekem teas kannat 100 EUR alatt."
+    client = SequenceClient(["teas kannat 100 EUR alatt"])
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        prompt,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Bilingual shopping query planning failed closed",
+    ):
+        worker._generate_search_queries()
+
+    assert len(client.calls) == 1
+    assert client.calls[0][2] == _BILINGUAL_QUERY_SCHEMA
 
 
 def test_explicit_country_market_does_not_auto_expand_to_germany():

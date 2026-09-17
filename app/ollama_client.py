@@ -28,12 +28,17 @@ class OllamaClient:
         model: str,
         messages: list[dict],
         timeout: float = 600.0,
+        response_format=None,
     ) -> str:
         payload = {
             "model": model,
             "messages": messages,
             "stream": False,
         }
+        if response_format is not None:
+            if not isinstance(response_format, (str, dict)):
+                raise TypeError("response_format must be a string, object, or None.")
+            payload["format"] = response_format
         response = requests.post(
             f"{self.base_url}/api/chat",
             json=payload,
