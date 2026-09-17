@@ -16,7 +16,6 @@ class SequenceClient:
 def test_new_hungarian_search_adds_normalized_hungarian_and_german_queries():
     prompt = "Keress nekem teas kannat 100 EUR alatt."
     client = SequenceClient([
-        "tea kettle under 100 EUR",
         "HU: teaskanna 100 EUR alatt\nDE: Teekanne unter 100 EUR kaufen Deutschland",
     ])
     worker = workers.ChatWebWorker(
@@ -32,7 +31,8 @@ def test_new_hungarian_search_adds_normalized_hungarian_and_german_queries():
         "teaskanna 100 EUR alatt",
         "Teekanne unter 100 EUR kaufen Deutschland",
     ]
-    assert len(client.calls) == 2
+    assert len(client.calls) == 1
+    assert "SEARCH AUTHORITY:" in client.calls[0][1][-1]["content"]
 
 
 def test_explicit_country_market_does_not_auto_expand_to_germany():
