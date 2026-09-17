@@ -115,6 +115,33 @@ class ChatWebWorker(QObject):
         ]
         return any(marker in normalized for marker in markers)
 
+    def _needs_previous_search_context(self):
+        if self._is_research_followup():
+            return True
+
+        normalized = self._fold_text(self.user_prompt)
+        reference_markers = [
+            "ebbol",
+            "abbol",
+            "ilyet",
+            "ilyeneket",
+            "azt keress",
+            "azokat keress",
+            "ezeket keress",
+            "ugyanez",
+            "ugyanilyet",
+            "olcsobbat",
+            "dragabbat",
+            "masikat",
+            "that one",
+            "those ones",
+            "same one",
+            "same thing",
+            "cheaper one",
+            "more expensive one",
+        ]
+        return any(marker in normalized for marker in reference_markers)
+
     def _conversation_language_instruction(self):
         sample_parts = [
             self.user_prompt,
@@ -189,7 +216,12 @@ class ChatWebWorker(QObject):
 
     def _generate_search_queries(self):
         prompt = self.user_prompt[:5000]
-        recent_requests = self._recent_user_requests()
+        use_previous_context = self._needs_previous_search_context()
+        recent_requests = (
+            self._recent_user_requests()
+            if use_previous_context
+            else []
+        )
         history_text = "\n\n".join(
             f"PREVIOUS USER REQUEST {index + 1}:\n{text}"
             for index, text in enumerate(recent_requests)
@@ -205,6 +237,13 @@ class ChatWebWorker(QObject):
                 "movie, or search subject. Re-run the actual previous research topic, "
                 "preserving its product specs, quantities, price limits, location, and "
                 "other constraints. "
+            )
+        elif use_previous_context:
+            followup_rule = (
+                "IMPORTANT: The current request contains a reference to an earlier "
+                "request. Use PREVIOUS USER REQUESTS only to resolve that reference. "
+                "The CURRENT USER REQUEST remains authoritative and must not be replaced "
+                "by an older topic. "
             )
 
         messages = [
@@ -337,6 +376,21 @@ class ChatWebWorker(QObject):
             if history and history[-1].get("role") == "user":
                 history = history[:-1]
 
+            base_history = []
+            conversation_history = []
+            if history and history[0].get("role") == "system":
+                base_history = [history[0]]
+                prior_messages = history[1:]
+            else:
+                prior_messages = history
+
+            if self._needs_previous_search_context():
+                conversation_history = [
+                    message
+                    for message in prior_messages
+                    if message.get("role") in {"user", "assistant"}
+                ][-6:]
+
             grounded_system = {
                 "role": "system",
                 "content": (
@@ -374,9 +428,9 @@ class ChatWebWorker(QObject):
             }
 
             stream_messages = (
-                history[:1]
+                base_history
                 + [grounded_system]
-                + history[1:]
+                + conversation_history
                 + [grounded_user]
             )
 
