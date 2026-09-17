@@ -316,7 +316,8 @@ class ChatWebWorker(QObject):
                 break
 
         if (
-            self._required_search_constraints()
+            len(queries) > 1
+            and self._required_search_constraints()
             and not self._has_multiple_research_topics()
         ):
             authority = self._search_constraint_authority()
