@@ -1,4 +1,16 @@
+import json
 import re
+
+
+_BILINGUAL_QUERY_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["hu_query", "de_query"],
+    "properties": {
+        "hu_query": {"type": "string", "minLength": 1, "maxLength": 260},
+        "de_query": {"type": "string", "minLength": 1, "maxLength": 260},
+    },
+}
 
 
 def _looks_hungarian(worker):
@@ -67,16 +79,16 @@ def install_bilingual_search_patch(workers_module):
                 "role": "system",
                 "content": (
                     "Create exactly two concise shopping web search queries for the SAME "
-                    "product intent. Line 1 must start with 'HU:' and use natural Hungarian "
-                    "product terminology suitable for Hungarian shops. Line 2 must start "
-                    "with 'DE:' and use natural German product terminology suitable for "
+                    "product intent. hu_query must use natural Hungarian product terminology "
+                    "suitable for Hungarian shops. de_query must use natural German product "
+                    "terminology suitable for "
                     "German shops, adding Deutschland as a market signal. Preserve the "
                     "exact product identity, quantities, dimensions, technical specs, "
                     "dates, numbers, currencies, and price limits. Normalize Hungarian "
                     "inflected wording into the normal product noun when useful (for "
                     "example 'teas kannat' -> 'teaskanna'). Never substitute the product, "
-                    "brand, size, specification, or price constraint. Return ONLY the two "
-                    "query lines and no explanation."
+                    "brand, size, specification, or price constraint. Return only the exact "
+                    "JSON object required by the supplied schema."
                 ),
             },
             {
@@ -85,18 +97,25 @@ def install_bilingual_search_patch(workers_module):
             },
         ]
         try:
-            raw = self.client.chat_once(model=self.model, messages=messages).strip()
-        except Exception:
-            return []
-
-        hu_query = ""
-        de_query = ""
-        for line in raw.splitlines():
-            stripped = line.strip()
-            if re.match(r"^HU\s*:", stripped, flags=re.IGNORECASE):
-                hu_query = _clean_query_line(stripped)
-            elif re.match(r"^DE\s*:", stripped, flags=re.IGNORECASE):
-                de_query = _clean_query_line(stripped)
+            raw = self.client.chat_once(
+                model=self.model,
+                messages=messages,
+                response_format=_BILINGUAL_QUERY_SCHEMA,
+            ).strip()
+            document = json.loads(raw)
+            if not isinstance(document, dict) or set(document) != {
+                "hu_query",
+                "de_query",
+            }:
+                raise ValueError("Bilingual query plan has invalid keys.")
+            hu_query = _clean_query_line(document["hu_query"])
+            de_query = _clean_query_line(document["de_query"])
+            if not hu_query or not de_query:
+                raise ValueError("Bilingual query plan contains an empty query.")
+        except Exception as exc:
+            raise RuntimeError(
+                "Bilingual shopping query planning failed closed."
+            ) from exc
 
         if hu_query:
             hu_query = self._preserve_search_constraints(hu_query)
@@ -111,7 +130,11 @@ def install_bilingual_search_patch(workers_module):
                 self._fold_text(item) for item in queries
             }:
                 queries.append(query[:260])
-        return queries[:2]
+        if len(queries) != 2:
+            raise RuntimeError(
+                "Bilingual shopping query planning did not produce two distinct queries."
+            )
+        return queries
 
     def _generate_search_queries(self):
         # Decide whether this is an independent bilingual shopping search BEFORE
@@ -127,9 +150,7 @@ def install_bilingual_search_patch(workers_module):
         )
 
         if should_expand:
-            localized_queries = _generate_bilingual_market_queries(self)
-            if len(localized_queries) == 2:
-                return localized_queries
+            return _generate_bilingual_market_queries(self)
 
         return original_generate(self)
 
