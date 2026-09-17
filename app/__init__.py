@@ -43,10 +43,15 @@ from .vram_release_patch import (
 from .sidebar_navigation_patch import (
     install_sidebar_navigation_patch as _install_sidebar_navigation_patch,
 )
+from .image_studio_patch import (
+    install_image_studio_patch as _install_image_studio_patch,
+)
 
 _install_vram_release_patch(_main_window)
 _install_sidebar_navigation_patch(_main_window)
+_install_image_studio_patch(_main_window)
 
 del _install_vram_release_patch
 del _install_sidebar_navigation_patch
+del _install_image_studio_patch
 del _main_window
