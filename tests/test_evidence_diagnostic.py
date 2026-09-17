@@ -34,7 +34,8 @@ def test_evidence_diagnostic_reports_only_unverified_required_fields():
 
     diagnostic = workers.ChatWebWorker._evidence_diagnostic([ledger])
 
-    assert "Example 64GB RAM kit" in diagnostic
+    assert "Candidate 1" in diagnostic
+    assert "Example 64GB RAM kit" not in diagnostic
     assert "exact_kit=UNKNOWN" in diagnostic
     assert "price=REJECTED" in diagnostic
     assert "url=VERIFIED" not in diagnostic
@@ -45,7 +46,7 @@ def test_evidence_diagnostic_is_bounded_to_six_candidates():
     ledgers = []
     for index in range(8):
         ledgers.append({
-            "title": f"Candidate {index + 1}",
+            "title": f"Hidden product {index + 1}",
             "required": ["price"],
             "fields": {
                 "price": {
@@ -60,7 +61,7 @@ def test_evidence_diagnostic_is_bounded_to_six_candidates():
     assert "Candidate 1" in diagnostic
     assert "Candidate 6" in diagnostic
     assert "Candidate 7" not in diagnostic
-    assert "Candidate 8" not in diagnostic
+    assert "Hidden product" not in diagnostic
 
 
 def test_worker_fail_closed_output_includes_candidate_rejection_reason(monkeypatch):
@@ -112,5 +113,7 @@ def test_worker_fail_closed_output_includes_candidate_rejection_reason(monkeypat
     assert finished == [True]
     assert "FAIL-CLOSED (0 accepted products)" in combined
     assert "Evidence diagnostic:" in combined
+    assert "Candidate 1" in combined
     assert "exact_kit=REJECTED" in combined
     assert "total-capacity conflict" in combined
+    assert "32GB DDR4" not in combined
