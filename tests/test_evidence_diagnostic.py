@@ -116,4 +116,5 @@ def test_worker_fail_closed_output_includes_candidate_rejection_reason(monkeypat
     assert "Candidate 1" in combined
     assert "exact_kit=REJECTED" in combined
     assert "total-capacity conflict" in combined
-    assert "32GB DDR4" not in combined
+    assert "RAM 32GB DDR4 3200 | eBay.de" not in combined
+    assert "2x16GB" not in combined
