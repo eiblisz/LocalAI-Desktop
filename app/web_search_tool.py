@@ -524,6 +524,9 @@ STOP_TERMS = {
     "keress", "keresd", "meg", "legfrissebb", "fontos", "hirek", "hírek",
     "foglald", "ossze", "össze", "roviden", "röviden", "csak", "konkret",
     "konkrét", "friss", "informaciot", "információt", "irj", "írj",
+    "nekem", "kitet", "alatt", "adj", "adni", "kozvetlen", "közvetlen",
+    "linket", "linkeket", "linkek", "nemetorszagban", "németországban",
+    "germany", "deutschland", "under", "below", "maximum", "max",
 }
 
 
@@ -657,6 +660,62 @@ def build_search_plan(query):
     return plan
 
 
+def _format_exact_kit(value):
+    normalized = str(value or "").lower()
+    match = re.fullmatch(r"(\d+)x(\d+)(gb|tb)", normalized)
+    if not match:
+        return str(value or "")
+    return f"{match.group(1)}x{match.group(2)}{match.group(3).upper()}"
+
+
+def build_provider_query(plan):
+    original = " ".join(str(plan.get("query") or "").split())
+    hard_values = [
+        plan.get("exact_kit"),
+        plan.get("memory_type"),
+        plan.get("speed_mhz"),
+        plan.get("max_price"),
+        plan.get("country"),
+    ]
+    if not any(value not in {None, ""} for value in hard_values):
+        return original
+
+    excluded = {
+        _normalized_spec_text(plan.get("exact_kit")),
+        _normalized_spec_text(plan.get("memory_type")),
+        str(plan.get("speed_mhz") or ""),
+        str(int(plan["max_price"])) if isinstance(plan.get("max_price"), float) and plan["max_price"].is_integer() else str(plan.get("max_price") or ""),
+        str(plan.get("currency") or "").lower(),
+    }
+    topic_terms = []
+    for term in _query_terms(original):
+        normalized = _normalized_spec_text(term)
+        if normalized in excluded or term.isdigit():
+            continue
+        if term not in topic_terms:
+            topic_terms.append(term)
+        if len(topic_terms) >= 6:
+            break
+
+    parts = []
+    if plan.get("exact_kit"):
+        parts.append(_format_exact_kit(plan["exact_kit"]))
+    if plan.get("memory_type"):
+        parts.append(str(plan["memory_type"]).upper())
+    if plan.get("speed_mhz") is not None:
+        parts.append(f"{int(plan['speed_mhz'])} MHz")
+    parts.extend(topic_terms)
+    if plan.get("country") == "DE":
+        parts.append("Germany")
+    if plan.get("max_price") is not None and plan.get("currency"):
+        amount = float(plan["max_price"])
+        display = str(int(amount)) if amount.is_integer() else str(amount)
+        parts.append(f"under {display} {plan['currency']}")
+
+    canonical = " ".join(str(value).strip() for value in parts if str(value).strip())
+    return canonical[:260] or original
+
+
 def _hard_query_specs(query):
     plan = build_search_plan(query)
     specs = []
@@ -703,7 +762,6 @@ def _result_price_values(item, currency):
 
 def _validate_result_against_plan(plan, item, require_verified=True):
     evidence = _result_evidence_text(item)
-    normalized = _normalized_spec_text(evidence)
     reasons = []
 
     requested_kit = str(plan.get("exact_kit") or "")
@@ -883,8 +941,9 @@ def source_entries(payload, limit=10):
 
 def _fetch_top_pages(results, timeout):
     missing = []
+    bounded = results[: min(6, len(results))]
 
-    for item in results[: min(3, len(results))]:
+    for item in bounded:
         try:
             item["page_text"] = _safe_page_text(
                 item["url"],
@@ -905,7 +964,7 @@ def _fetch_top_pages(results, timeout):
         except Exception:
             browser_pages = {}
 
-        for item in results[: min(3, len(results))]:
+        for item in bounded:
             if not item.get("page_text"):
                 item["page_text"] = browser_pages.get(item["url"], "")
 
@@ -916,23 +975,24 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
         raise WebSearchError("A web search query is required.")
 
     search_plan = build_search_plan(clean)
+    provider_query = build_provider_query(search_plan)
     limit = max(1, min(int(max_results or 6), 10))
     attempts = []
     if brave_search_configured():
         attempts.append(
             (
                 "Brave Search API",
-                lambda: _search_brave_api(clean, limit, timeout),
+                lambda: _search_brave_api(provider_query, limit, timeout),
             )
         )
 
     attempts.extend([
-        ("Bing Web RSS", lambda: _search_bing_rss(clean, limit, timeout, news=False)),
-        ("Bing HTML", lambda: _search_bing_html(clean, limit, timeout)),
-        ("Bing News RSS", lambda: _search_bing_rss(clean, limit, timeout, news=True)),
-        ("Yahoo Search HTML", lambda: _search_yahoo_html(clean, limit, timeout)),
-        ("DuckDuckGo Lite", lambda: _search_ddg_lite(clean, limit, timeout)),
-        ("Edge Browser / Bing", lambda: browser_search(clean, limit, timeout)),
+        ("Bing Web RSS", lambda: _search_bing_rss(provider_query, limit, timeout, news=False)),
+        ("Bing HTML", lambda: _search_bing_html(provider_query, limit, timeout)),
+        ("Bing News RSS", lambda: _search_bing_rss(provider_query, limit, timeout, news=True)),
+        ("Yahoo Search HTML", lambda: _search_yahoo_html(provider_query, limit, timeout)),
+        ("DuckDuckGo Lite", lambda: _search_ddg_lite(provider_query, limit, timeout)),
+        ("Edge Browser / Bing", lambda: browser_search(provider_query, limit, timeout)),
     ])
     errors = []
 
@@ -945,7 +1005,7 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
                 continue
 
             results = _filter_relevant_results(
-                clean,
+                provider_query,
                 results,
                 plan=search_plan,
                 require_verified=not fetch_pages,
@@ -959,7 +1019,7 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
             if fetch_pages:
                 _fetch_top_pages(results, timeout)
                 results = _filter_relevant_results(
-                    clean,
+                    provider_query,
                     results,
                     plan=search_plan,
                     require_verified=True,
@@ -973,6 +1033,7 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
             return {
                 "provider": payload.get("provider", name),
                 "query": clean,
+                "provider_query": provider_query,
                 "search_plan": search_plan,
                 "retrieved_at": datetime.now().isoformat(timespec="seconds"),
                 "results": results,
@@ -993,9 +1054,14 @@ def web_search_context_text(payload):
         f"Provider: {payload.get('provider', '')}",
         f"Retrieved: {payload.get('retrieved_at', '')}",
         f"Query: {payload.get('query', '')}",
+    ]
+    provider_query = str(payload.get("provider_query", "")).strip()
+    if provider_query and provider_query != str(payload.get("query", "")).strip():
+        lines.append(f"Provider query: {provider_query}")
+    lines.extend([
         "",
         "SEARCH RESULTS",
-    ]
+    ])
 
     for index, item in enumerate(payload.get("results") or [], start=1):
         lines.extend([
