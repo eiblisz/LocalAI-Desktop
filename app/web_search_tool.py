@@ -1022,11 +1022,11 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
                     provider_query,
                     results,
                     plan=search_plan,
-                    require_verified=True,
+                    require_verified=False,
                 )
                 if not results:
                     errors.append(
-                        f"{name}: hard constraints could not be verified"
+                        f"{name}: results contradicted hard constraints after page fetch"
                     )
                     continue
 
