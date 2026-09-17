@@ -26,6 +26,27 @@ def _is_schedule_chat(window, chat):
     return chat_id in _scheduled_chat_ids(window) or title.startswith("[SCHEDULE]")
 
 
+def _open_schedule_history(window, task_id):
+    """Open an existing schedule history without creating or mutating data."""
+    try:
+        task = window.scheduler_store.get(task_id)
+    except Exception:
+        return
+
+    chat_id = str(task.get("chat_id", "") or "").strip()
+    if not chat_id:
+        return
+
+    try:
+        chat = window.store.load(chat_id)
+    except Exception:
+        return
+
+    window.current_chat = chat
+    window._render_chat()
+    window._load_chat_list()
+
+
 def install_sidebar_navigation_patch(main_window_module):
     MainWindow = main_window_module.MainWindow
     if getattr(MainWindow, "_sidebar_navigation_patch_installed", False):
@@ -47,7 +68,6 @@ def install_sidebar_navigation_patch(main_window_module):
         self.schedule_button.clicked.connect(self._open_scheduler)
         layout.addWidget(self.schedule_button)
 
-        # Navigation destinations whose dedicated views are separate future slices.
         self.sidebar_navigation_buttons = {}
         for text in ["PROJECTS", "BROWSER", "MEMORY", "SETTINGS"]:
             button = QPushButton(text)
@@ -88,10 +108,6 @@ def install_sidebar_navigation_patch(main_window_module):
     def _load_chat_list(self):
         selected_id = self.current_chat.get("id") if self.current_chat else None
         all_chats = self.store.list_chats(include_closed=True)
-
-        # Closed chats remain persisted and recoverable through storage APIs, but are
-        # intentionally not a separate visible sidebar section. Scheduler histories
-        # likewise remain persisted and are represented by the SCHEDULES section.
         chats = [
             chat
             for chat in all_chats
@@ -114,6 +130,67 @@ def install_sidebar_navigation_patch(main_window_module):
         if selected_row >= 0:
             self.chat_list.setCurrentRow(selected_row)
 
+    def _refresh_schedule_task_labels(self):
+        if not hasattr(self, "schedule_task_status_layout"):
+            return
+
+        self._clear_schedule_task_labels()
+        tasks = self.scheduler_store.list_tasks()
+        running_id = ""
+        if self.scheduled_worker is not None:
+            running_id = str(getattr(self.scheduled_worker, "task", {}).get("id", ""))
+
+        for task in tasks:
+            enabled = bool(task.get("enabled", True))
+            failed = task.get("last_status") == "failed"
+            running = task.get("id") == running_id
+            pulse = self.schedule_pulse_on
+
+            if failed and enabled:
+                dot = "●"
+                color = "#E07A82" if pulse else "#B95A63"
+                suffix = "  ERROR"
+            elif running:
+                dot = "●"
+                color = "#8AC89C" if pulse else "#5FAE78"
+                suffix = "  RUNNING"
+            elif enabled:
+                dot = "●"
+                color = "#86C69A" if pulse else "#65A97A"
+                suffix = ""
+            else:
+                dot = "○"
+                color = "#7F8995"
+                suffix = "  DISABLED"
+
+            name = str(task.get("name", "Scheduled task")).strip() or "Scheduled task"
+            task_id = str(task.get("id", "") or "")
+            button = QPushButton(f"{dot}  {name}{suffix}")
+            button.setObjectName("scheduleHistoryButton")
+            button.setStyleSheet(
+                "QPushButton {"
+                "background:transparent;border:none;border-radius:6px;"
+                f"padding:3px 4px 3px 8px;color:{color};font-size:13px;"
+                "text-align:left;"
+                "}"
+                "QPushButton:hover {background:#1D2630;color:#FFFFFF;}"
+            )
+            button.setToolTip(
+                "Open this schedule's saved output/history.\n"
+                "Type: {task_type}\nNext run: {next_run}\nLast status: {last_status}".format(
+                    task_type=task.get("task_type", "custom"),
+                    next_run=task.get("next_run_at") or "not scheduled",
+                    last_status=task.get("last_status", "never"),
+                )
+            )
+            button.clicked.connect(
+                lambda _checked=False, selected_task_id=task_id: _open_schedule_history(
+                    self, selected_task_id
+                )
+            )
+            self.schedule_task_status_layout.addWidget(button)
+
     MainWindow._build_sidebar = _build_sidebar
     MainWindow._load_chat_list = _load_chat_list
+    MainWindow._refresh_schedule_task_labels = _refresh_schedule_task_labels
     MainWindow._sidebar_navigation_patch_installed = True
