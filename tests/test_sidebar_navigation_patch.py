@@ -1,7 +1,7 @@
 import inspect
 
 from app.main_window import MainWindow
-from app.sidebar_navigation_patch import _is_schedule_chat
+from app.sidebar_navigation_patch import _is_schedule_chat, _open_schedule_history
 
 
 class _SchedulerStore:
@@ -11,10 +11,38 @@ class _SchedulerStore:
     def list_tasks(self):
         return list(self._tasks)
 
+    def get(self, task_id):
+        for task in self._tasks:
+            if task.get("id") == task_id:
+                return task
+        raise KeyError(task_id)
+
+
+class _ChatStore:
+    def __init__(self, chats):
+        self._chats = chats
+        self.saved = False
+
+    def load(self, chat_id):
+        return dict(self._chats[chat_id])
+
+    def save(self, _chat):
+        self.saved = True
+
 
 class _Window:
-    def __init__(self, tasks):
+    def __init__(self, tasks, chats=None):
         self.scheduler_store = _SchedulerStore(tasks)
+        self.store = _ChatStore(chats or {})
+        self.current_chat = None
+        self.rendered = False
+        self.reloaded = False
+
+    def _render_chat(self):
+        self.rendered = True
+
+    def _load_chat_list(self):
+        self.reloaded = True
 
 
 def test_sidebar_has_navigation_then_distinct_schedule_and_chat_sections():
@@ -47,6 +75,38 @@ def test_chat_list_filter_is_presentation_only_and_does_not_delete_history():
     assert ".delete(" not in source
     assert ".save(" not in source
     assert "scheduler_store.mark_result" not in source
+
+
+def test_schedule_rows_are_clickable_and_two_pixels_larger():
+    source = inspect.getsource(MainWindow._refresh_schedule_task_labels)
+
+    assert 'QPushButton(f"{dot}  {name}{suffix}")' in source
+    assert "font-size:13px" in source
+    assert "_open_schedule_history" in source
+
+
+def test_schedule_click_opens_existing_history_without_mutating_storage():
+    window = _Window(
+        [{"id": "task-1", "chat_id": "schedule-chat-1"}],
+        {"schedule-chat-1": {"id": "schedule-chat-1", "title": "[SCHEDULE] Ido teszt"}},
+    )
+
+    _open_schedule_history(window, "task-1")
+
+    assert window.current_chat["id"] == "schedule-chat-1"
+    assert window.rendered
+    assert window.reloaded
+    assert not window.store.saved
+
+
+def test_schedule_click_without_history_is_fail_closed_and_creates_nothing():
+    window = _Window([{"id": "task-1", "chat_id": ""}])
+
+    _open_schedule_history(window, "task-1")
+
+    assert window.current_chat is None
+    assert not window.rendered
+    assert not window.store.saved
 
 
 def test_existing_scheduler_completion_still_persists_and_does_not_steal_chat():
