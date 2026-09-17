@@ -9,6 +9,11 @@ from .computer_status_tool import (
     get_computer_status,
 )
 from .ebay_tool import ebay_context_text, search_ebay
+from .evidence_verifier import (
+    evidence_ledger_context_text,
+    filter_verified_results,
+    verify_answer_against_evidence,
+)
 from .ollama_client import OllamaClient
 from .weather_tool import get_weather, weather_context_text
 from .web_search_tool import (
@@ -332,6 +337,31 @@ class ChatWebWorker(QObject):
             queries = [self._preserve_search_constraints(queries[0])]
         return queries
 
+    def _safe_evidence_failure(self, answer_rejected=False):
+        if "Hungarian" in self._conversation_language_instruction():
+            if answer_rejected:
+                return (
+                    "Az ellenorzesi lepes elutasitotta a generalt valaszt, mert olyan "
+                    "arat, specifikaciot vagy linket tartalmazott, amelyet a bizonyitekok "
+                    "nem igazoltak. Inkabb nem jelenitek meg bizonytalan ajanlast."
+                )
+            return (
+                "Nem talaltam eleg termekszintu bizonyitekot olyan ajanlathoz, amely "
+                "egyszerre teljesiti az osszes kert hard feltetelt. A rendszer nem "
+                "jelenit meg nem ellenorzott termeket, arat vagy specifikaciot."
+            )
+        if answer_rejected:
+            return (
+                "The generated answer was rejected because it contained a price, "
+                "specification, or link that was not verified by the evidence. "
+                "I will not show an unverified recommendation."
+            )
+        return (
+            "I could not find enough product-level evidence for an offer that satisfies "
+            "all requested hard constraints. Unverified products, prices, and "
+            "specifications are not shown."
+        )
+
     @Slot()
     def run(self):
         try:
@@ -346,6 +376,9 @@ class ChatWebWorker(QObject):
             successful_providers = []
             provider_fallback_notes = []
             failed_queries = []
+            evidence_ledgers = []
+            verification_queries = []
+            constrained_rejections = []
 
             for query in queries:
                 if self._stop_event.is_set():
@@ -364,6 +397,25 @@ class ChatWebWorker(QObject):
                     )
                     continue
 
+                context_body = web_search_context_text(payload)
+                if isinstance(payload.get("search_plan"), dict):
+                    verified_results, ledgers, constrained = filter_verified_results(
+                        query,
+                        payload.get("results") or [],
+                    )
+                    if constrained:
+                        evidence_ledgers.extend(ledgers)
+                        payload = dict(payload)
+                        payload["results"] = verified_results
+                        if not verified_results:
+                            constrained_rejections.append(query)
+                            failed_queries.append(
+                                f"{query}: no product-specific evidence passed hard constraints"
+                            )
+                            continue
+                        verification_queries.append(query)
+                        context_body = evidence_ledger_context_text(payload)
+
                 query_urls = source_urls(payload)
                 if not query_urls:
                     failed_queries.append(
@@ -380,7 +432,7 @@ class ChatWebWorker(QObject):
                         provider_fallback_notes.append(str(note))
                 contexts.append(
                     f"SEARCH QUERY: {query}\n"
-                    f"{web_search_context_text(payload)}"
+                    f"{context_body}"
                 )
                 for url in query_urls:
                     if url not in urls:
@@ -393,6 +445,16 @@ class ChatWebWorker(QObject):
                         entries.append(entry)
 
             if not contexts or not urls:
+                if constrained_rejections:
+                    self.token.emit(self._safe_evidence_failure())
+                    self.token.emit(
+                        "\n\n---\n"
+                        f"Search query: {constrained_rejections[0]}\n"
+                        "Evidence verification: FAIL-CLOSED (0 accepted products)"
+                    )
+                    self.finished.emit()
+                    return
+
                 detail = " | ".join(failed_queries[:4])
                 raise RuntimeError(
                     "Web research returned no usable public sources."
@@ -428,11 +490,13 @@ class ChatWebWorker(QObject):
                     "If one part has no supporting source, say that explicitly for that "
                     "part instead of inventing an answer. Never invent prices, "
                     "specifications, dates, availability, ratings, comparisons, or "
-                    "quotations. Do not answer an adjacent topic. When you mention a "
-                    "specific product, offer, article, or result, include its provided "
-                    "source URL in the same bullet or sentence using Markdown link syntax. "
-                    "Do not say you cannot browse the web; the authorized web data has "
-                    "already been collected for you. "
+                    "quotations. Do not answer an adjacent topic. When VERIFIED WEB "
+                    "EVIDENCE LEDGER data is present, mention only ACCEPT results and "
+                    "only fields explicitly marked VERIFIED. When you mention a specific "
+                    "product, offer, article, or result, include its provided source URL "
+                    "in the same bullet or sentence using Markdown link syntax. Do not "
+                    "say you cannot browse the web; the authorized web data has already "
+                    "been collected for you. "
                     + self._conversation_language_instruction()
                 ),
             }
@@ -461,16 +525,41 @@ class ChatWebWorker(QObject):
                 + [grounded_user]
             )
 
+            answer_parts = []
             self.client.chat_stream(
                 model=self.model,
                 messages=stream_messages,
-                on_token=self.token.emit,
+                on_token=answer_parts.append,
                 should_stop=self._stop_event.is_set,
             )
 
             if self._stop_event.is_set():
                 self.finished.emit()
                 return
+
+            answer = "".join(answer_parts).strip()
+            if not answer:
+                raise RuntimeError("The model returned an empty web answer.")
+
+            verification_status = ""
+            unique_verification_queries = list(dict.fromkeys(verification_queries))
+            if len(unique_verification_queries) == 1:
+                valid, reasons = verify_answer_against_evidence(
+                    answer,
+                    unique_verification_queries[0],
+                    evidence_ledgers,
+                )
+                if not valid:
+                    answer = self._safe_evidence_failure(answer_rejected=True)
+                    verification_status = (
+                        "Answer verification: FAIL-CLOSED ("
+                        + ", ".join(reasons[:3])
+                        + ")"
+                    )
+                else:
+                    verification_status = "Evidence + answer verification: PASS"
+
+            self.token.emit(answer)
 
             if entries:
                 source_lines = "\n".join(
@@ -511,11 +600,18 @@ class ChatWebWorker(QObject):
                     + brave_fallback[0].split(":", 1)[1].strip()
                 )
 
+            verification_footer = (
+                f"\n{verification_status}"
+                if verification_status
+                else ""
+            )
+
             self.token.emit(
                 "\n\n---\n"
                 f"{query_footer}\n"
                 f"{provider_footer}"
-                f"{fallback_footer}\n"
+                f"{fallback_footer}"
+                f"{verification_footer}\n"
                 "Web results / sources:\n"
                 f"{source_lines}"
             )
@@ -525,7 +621,6 @@ class ChatWebWorker(QObject):
 
     def stop(self):
         self._stop_event.set()
-
 
 
 class DocumentWorker(QObject):
@@ -550,7 +645,6 @@ class DocumentWorker(QObject):
             self.finished.emit(content)
         except Exception as exc:
             self.failed.emit(str(exc))
-
 
 
 class ScheduledTaskWorker(QObject):
