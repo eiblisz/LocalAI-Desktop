@@ -196,6 +196,16 @@ def install_shopping_search_patch(web_search_tool):
                 item for item in bounded_results
                 if _has_exact_topic_token(web_search_tool, query, item)
             ]
+            validated_results = []
+            for item in bounded_results:
+                valid, _reasons = web_search_tool._validate_result_against_plan(
+                    effective_plan,
+                    item,
+                    require_verified=require_verified,
+                )
+                if valid:
+                    validated_results.append(item)
+            return validated_results
 
         return original_filter_relevant_results(
             query,
