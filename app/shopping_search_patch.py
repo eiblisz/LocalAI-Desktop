@@ -60,6 +60,40 @@ def _is_generic_shopping_url(url):
     return False
 
 
+def _shopping_topic_terms(web_search_tool, query):
+    ignored = {
+        "eur", "usd", "under", "below", "maximum", "max", "alatt",
+        "felett", "unter", "uber", "ueber", "deutschland", "germany",
+        "kaufen", "buy", "shop", "offer", "angebot", "angebote",
+    }
+    terms = []
+    for term in web_search_tool._query_terms(query):
+        folded = web_search_tool._normalized_spec_text(term)
+        if term.isdigit() or folded in ignored:
+            continue
+        if folded and folded not in terms:
+            terms.append(folded)
+    return terms[:4]
+
+
+def _has_exact_topic_token(web_search_tool, query, item):
+    topic_terms = _shopping_topic_terms(web_search_tool, query)
+    if not topic_terms:
+        return True
+
+    evidence = " ".join([
+        str(item.get("title", "")),
+        str(item.get("snippet", "")),
+        str(item.get("page_text", "")),
+    ]).lower()
+    evidence_tokens = {
+        web_search_tool._normalized_spec_text(token)
+        for token in re.findall(r"\w+", evidence, flags=re.UNICODE)
+        if token
+    }
+    return any(term in evidence_tokens for term in topic_terms)
+
+
 def install_shopping_search_patch(web_search_tool):
     if getattr(web_search_tool, "_shopping_search_patch_installed", False):
         return
@@ -147,6 +181,11 @@ def install_shopping_search_patch(web_search_tool):
             ]
             if product_results:
                 bounded_results = product_results
+        elif effective_plan.get("max_price") is not None:
+            bounded_results = [
+                item for item in bounded_results
+                if _has_exact_topic_token(web_search_tool, query, item)
+            ]
 
         return original_filter_relevant_results(
             query,
