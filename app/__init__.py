@@ -1,0 +1,7 @@
+from . import web_search_tool as _web_search_tool
+from .shopping_search_patch import install_shopping_search_patch as _install_shopping_search_patch
+
+_install_shopping_search_patch(_web_search_tool)
+
+del _install_shopping_search_patch
+del _web_search_tool
