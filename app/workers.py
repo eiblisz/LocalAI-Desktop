@@ -381,11 +381,8 @@ class ChatWebWorker(QObject):
             if not issues:
                 continue
 
-            title = " ".join(str(ledger.get("title") or "(untitled)").split())
-            if len(title) > 100:
-                title = title[:97].rstrip() + "..."
             lines.append(
-                f"{index}. {title} -> "
+                f"Candidate {index} -> "
                 + "; ".join(issues[:4])
             )
         return "\n".join(lines)
