@@ -89,6 +89,16 @@ def install_shopping_search_patch(web_search_tool):
         if speed_mhz is not None:
             parts.append(f"{int(speed_mhz)} MHz")
 
+        ignored_topic_tokens = {
+            "mhz",
+            "mts",
+            "mtps",
+            "eur",
+            "usd",
+            "gb",
+            "tb",
+            "ram",
+        }
         topic_terms = []
         for term in web_search_tool._query_terms(plan.get("query") or ""):
             normalized = web_search_tool._normalized_spec_text(term)
@@ -98,7 +108,7 @@ def install_shopping_search_patch(web_search_tool):
                 str(speed_mhz or ""),
             }:
                 continue
-            if term.isdigit():
+            if term.isdigit() or normalized in ignored_topic_tokens:
                 continue
             if term not in topic_terms:
                 topic_terms.append(term)
@@ -106,9 +116,7 @@ def install_shopping_search_patch(web_search_tool):
                 break
 
         parts.extend(topic_terms)
-        if not any(term.lower() == "ram" for term in parts):
-            parts.append("RAM")
-        parts.extend(["kit", "kaufen"])
+        parts.extend(["RAM", "kit", "kaufen"])
 
         if plan.get("country") == "DE":
             parts.extend(["Germany", "Deutschland"])
