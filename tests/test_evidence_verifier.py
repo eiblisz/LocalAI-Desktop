@@ -26,7 +26,7 @@ def test_listing_page_cannot_override_conflicting_product_identity():
     assert ledger["verdict"] == "REJECT"
 
 
-def test_generic_listing_without_product_level_exact_kit_is_rejected():
+def test_generic_listing_with_conflicting_total_capacity_is_rejected():
     result = {
         "title": "RAM 32GB DDR4 3200 | eBay.de",
         "url": "https://www.ebay.de/sch/i.html?_nkw=ram",
@@ -36,7 +36,54 @@ def test_generic_listing_without_product_level_exact_kit_is_rejected():
 
     ledger = evidence_verifier.build_evidence_ledger(QUERY, result)
 
-    assert ledger["fields"]["exact_kit"]["status"] == evidence_verifier.UNKNOWN
+    assert ledger["fields"]["exact_kit"]["status"] == evidence_verifier.REJECTED
+    assert ledger["verdict"] == "REJECT"
+
+
+def test_matching_total_capacity_can_back_page_level_exact_kit_evidence():
+    result = {
+        "title": "Corsair Vengeance LPX 64GB Kit DDR4-3200 CL16",
+        "url": "https://www.idealo.de/preisvergleich/corsair-64gb.html",
+        "snippet": "Gunstigster Preis 599.00 EUR in Deutschland",
+        "page_text": (
+            "Produktdetails Speicher-Kit 2 x 32 GB. DDR4. "
+            "Datentransferrate 3200 MHz."
+        ),
+    }
+
+    ledger = evidence_verifier.build_evidence_ledger(QUERY, result)
+
+    assert ledger["fields"]["exact_kit"]["status"] == evidence_verifier.VERIFIED
+    assert ledger["fields"]["exact_kit"]["evidence"].startswith("fetched page")
+    assert ledger["verdict"] == "ACCEPT"
+
+
+def test_explicit_lowest_price_marker_can_select_lowest_identity_price():
+    result = {
+        "title": "Patriot Viper Steel 64GB (2x32GB) DDR4-3200 ab 489.88 EUR",
+        "url": "https://www.idealo.de/preisvergleich/patriot-64gb.html",
+        "snippet": "489.88 EUR - 770.22 EUR, Germany",
+        "page_text": "Patriot Viper Steel 2x32GB DDR4 3200 MHz",
+    }
+
+    ledger = evidence_verifier.build_evidence_ledger(QUERY, result)
+
+    assert ledger["fields"]["price"]["status"] == evidence_verifier.VERIFIED
+    assert ledger["fields"]["price"]["value"] == 489.88
+    assert ledger["verdict"] == "ACCEPT"
+
+
+def test_ambiguous_multiple_prices_without_lowest_price_marker_stays_unknown():
+    result = {
+        "title": "Patriot Viper Steel 64GB (2x32GB) DDR4-3200",
+        "url": "https://shop.example.de/patriot-64gb",
+        "snippet": "Prices shown: 489.88 EUR and 519.48 EUR",
+        "page_text": "Patriot Viper Steel 2x32GB DDR4 3200 MHz",
+    }
+
+    ledger = evidence_verifier.build_evidence_ledger(QUERY, result)
+
+    assert ledger["fields"]["price"]["status"] == evidence_verifier.UNKNOWN
     assert ledger["verdict"] == "REJECT"
 
 
