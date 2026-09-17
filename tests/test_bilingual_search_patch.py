@@ -13,11 +13,11 @@ class SequenceClient:
         return self.responses.pop(0)
 
 
-def test_new_hungarian_search_adds_bounded_german_market_query():
-    prompt = "Keress nekem teás kannát 100 EUR alatt, és adj közvetlen linkeket."
+def test_new_hungarian_search_adds_normalized_hungarian_and_german_queries():
+    prompt = "Keress nekem teas kannat 100 EUR alatt."
     client = SequenceClient([
-        "teás kanna 100 EUR alatt\nolcsó teáskanna 100 EUR alatt",
-        "Teekanne unter 100 EUR kaufen",
+        "tea kettle under 100 EUR",
+        "HU: teaskanna 100 EUR alatt\nDE: Teekanne unter 100 EUR kaufen Deutschland",
     ])
     worker = workers.ChatWebWorker(
         client,
@@ -28,11 +28,10 @@ def test_new_hungarian_search_adds_bounded_german_market_query():
 
     queries = worker._generate_search_queries()
 
-    assert queries[0] == prompt
-    assert len(queries) == 2
-    assert "Teekanne" in queries[1]
-    assert "100 EUR" in queries[1]
-    assert "Deutschland" in queries[1]
+    assert queries == [
+        "teaskanna 100 EUR alatt",
+        "Teekanne unter 100 EUR kaufen Deutschland",
+    ]
     assert len(client.calls) == 2
 
 
@@ -73,4 +72,20 @@ def test_referential_followup_keeps_existing_context_resolution_path():
     queries = worker._generate_search_queries()
 
     assert queries == ["teás kanna olcsóbban"]
+    assert len(client.calls) == 1
+
+
+def test_non_shopping_hungarian_research_does_not_auto_expand():
+    prompt = "Keress ra a legfrissebb Qwen hirekre"
+    client = SequenceClient([
+        "Qwen local AI latest news",
+    ])
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        prompt,
+    )
+
+    assert worker._generate_search_queries() == ["Qwen local AI latest news"]
     assert len(client.calls) == 1
