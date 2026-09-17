@@ -487,6 +487,87 @@ def test_hardware_relevance_requires_exact_kit_and_speed_specs():
     ]
 
 
+
+def test_structured_search_plan_captures_hard_shopping_constraints():
+    plan = web_search_tool.build_search_plan(
+        "2x32GB DDR4 3200 MHz RAM Germany under 700 EUR"
+    )
+
+    assert plan["exact_kit"] == "2x32gb"
+    assert plan["memory_type"] == "ddr4"
+    assert plan["speed_mhz"] == 3200
+    assert plan["country"] == "DE"
+    assert plan["max_price"] == 700.0
+    assert plan["currency"] == "EUR"
+
+
+def test_hard_constraint_validator_rejects_wrong_or_over_budget_products():
+    results = [
+        {
+            "title": "Kingston 32GB 2x16GB DDR4 3200MHz",
+            "url": "https://shop.example.de/wrong-capacity",
+            "snippet": "Germany price 149 EUR",
+        },
+        {
+            "title": "Kingston 64GB 2x32GB DDR4 3600MHz",
+            "url": "https://shop.example.de/wrong-speed",
+            "snippet": "Germany price 179 EUR",
+        },
+        {
+            "title": "Kingston 64GB 2x32GB DDR4 3200MHz",
+            "url": "https://shop.example.de/over-budget",
+            "snippet": "Germany price 701 EUR",
+        },
+        {
+            "title": "Kingston 64GB 2x32GB DDR4 3200MHz",
+            "url": "https://shop.example.de/right",
+            "snippet": "Germany price 699,99 EUR",
+        },
+    ]
+
+    filtered = web_search_tool._filter_relevant_results(
+        "2x32GB DDR4 3200MHz RAM Germany 700 EUR",
+        results,
+    )
+
+    assert [item["url"] for item in filtered] == [
+        "https://shop.example.de/right"
+    ]
+
+
+def test_hard_constraint_validator_fails_closed_when_price_is_unverified():
+    results = [{
+        "title": "Kingston 64GB 2x32GB DDR4 3200MHz",
+        "url": "https://shop.example.de/no-price",
+        "snippet": "Available in Germany",
+    }]
+
+    filtered = web_search_tool._filter_relevant_results(
+        "2x32GB DDR4 3200MHz RAM Germany 700 EUR",
+        results,
+    )
+
+    assert filtered == []
+
+
+def test_hard_constraint_validator_can_verify_price_from_fetched_page():
+    results = [{
+        "title": "Kingston 64GB 2x32GB DDR4 3200MHz",
+        "url": "https://shop.example.de/product",
+        "snippet": "Available in Germany",
+        "page_text": "Current price 189.90 EUR. 2x32GB DDR4 3200MHz.",
+    }]
+
+    filtered = web_search_tool._filter_relevant_results(
+        "2x32GB DDR4 3200MHz RAM Germany 700 EUR",
+        results,
+    )
+
+    assert [item["url"] for item in filtered] == [
+        "https://shop.example.de/product"
+    ]
+
+
 def test_provider_chain_errors_are_returned_on_fallback(monkeypatch):
     monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "secret-test-key")
     monkeypatch.setattr(
