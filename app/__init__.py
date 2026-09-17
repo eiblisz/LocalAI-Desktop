@@ -30,3 +30,13 @@ _install_verified_fallback_patch(_workers)
 
 del _install_verified_fallback_patch
 del _workers
+
+from . import main_window as _main_window
+from .vram_release_patch import (
+    install_vram_release_patch as _install_vram_release_patch,
+)
+
+_install_vram_release_patch(_main_window)
+
+del _install_vram_release_patch
+del _main_window
