@@ -176,12 +176,16 @@ class ChatWebWorker(QObject):
         ]
         return any(marker in normalized for marker in bad_markers)
 
-    def _required_search_constraints(self):
+    def _search_constraint_authority(self):
         source = self.user_prompt
         if self._is_research_followup():
             recent = self._recent_user_requests(limit=1)
             if recent:
                 source = recent[-1]
+        return " ".join(str(source or "").split())
+
+    def _required_search_constraints(self):
+        source = self._search_constraint_authority()
 
         patterns = [
             r"\b\d+\s*[x×]\s*\d+\s*(?:GB|TB)\b",
@@ -197,6 +201,21 @@ class ChatWebWorker(QObject):
                 if clean not in constraints:
                     constraints.append(clean)
         return constraints
+
+    def _has_multiple_research_topics(self):
+        normalized = self._fold_text(self.user_prompt)
+        command_patterns = [
+            r"\bkeress\w*\b",
+            r"\bnezd\s+meg\b",
+            r"\bsearch\b",
+            r"\bfind\b",
+            r"\blook\s+up\b",
+        ]
+        command_count = sum(
+            len(re.findall(pattern, normalized, flags=re.IGNORECASE))
+            for pattern in command_patterns
+        )
+        return command_count >= 2
 
     def _preserve_search_constraints(self, query):
         clean = " ".join(str(query or "").split())
@@ -295,6 +314,13 @@ class ChatWebWorker(QObject):
                 queries.append(clean[:260])
             if len(queries) >= 4:
                 break
+
+        if (
+            self._required_search_constraints()
+            and not self._has_multiple_research_topics()
+        ):
+            authority = self._search_constraint_authority()
+            return [self._preserve_search_constraints(authority)]
 
         if not queries:
             if self._is_research_followup() and recent_requests:
