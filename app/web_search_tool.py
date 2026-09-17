@@ -538,70 +538,303 @@ def _query_terms(query):
     return list(dict.fromkeys(terms))
 
 
-def _hard_query_specs(query):
-    text = str(query or "").lower().replace("×", "x")
-    specs = []
+def _normalized_spec_text(value):
+    return re.sub(
+        r"[^a-z0-9]+",
+        "",
+        str(value or "").lower().replace("×", "x"),
+    )
 
-    for match in re.finditer(
+
+def _parse_price_number(value):
+    raw = str(value or "").strip().replace(" ", "")
+    if not raw:
+        return None
+
+    if "," in raw and "." in raw:
+        if raw.rfind(",") > raw.rfind("."):
+            raw = raw.replace(".", "").replace(",", ".")
+        else:
+            raw = raw.replace(",", "")
+    elif "," in raw:
+        tail = raw.rsplit(",", 1)[-1]
+        raw = raw.replace(",", ".") if len(tail) <= 2 else raw.replace(",", "")
+
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def build_search_plan(query):
+    clean = " ".join(str(query or "").strip().split())
+    text = clean.lower().replace("×", "x")
+    folded = text.translate(str.maketrans({
+        "á": "a", "é": "e", "í": "i", "ó": "o", "ö": "o",
+        "ő": "o", "ú": "u", "ü": "u", "ű": "u",
+    }))
+
+    plan = {
+        "query": clean,
+        "country": "",
+        "exact_kit": "",
+        "memory_type": "",
+        "speed_mhz": None,
+        "max_price": None,
+        "currency": "",
+    }
+
+    kit_match = re.search(
         r"\b\d+\s*x\s*\d+\s*(?:gb|tb)\b",
         text,
         flags=re.IGNORECASE,
-    ):
-        specs.append(
-            ("exact", re.sub(r"[^a-z0-9]+", "", match.group(0)))
-        )
+    )
+    if kit_match:
+        plan["exact_kit"] = _normalized_spec_text(kit_match.group(0))
 
-    for match in re.finditer(r"\bddr\s*[345]\b", text, flags=re.IGNORECASE):
-        specs.append(
-            ("exact", re.sub(r"[^a-z0-9]+", "", match.group(0)))
-        )
+    memory_match = re.search(r"\bddr\s*[345]\b", text, flags=re.IGNORECASE)
+    if memory_match:
+        plan["memory_type"] = _normalized_spec_text(memory_match.group(0))
 
-    for match in re.finditer(
+    speed_match = re.search(
         r"\b(\d{3,5})\s*(?:mhz|mt/s|mts|mtps)\b",
         text,
         flags=re.IGNORECASE,
-    ):
-        specs.append(("speed", match.group(1)))
+    )
+    if speed_match:
+        plan["speed_mhz"] = int(speed_match.group(1))
 
-    return list(dict.fromkeys(specs))
+    if re.search(r"\b(?:germany|deutschland|nemetorszag)\w*\b", folded):
+        plan["country"] = "DE"
+
+    price_patterns = [
+        (
+            r"(?P<amount>\d+(?:[.,]\d+)?)\s*(?P<currency>eur|usd)"
+            r"\s*(?:alatt|under|below|or less|maximum|max)\b"
+        ),
+        (
+            r"\b(?:under|below|up to|maximum|max|legfeljebb)\s*"
+            r"(?P<amount>\d+(?:[.,]\d+)?)\s*(?P<currency>eur|usd)\b"
+        ),
+        (
+            r"(?P<symbol>[€$])\s*(?P<amount>\d+(?:[.,]\d+)?)"
+            r"\s*(?:alatt|under|below|or less|maximum|max)\b"
+        ),
+        (
+            r"\b(?:under|below|up to|maximum|max|legfeljebb)\s*"
+            r"(?P<symbol>[€$])\s*(?P<amount>\d+(?:[.,]\d+)?)\b"
+        ),
+    ]
+    price_match = None
+    for pattern in price_patterns:
+        price_match = re.search(pattern, folded, flags=re.IGNORECASE)
+        if price_match:
+            break
+
+    if price_match:
+        amount = _parse_price_number(price_match.group("amount"))
+        currency = price_match.groupdict().get("currency")
+        symbol = price_match.groupdict().get("symbol")
+        if amount is not None:
+            plan["max_price"] = amount
+            plan["currency"] = (
+                str(currency).upper()
+                if currency
+                else {"€": "EUR", "$": "USD"}.get(symbol, "")
+            )
+    else:
+        preserved_prices = list(re.finditer(
+            r"\b(?P<amount>\d+(?:[.,]\d+)?)\s*(?P<currency>eur|usd)\b",
+            folded,
+            flags=re.IGNORECASE,
+        ))
+        if len(preserved_prices) == 1:
+            amount = _parse_price_number(preserved_prices[0].group("amount"))
+            if amount is not None:
+                plan["max_price"] = amount
+                plan["currency"] = preserved_prices[0].group("currency").upper()
+
+    return plan
 
 
-def _filter_relevant_results(query, results):
+def _hard_query_specs(query):
+    plan = build_search_plan(query)
+    specs = []
+    if plan["exact_kit"]:
+        specs.append(("exact", plan["exact_kit"]))
+    if plan["memory_type"]:
+        specs.append(("exact", plan["memory_type"]))
+    if plan["speed_mhz"] is not None:
+        specs.append(("speed", str(plan["speed_mhz"])))
+    return specs
+
+
+def _result_evidence_text(item):
+    return " ".join([
+        str(item.get("title", "")),
+        str(item.get("snippet", "")),
+        str(item.get("page_text", "")),
+    ]).lower()
+
+
+def _result_price_values(item, currency):
+    evidence = _result_evidence_text(item)
+    currency = str(currency or "").upper()
+    patterns = []
+    if currency == "EUR":
+        patterns = [
+            r"€\s*(\d+(?:[.,]\d+)?)",
+            r"\b(\d+(?:[.,]\d+)?)\s*eur\b",
+        ]
+    elif currency == "USD":
+        patterns = [
+            r"\$\s*(\d+(?:[.,]\d+)?)",
+            r"\b(\d+(?:[.,]\d+)?)\s*usd\b",
+        ]
+
+    values = []
+    for pattern in patterns:
+        for match in re.finditer(pattern, evidence, flags=re.IGNORECASE):
+            value = _parse_price_number(match.group(1))
+            if value is not None:
+                values.append(value)
+    return values
+
+
+def _validate_result_against_plan(plan, item, require_verified=True):
+    evidence = _result_evidence_text(item)
+    normalized = _normalized_spec_text(evidence)
+    reasons = []
+
+    requested_kit = str(plan.get("exact_kit") or "")
+    if requested_kit:
+        found_kits = {
+            _normalized_spec_text(match.group(0))
+            for match in re.finditer(
+                r"\b\d+\s*x\s*\d+\s*(?:gb|tb)\b",
+                evidence.replace("×", "x"),
+                flags=re.IGNORECASE,
+            )
+        }
+        if requested_kit not in found_kits:
+            if found_kits:
+                reasons.append("exact_kit_mismatch")
+            elif require_verified:
+                reasons.append("exact_kit_unverified")
+
+    requested_memory = str(plan.get("memory_type") or "")
+    if requested_memory:
+        found_memory = {
+            _normalized_spec_text(match.group(0))
+            for match in re.finditer(
+                r"\bddr\s*[345]\b",
+                evidence,
+                flags=re.IGNORECASE,
+            )
+        }
+        if requested_memory not in found_memory:
+            if found_memory:
+                reasons.append("memory_type_mismatch")
+            elif require_verified:
+                reasons.append("memory_type_unverified")
+
+    requested_speed = plan.get("speed_mhz")
+    if requested_speed is not None:
+        found_speeds = {
+            int(match.group(1))
+            for match in re.finditer(
+                r"\b(\d{3,5})\s*(?:mhz|mt/s|mts|mtps)\b",
+                evidence,
+                flags=re.IGNORECASE,
+            )
+        }
+        found_speeds.update(
+            int(match.group(1))
+            for match in re.finditer(
+                r"\bddr[345][\s-]+(\d{3,5})\b",
+                evidence,
+                flags=re.IGNORECASE,
+            )
+        )
+        if int(requested_speed) not in found_speeds:
+            if found_speeds:
+                reasons.append("speed_mismatch")
+            elif require_verified:
+                reasons.append("speed_unverified")
+
+    country = str(plan.get("country") or "")
+    if country == "DE":
+        host = ""
+        try:
+            host = (urlparse(str(item.get("url", ""))).hostname or "").lower()
+        except Exception:
+            host = ""
+        country_verified = (
+            host.endswith(".de")
+            or bool(re.search(
+                r"\b(?:germany|deutschland|nemetorszag)\w*\b",
+                evidence.translate(str.maketrans({
+                    "á": "a", "é": "e", "í": "i", "ó": "o", "ö": "o",
+                    "ő": "o", "ú": "u", "ü": "u", "ű": "u",
+                })),
+                flags=re.IGNORECASE,
+            ))
+        )
+        if require_verified and not country_verified:
+            reasons.append("country_unverified")
+
+    max_price = plan.get("max_price")
+    currency = str(plan.get("currency") or "")
+    if max_price is not None and currency:
+        prices = _result_price_values(item, currency)
+        if prices:
+            if min(prices) > float(max_price):
+                reasons.append("price_above_max")
+        elif require_verified:
+            reasons.append("price_unverified")
+
+    return (not reasons), reasons
+
+
+def _filter_relevant_results(
+    query,
+    results,
+    *,
+    plan=None,
+    require_verified=True,
+):
     terms = _query_terms(query)
-    hard_specs = _hard_query_specs(query)
-    if not terms and not hard_specs:
+    plan = plan or build_search_plan(query)
+    if not terms and not any(
+        value for key, value in plan.items()
+        if key not in {"query", "speed_mhz", "max_price"}
+    ) and plan.get("speed_mhz") is None and plan.get("max_price") is None:
         return list(results)
 
     minimum_matches = 1 if len(terms) <= 2 else 2
     relevant = []
 
     for item in results:
+        valid, _reasons = _validate_result_against_plan(
+            plan,
+            item,
+            require_verified=require_verified,
+        )
+        if not valid:
+            continue
+
         haystack = " ".join([
             str(item.get("title", "")),
             str(item.get("snippet", "")),
+            str(item.get("page_text", "")),
         ]).lower()
-        normalized_haystack = re.sub(
-            r"[^a-z0-9]+",
-            "",
-            haystack.replace("×", "x"),
-        )
-
-        hard_match = True
-        for kind, value in hard_specs:
-            if kind == "exact" and value not in normalized_haystack:
-                hard_match = False
-                break
-            if kind == "speed" and value not in normalized_haystack:
-                hard_match = False
-                break
-        if not hard_match:
-            continue
+        normalized_haystack = _normalized_spec_text(haystack)
 
         matched = {
             term for term in terms
             if (
                 term in haystack
-                or re.sub(r"[^a-z0-9]+", "", term) in normalized_haystack
+                or _normalized_spec_text(term) in normalized_haystack
             )
         }
         if len(matched) >= minimum_matches:
@@ -682,6 +915,7 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
     if not clean:
         raise WebSearchError("A web search query is required.")
 
+    search_plan = build_search_plan(clean)
     limit = max(1, min(int(max_results or 6), 10))
     attempts = []
     if brave_search_configured():
@@ -710,17 +944,36 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
                 errors.append(f"{name}: no results")
                 continue
 
-            results = _filter_relevant_results(clean, results)
+            results = _filter_relevant_results(
+                clean,
+                results,
+                plan=search_plan,
+                require_verified=not fetch_pages,
+            )
             if not results:
-                errors.append(f"{name}: results were not relevant to the query")
+                errors.append(
+                    f"{name}: results failed relevance or hard constraints"
+                )
                 continue
 
             if fetch_pages:
                 _fetch_top_pages(results, timeout)
+                results = _filter_relevant_results(
+                    clean,
+                    results,
+                    plan=search_plan,
+                    require_verified=True,
+                )
+                if not results:
+                    errors.append(
+                        f"{name}: hard constraints could not be verified"
+                    )
+                    continue
 
             return {
                 "provider": payload.get("provider", name),
                 "query": clean,
+                "search_plan": search_plan,
                 "retrieved_at": datetime.now().isoformat(timespec="seconds"),
                 "results": results,
                 "provider_chain_errors": list(errors),
