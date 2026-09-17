@@ -39,6 +39,46 @@ def _wait_for_comfyui(timeout=90.0, interval=1.0):
     return False
 
 
+def _show_embedded_comfyui(self, main_window_module):
+    """Open ComfyUI in a LocalAI-owned window; browser is fallback only."""
+    try:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtWebEngineWidgets import QWebEngineView
+        from PySide6.QtWidgets import QMainWindow
+
+        window = getattr(self, "image_studio_window", None)
+        if window is None:
+            window = QMainWindow(self)
+            window.setWindowTitle("LocalAI - Image Studio")
+            window.resize(1500, 920)
+            view = QWebEngineView(window)
+            view.setUrl(QUrl(COMFYUI_URL))
+            window.setCentralWidget(view)
+            window.image_studio_web_view = view
+            self.image_studio_window = window
+        else:
+            view = getattr(window, "image_studio_web_view", None)
+            if view is not None:
+                view.setUrl(QUrl(COMFYUI_URL))
+        window.show()
+        window.raise_()
+        window.activateWindow()
+        self.status.setText("Image Studio: embedded ComfyUI ready")
+        self.status.setToolTip("")
+        return True
+    except Exception as exc:
+        main_window_module.QMessageBox.information(
+            self,
+            "Image Studio",
+            "The embedded web view is unavailable, so ComfyUI will open in the system browser.\n\n"
+            + str(exc),
+        )
+        main_window_module.webbrowser.open(COMFYUI_URL)
+        self.status.setText("Image Studio: browser fallback")
+        self.status.setToolTip(str(exc))
+        return False
+
+
 def install_image_studio_patch(main_window_module):
     window_class = main_window_module.MainWindow
     if getattr(window_class, "_image_studio_patch_installed", False):
@@ -48,8 +88,7 @@ def install_image_studio_patch(main_window_module):
 
     def _open_image_studio(self):
         if _comfyui_ready():
-            main_window_module.webbrowser.open(COMFYUI_URL)
-            self.status.setText("Image Studio: ComfyUI ready")
+            _show_embedded_comfyui(self, main_window_module)
             return
 
         if (
@@ -88,9 +127,7 @@ def install_image_studio_patch(main_window_module):
 
     def _poll_comfyui_ready(self, remaining=90):
         if _comfyui_ready():
-            self.status.setText("Image Studio: ComfyUI ready")
-            self.status.setToolTip("")
-            main_window_module.webbrowser.open(COMFYUI_URL)
+            _show_embedded_comfyui(self, main_window_module)
             return
         if remaining <= 0:
             self.status.setText("Image Studio: ComfyUI startup timeout")
@@ -114,7 +151,6 @@ def install_image_studio_patch(main_window_module):
             button.setToolTip("Open Image Studio powered by the local ComfyUI service.")
             button.clicked.connect(self._open_image_studio)
             self.tool_buttons["IMAGE"] = button
-            # title is index 0; IMAGE belongs before PDF.
             layout.insertWidget(1, button)
         return frame
 
