@@ -72,6 +72,42 @@ def test_memory_kit_filter_prefers_product_urls_over_generic_search_urls():
     ]
 
 
+def test_price_bounded_shopping_relevance_requires_exact_topic_token():
+    query = "teaskanna 100 EUR alatt"
+    plan = web_search_tool.build_search_plan(query)
+    results = [
+        {
+            "title": "Under 100 EUR",
+            "url": "https://example.com/under-100",
+            "snippet": "Shopping deals below 100 EUR",
+            "page_text": "",
+        },
+        {
+            "title": "Teaswap Art EUR Kurs",
+            "url": "https://example.com/teaswap",
+            "snippet": "TEA token price in EUR",
+            "page_text": "",
+        },
+        {
+            "title": "Üveg teáskanna 1,2 liter",
+            "url": "https://shop.example.hu/teaskanna",
+            "snippet": "Teáskanna 39,90 EUR",
+            "page_text": "",
+        },
+    ]
+
+    filtered = web_search_tool._filter_relevant_results(
+        query,
+        results,
+        plan=plan,
+        require_verified=False,
+    )
+
+    assert [item["url"] for item in filtered] == [
+        "https://shop.example.hu/teaskanna"
+    ]
+
+
 def test_non_shopping_provider_query_is_unchanged():
     plan = web_search_tool.build_search_plan("OpenAI latest news")
     assert web_search_tool.build_provider_query(plan) == "OpenAI latest news"
