@@ -6,7 +6,7 @@ def install_vram_release_patch(main_window_module):
     if getattr(window_class, "_vram_release_patch_installed", False):
         return
 
-    original_build_ui = window_class._build_ui
+    original_load_models = window_class._load_models
 
     def _release_vram(self):
         if (
@@ -56,8 +56,9 @@ def install_vram_release_patch(main_window_module):
             self.vram_release_button.setText("FREE VRAM")
             self.vram_release_button.setEnabled(True)
 
-    def _build_ui(self):
-        original_build_ui(self)
+    def _install_button(self):
+        if getattr(self, "vram_release_button", None) is not None:
+            return
 
         button = main_window_module.QPushButton("FREE VRAM")
         button.setObjectName("subtleButton")
@@ -75,6 +76,10 @@ def install_vram_release_patch(main_window_module):
             index = layout.indexOf(self.resource_label)
             layout.insertWidget(index + 1, button)
 
+    def _load_models(self):
+        original_load_models(self)
+        _install_button(self)
+
     window_class._release_vram = _release_vram
-    window_class._build_ui = _build_ui
+    window_class._load_models = _load_models
     window_class._vram_release_patch_installed = True
