@@ -38,6 +38,33 @@ def _extract_kits(text):
     }
 
 
+def _kit_total_capacity(value):
+    match = re.fullmatch(
+        r"(\d+)x(\d+)(gb|tb)",
+        _normalize_spec(value),
+    )
+    if not match:
+        return None
+    return int(match.group(1)) * int(match.group(2)), match.group(3)
+
+
+def _extract_total_capacities(text):
+    scrubbed = re.sub(
+        r"\b\d+\s*[x×]\s*\d+\s*(?:gb|tb)\b",
+        " ",
+        str(text or ""),
+        flags=re.IGNORECASE,
+    )
+    return {
+        (int(match.group(1)), match.group(2).lower())
+        for match in re.finditer(
+            r"\b(\d+)\s*(gb|tb)\b",
+            scrubbed,
+            flags=re.IGNORECASE,
+        )
+    }
+
+
 def _extract_memory_types(text):
     return {
         _normalize_spec(match.group(0))
@@ -121,6 +148,20 @@ def _extract_prices(text, currency):
     return values
 
 
+def _has_lowest_price_marker(text):
+    folded = _fold_text(text)
+    markers = [
+        "gunstigster preis",
+        "guenstigster preis",
+        "lowest price",
+        "starting at",
+        "from ",
+        "ab ",
+    ]
+    padded = f" {folded} "
+    return any(marker in padded for marker in markers)
+
+
 def evidence_required(query_or_plan):
     plan = (
         query_or_plan
@@ -177,11 +218,34 @@ def build_evidence_ledger(query, item):
 
     requested_kit = str(plan.get("exact_kit") or "")
     if requested_kit:
-        fields["exact_kit"] = _identity_field(
-            requested_kit,
-            _extract_kits(identity_text),
-            "result title/snippet identity",
-        )
+        identity_kits = _extract_kits(identity_text)
+        if identity_kits:
+            fields["exact_kit"] = _identity_field(
+                requested_kit,
+                identity_kits,
+                "result title/snippet identity",
+            )
+        else:
+            requested_total = _kit_total_capacity(requested_kit)
+            identity_totals = _extract_total_capacities(identity_text)
+            if identity_totals and requested_total not in identity_totals:
+                fields["exact_kit"] = _field(
+                    REJECTED,
+                    sorted(identity_totals),
+                    "result title/snippet total-capacity conflict",
+                )
+            elif requested_total and requested_total in identity_totals:
+                fields["exact_kit"] = _identity_field(
+                    requested_kit,
+                    _extract_kits(page_text),
+                    "fetched page backed by matching title/snippet total capacity",
+                )
+            else:
+                fields["exact_kit"] = _field(
+                    UNKNOWN,
+                    None,
+                    "no product-level exact-kit identity evidence",
+                )
 
     requested_memory = str(plan.get("memory_type") or "")
     if requested_memory:
@@ -235,11 +299,20 @@ def build_evidence_ledger(query, item):
     if max_price is not None and currency:
         identity_prices = _extract_prices(identity_text, currency)
         page_prices = _extract_prices(page_text, currency)
-        prices = identity_prices if identity_prices else page_prices
-        source = "result title/snippet identity" if identity_prices else "fetched page"
+        price = None
+        source = None
 
-        if len(prices) == 1:
-            price = prices[0]
+        if len(identity_prices) == 1:
+            price = identity_prices[0]
+            source = "result title/snippet identity"
+        elif len(identity_prices) > 1 and _has_lowest_price_marker(identity_text):
+            price = min(identity_prices)
+            source = "result title/snippet explicit lowest-price evidence"
+        elif not identity_prices and len(page_prices) == 1:
+            price = page_prices[0]
+            source = "fetched page"
+
+        if price is not None:
             if price <= float(max_price):
                 fields["price"] = _field(
                     VERIFIED,
@@ -252,11 +325,11 @@ def build_evidence_ledger(query, item):
                     price,
                     f"{source}: above maximum",
                 )
-        elif len(prices) > 1:
+        elif identity_prices or page_prices:
             fields["price"] = _field(
                 UNKNOWN,
-                prices,
-                f"{source}: ambiguous multiple prices",
+                identity_prices or page_prices,
+                "ambiguous multiple prices without product-level lowest-price authority",
             )
         else:
             fields["price"] = _field(
