@@ -76,6 +76,11 @@ Raw API keys, passwords and tokens are deliberately not stored in the registry. 
 
 The Extensions dialog also includes a searchable preset catalog grouped into Productivity, Creativity, Developer Tools, and Business & Operations. Adding a preset creates a disabled registry entry with public provider metadata, authentication type, and declared capabilities. Presets do not store credentials and do not grant chat/runtime access.
 
+
+### Per-chat extension attachments
+
+Each conversation can save a list of attached installed extensions. The chat input shows an EXT count button that opens an attach/detach dialog. Attachments are persisted in the chat JSON, are isolated per conversation, and remain metadata-only in this slice: attached extensions are not injected into the model prompt and are not executed automatically.
+
 ## Private runtime data
 
 Chats, schedules and persistent memory are user data, not repository state. They are stored outside the Git clone so switching branches, worktrees or clones does not make them disappear.
