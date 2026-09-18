@@ -43,6 +43,7 @@ from .document_tools import (
     topic_title,
 )
 from .artifact_themes import document_preset_labels, workbook_preset_labels
+from .chat_extensions_dialog import ChatExtensionsDialog
 from .docx_tool import create_docx
 from .excel_tool import create_conversation_excel, create_structured_excel
 from .extension_store import ExtensionStore
@@ -392,6 +393,14 @@ class MainWindow(QMainWindow):
         attach.clicked.connect(self._attach_file)
         input_row.addWidget(attach)
 
+        self.chat_extensions_button = QPushButton("EXT 0")
+        self.chat_extensions_button.setToolTip(
+            "Attach installed extensions to this chat. Attachments are saved per chat; "
+            "runtime execution is not enabled yet."
+        )
+        self.chat_extensions_button.clicked.connect(self._open_chat_extensions)
+        input_row.addWidget(self.chat_extensions_button)
+
         self.web_button = QPushButton("WEB AUTO")
         self.web_button.setCheckable(True)
         self.web_button.setToolTip(
@@ -666,6 +675,70 @@ class MainWindow(QMainWindow):
         if self.current_chat and model and not model.startswith("No Ollama"):
             self.current_chat["model"] = model
             self.store.save(self.current_chat)
+
+    def _refresh_chat_extensions_button(self):
+        button = getattr(self, "chat_extensions_button", None)
+        if button is None:
+            return
+
+        if not self.current_chat:
+            button.setText("EXT 0")
+            button.setEnabled(False)
+            return
+
+        attached = self.current_chat.get("attached_extensions") or []
+        installed_ids = {
+            str(item.get("id", ""))
+            for item in self.extension_store.list_extensions()
+        }
+        active_ids = [
+            str(extension_id)
+            for extension_id in attached
+            if str(extension_id) in installed_ids
+        ]
+        count = len(active_ids)
+        button.setText(f"EXT {count}")
+        button.setEnabled(True)
+        button.setStyleSheet(
+            "QPushButton {background:#315A43;border:1px solid #5F9C73;"
+            "border-radius:10px;padding:9px 13px;color:#F4F6F8;font-weight:700;}"
+            if count
+            else ""
+        )
+        button.setToolTip(
+            (
+                f"{count} extension(s) attached to this chat. "
+                "Click to attach or detach installed extensions. "
+            )
+            if count
+            else "Attach installed extensions to this chat. "
+        )
+        button.setToolTip(
+            button.toolTip()
+            + "Attachments are metadata only; runtime execution is not enabled yet."
+        )
+
+    def _open_chat_extensions(self):
+        if not self.current_chat:
+            return
+
+        dialog = ChatExtensionsDialog(
+            self.extension_store,
+            self.store,
+            self.current_chat.get("id", ""),
+            parent=self,
+        )
+        dialog.saved.connect(self._chat_extensions_saved)
+        dialog.exec()
+
+    def _chat_extensions_saved(self, _attached_ids):
+        if not self.current_chat:
+            return
+        try:
+            self.current_chat = self.store.load(self.current_chat.get("id", ""))
+        except Exception:
+            return
+        self._refresh_chat_extensions_button()
 
     def _attach_file(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -1111,6 +1184,7 @@ class MainWindow(QMainWindow):
         )
 
     def _render_chat(self, include_partial=False, streaming=False):
+        self._refresh_chat_extensions_button()
         keep_bottom = (
             True
             if not streaming
