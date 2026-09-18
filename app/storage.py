@@ -16,6 +16,16 @@ class ChatStore:
         chat.setdefault("title", "New chat")
         chat.setdefault("model", "")
         chat.setdefault("messages", [])
+        attached = chat.setdefault("attached_extensions", [])
+        if not isinstance(attached, list):
+            chat["attached_extensions"] = []
+        else:
+            normalized = []
+            for extension_id in attached:
+                value = str(extension_id or "").strip()
+                if value and value not in normalized:
+                    normalized.append(value)
+            chat["attached_extensions"] = normalized
         chat.setdefault("pinned", False)
         chat.setdefault("closed", False)
         return chat
@@ -30,6 +40,7 @@ class ChatStore:
             "updated_at": now,
             "pinned": False,
             "closed": False,
+            "attached_extensions": [],
             "messages": [],
         }
         self.save(chat)
