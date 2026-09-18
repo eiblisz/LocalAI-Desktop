@@ -128,3 +128,39 @@ def test_known_user_relationship_still_has_priority():
         == "Annamária a párod."
     )
 
+
+ROMANTIC_PERSON_MEMORIES = MEMORIES + [
+    {
+        "category": "USER_PROFILE",
+        "scope": "USER",
+        "subject": "Zsofia",
+        "key": "girlfriend_of",
+        "value": "Kristof",
+        "status": "active",
+    },
+]
+
+
+def test_hungarian_girlfriend_fact_answers_in_hungarian():
+    assert (
+        direct_user_memory_answer("ki Zsofia?", ROMANTIC_PERSON_MEMORIES)
+        == "Zsofia Kristof barátnője."
+    )
+
+
+def test_hungarian_reverse_girlfriend_query_answers_in_hungarian():
+    assert (
+        direct_user_memory_answer("ki Kristof baratnoje?", ROMANTIC_PERSON_MEMORIES)
+        == "Zsofia Kristof barátnője."
+    )
+
+
+def test_girlfriend_fact_does_not_infer_relationship_to_user():
+    assert (
+        direct_user_memory_answer("ki nekem Zsofia?", ROMANTIC_PERSON_MEMORIES)
+        == (
+            "Zsofia Kristof barátnője. "
+            "A hozzád való kapcsolatáról nincs eltett adat."
+        )
+    )
+
