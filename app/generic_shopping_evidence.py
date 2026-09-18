@@ -157,6 +157,9 @@ def _shopping_subject(text):
             raw,
             flags=re.IGNORECASE,
         )
+        raw = re.sub(r"\bssd\b", "SSD", raw, flags=re.IGNORECASE)
+    if re.search(r"\bhdd\b", raw, flags=re.IGNORECASE):
+        raw = re.sub(r"\bhdd\b", "HDD", raw, flags=re.IGNORECASE)
     raw = " ".join(raw.split())
     return raw[:160] or "product"
 
