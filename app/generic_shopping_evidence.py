@@ -80,6 +80,27 @@ def _fold(value):
     return " ".join(text.split())
 
 
+_PRODUCT_QUERY_MARKERS = {
+    "ssd", "hdd", "ram", "memoria", "memory", "gpu", "videokartya",
+    "monitor", "laptop", "notebook", "telefon", "phone", "tablet",
+    "teaskanna", "kettle", "kanna", "keyboard", "billentyuzet", "mouse",
+    "eger", "headset", "fejhallgato", "speaker", "hangszoro", "router",
+    "nas", "drive", "merevlemez", "festplatte", "akku", "battery",
+}
+
+
+def _has_product_signal(folded, tokens):
+    if tokens.intersection(_PRODUCT_QUERY_MARKERS):
+        return True
+    if re.search(r"\b\d+(?:[.,]\d+)?\s*(?:gb|tb)\b", folded):
+        return True
+    if re.search(r"\b\d+(?:[.,]\d+)?\s*(?:eur|usd)\b", folded):
+        return True
+    if re.search(r"(?:€|\$)\s*\d", folded):
+        return True
+    return False
+
+
 def is_generic_shopping_request(text):
     folded = _fold(text)
     if not folded:
@@ -87,6 +108,8 @@ def is_generic_shopping_request(text):
 
     tokens = set(re.findall(r"[a-z0-9]+", folded))
     if tokens.intersection(_INFO_QUERY_MARKERS):
+        return False
+    if not _has_product_signal(folded, tokens):
         return False
 
     if any(marker in folded for marker in _STRONG_SHOPPING_MARKERS):
