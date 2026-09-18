@@ -118,6 +118,7 @@ def _meaningful_topic_terms(query):
         "buy", "kaufen", "price", "prices", "preis",
         "ssd", "solid", "state", "drive",
         "gb", "tb", "eur", "usd",
+        "os", "es", "as", "t", "ot", "et", "at",
         "4", "2", "1",
     }
     terms = []
