@@ -160,6 +160,71 @@ RELATIONSHIP_TO_USER = {
 }
 
 
+PERSON_RELATION_SUFFIX_HU = {
+    "fia": "son_of",
+    "lánya": "daughter_of",
+    "lanya": "daughter_of",
+    "férje": "husband_of",
+    "ferje": "husband_of",
+    "felesége": "wife_of",
+    "felesege": "wife_of",
+    "anyja": "mother_of",
+    "apja": "father_of",
+    "testvére": "sibling_of",
+    "testvere": "sibling_of",
+    "párja": "partner_of",
+    "parja": "partner_of",
+}
+
+
+def _explicit_memory_body(user_text):
+    body = re.sub(
+        r"^.*?\b(?:jegyezd\s+meg|emlekezz|emlékezz|remember(?:\s+that)?)\b\s*",
+        "",
+        user_text,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    return re.sub(r"^(?:,?\s*hogy\s+)", "", body, count=1, flags=re.IGNORECASE)
+
+
+def _explicit_person_relationship_memories(user_text):
+    """Extract explicit relationships between two named people without assigning them to USER."""
+    if not is_explicit_memory_request(user_text):
+        return []
+
+    body = _clean(_explicit_memory_body(user_text)).strip(" ,.;:!?")
+    relation_terms = "|".join(
+        sorted(
+            (re.escape(term) for term in PERSON_RELATION_SUFFIX_HU),
+            key=len,
+            reverse=True,
+        )
+    )
+    match = re.match(
+        rf"^(?P<subject>.+?)\s+(?P<related>[^\s,.;:!?]+)\s+"
+        rf"(?P<relation>{relation_terms})$",
+        body,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return []
+
+    subject = _clean(match.group("subject")).strip(" ,.;:!?")
+    related = _clean(match.group("related")).strip(" ,.;:!?")
+    relation = PERSON_RELATION_SUFFIX_HU.get(match.group("relation").lower())
+    if not subject or not related or not relation:
+        return []
+
+    return [{
+        "category": "USER_PROFILE",
+        "scope": "USER",
+        "subject": subject,
+        "key": relation,
+        "value": related,
+    }]
+
+
 def _explicit_relationship_memories(user_text):
     """Deterministically extract common user relationships from explicit memory requests."""
     if not is_explicit_memory_request(user_text):
@@ -177,14 +242,7 @@ def _explicit_relationship_memories(user_text):
         re.IGNORECASE,
     )
 
-    body = re.sub(
-        r"^.*?\b(?:jegyezd\s+meg|emlekezz|emlékezz|remember(?:\s+that)?)\b\s*",
-        "",
-        user_text,
-        count=1,
-        flags=re.IGNORECASE,
-    )
-    body = re.sub(r"^(?:,?\s*hogy\s+)", "", body, count=1, flags=re.IGNORECASE)
+    body = _explicit_memory_body(user_text)
 
     memories = []
     seen = set()
@@ -227,6 +285,7 @@ def extract_explicit_memories(client, model, user_text):
     deterministic_memories = (
         _explicit_self_name_memories(user_text)
         + _explicit_relationship_memories(user_text)
+        + _explicit_person_relationship_memories(user_text)
     )
     if deterministic_memories:
         return [validate_memory_candidate(item) for item in deterministic_memories]
@@ -240,9 +299,12 @@ def extract_explicit_memories(client, model, user_text):
                 "separate atomic memory records. Preserve names exactly as provided. "
                 "Use one category from USER_PROFILE, PROJECT, PREFERENCE, RULE, LESSON, "
                 "or WORKING. Use scope USER for general personal facts unless the user "
-                "explicitly makes the fact project-specific. Use stable concise keys "
-                "such as relationship_to_user or preferred_shell. Never invent missing "
-                "information. Return only data matching the supplied JSON schema."
+                "explicitly makes the fact project-specific. Use relationship_to_user ONLY "
+                "when the named person's relationship is explicitly to the human user. "
+                "For relationships between two other people use directional keys such as "
+                "son_of, daughter_of, partner_of, mother_of, or father_of, with the related "
+                "person as the value. Use stable concise keys such as preferred_shell. "
+                "Never invent missing information. Return only data matching the supplied JSON schema."
             ),
         },
         {
