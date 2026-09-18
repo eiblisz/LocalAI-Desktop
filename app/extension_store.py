@@ -262,6 +262,16 @@ class ExtensionStore:
                 return dict(item)
         raise KeyError(extension_id)
 
+    def find_by_preset_id(self, preset_id):
+        preset_id = _clean(preset_id)
+        if not preset_id:
+            return None
+        for item in self._read()["extensions"]:
+            config = item.get("config") or {}
+            if _clean(config.get("preset_id")) == preset_id:
+                return dict(item)
+        return None
+
     def save(self, extension):
         payload = self._read()
         extension = dict(extension or {})

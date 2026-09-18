@@ -11,9 +11,17 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSpinBox,
+    QTabWidget,
     QVBoxLayout,
+    QWidget,
 )
 
+from .extension_catalog import (
+    PRESET_CATEGORIES,
+    find_preset,
+    preset_to_registry_entry,
+    search_presets,
+)
 from .extension_store import (
     AUTH_TYPES,
     EXTENSION_TYPES,
@@ -43,6 +51,7 @@ class ExtensionsDialog(QDialog):
         super().__init__(parent)
         self.store = store
         self.current_id = ""
+        self.current_preset_id = ""
         self.test_thread = None
         self.test_worker = None
 
@@ -50,6 +59,7 @@ class ExtensionsDialog(QDialog):
         self.resize(980, 700)
         self._build_ui()
         self._refresh_list()
+        self._refresh_catalog()
         self._new_extension()
 
     def _build_ui(self):
@@ -68,13 +78,55 @@ class ExtensionsDialog(QDialog):
         intro.setStyleSheet("color:#9099A6;")
         left.addWidget(intro)
 
+        self.tabs = QTabWidget()
+
+        installed_page = QWidget()
+        installed_layout = QVBoxLayout(installed_page)
+        installed_layout.setContentsMargins(0, 0, 0, 0)
+
         self.extension_list = QListWidget()
         self.extension_list.itemClicked.connect(self._extension_selected)
-        left.addWidget(self.extension_list, 1)
+        installed_layout.addWidget(self.extension_list, 1)
 
         new_button = QPushButton("NEW EXTENSION")
         new_button.clicked.connect(self._new_extension)
-        left.addWidget(new_button)
+        installed_layout.addWidget(new_button)
+
+        catalog_page = QWidget()
+        catalog_layout = QVBoxLayout(catalog_page)
+        catalog_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.catalog_search = QLineEdit()
+        self.catalog_search.setPlaceholderText("Search extensions...")
+        self.catalog_search.textChanged.connect(self._refresh_catalog)
+        catalog_layout.addWidget(self.catalog_search)
+
+        self.catalog_category = QComboBox()
+        self.catalog_category.addItem("All")
+        for category in PRESET_CATEGORIES:
+            self.catalog_category.addItem(category)
+        self.catalog_category.currentIndexChanged.connect(self._refresh_catalog)
+        catalog_layout.addWidget(self.catalog_category)
+
+        self.catalog_list = QListWidget()
+        self.catalog_list.itemClicked.connect(self._catalog_selected)
+        catalog_layout.addWidget(self.catalog_list, 1)
+
+        self.catalog_details = QLabel(
+            "Select a preset to review its capabilities before adding it."
+        )
+        self.catalog_details.setWordWrap(True)
+        self.catalog_details.setStyleSheet("color:#9099A6;font-size:12px;")
+        catalog_layout.addWidget(self.catalog_details)
+
+        self.install_preset_button = QPushButton("ADD PRESET")
+        self.install_preset_button.setEnabled(False)
+        self.install_preset_button.clicked.connect(self._install_selected_preset)
+        catalog_layout.addWidget(self.install_preset_button)
+
+        self.tabs.addTab(installed_page, "INSTALLED")
+        self.tabs.addTab(catalog_page, "CATALOG")
+        left.addWidget(self.tabs, 1)
         root.addLayout(left, 1)
 
         right = QVBoxLayout()
@@ -202,6 +254,102 @@ class ExtensionsDialog(QDialog):
 
         if selected_row >= 0:
             self.extension_list.setCurrentRow(selected_row)
+
+        if hasattr(self, "catalog_list"):
+            self._refresh_catalog()
+
+    def _refresh_catalog(self, *_args):
+        if not hasattr(self, "catalog_list"):
+            return
+
+        selected_id = self.current_preset_id
+        query = self.catalog_search.text() if hasattr(self, "catalog_search") else ""
+        category = (
+            self.catalog_category.currentText()
+            if hasattr(self, "catalog_category")
+            else "All"
+        )
+
+        self.catalog_list.clear()
+        selected_row = -1
+
+        for row, preset in enumerate(search_presets(query, category)):
+            existing = self.store.find_by_preset_id(preset["id"])
+            suffix = "  [INSTALLED]" if existing else ""
+            item = QListWidgetItem(
+                f"{preset['name']}  —  {preset['category']}{suffix}"
+            )
+            item.setData(Qt.UserRole, preset["id"])
+            item.setToolTip(
+                f"{preset['description']}\n"
+                f"Capabilities: {', '.join(preset['capabilities'])}\n"
+                f"Authentication: {preset['auth_type']}"
+            )
+            self.catalog_list.addItem(item)
+            if preset["id"] == selected_id:
+                selected_row = row
+
+        if selected_row >= 0:
+            self.catalog_list.setCurrentRow(selected_row)
+
+    def _catalog_selected(self, item):
+        preset_id = str(item.data(Qt.UserRole) or "")
+        try:
+            preset = find_preset(preset_id)
+        except KeyError:
+            return
+
+        self.current_preset_id = preset_id
+        self.catalog_details.setText(
+            f"{preset['description']}\n"
+            f"Capabilities: {', '.join(preset['capabilities'])}\n"
+            f"Authentication: {preset['auth_type']}\n"
+            f"Provider: {preset.get('provider_url') or 'not specified'}"
+        )
+
+        existing = self.store.find_by_preset_id(preset_id)
+        self.install_preset_button.setEnabled(True)
+        self.install_preset_button.setText(
+            "OPEN INSTALLED" if existing else "ADD PRESET"
+        )
+
+    def _select_extension_id(self, extension_id):
+        for row in range(self.extension_list.count()):
+            item = self.extension_list.item(row)
+            if str(item.data(Qt.UserRole) or "") == str(extension_id):
+                self.extension_list.setCurrentRow(row)
+                self._extension_selected(item)
+                return True
+        return False
+
+    def _install_selected_preset(self):
+        if not self.current_preset_id:
+            return
+
+        try:
+            preset = find_preset(self.current_preset_id)
+        except KeyError:
+            return
+
+        existing = self.store.find_by_preset_id(preset["id"])
+        if existing is None:
+            try:
+                existing = self.store.save(preset_to_registry_entry(preset))
+            except Exception as exc:
+                QMessageBox.critical(
+                    self,
+                    "Extension preset error",
+                    str(exc),
+                )
+                return
+
+        self._refresh_list(selected_id=existing["id"])
+        self.tabs.setCurrentIndex(0)
+        self._select_extension_id(existing["id"])
+        self.status_label.setText(
+            "Preset added. Configure its endpoint/credentials when support is available, "
+            "then enable it explicitly."
+        )
 
     def _new_extension(self):
         self.current_id = ""

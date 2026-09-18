@@ -159,3 +159,25 @@ def test_test_result_is_persisted_without_changing_extension_definition(tmp_path
     assert updated["last_tested"]
     assert updated["endpoint"] == saved["endpoint"]
     assert updated["capabilities"] == ["image_generate"]
+
+
+def test_store_can_find_installed_catalog_preset(tmp_path):
+    store = ExtensionStore(tmp_path)
+    saved = store.save({
+        "name": "GitHub",
+        "type": "mcp_connector",
+        "endpoint": "",
+        "enabled": False,
+        "auth_type": "oauth",
+        "capabilities": ["repo_read"],
+        "config": {
+            "preset_id": "github",
+            "category": "Developer Tools",
+        },
+    })
+
+    found = store.find_by_preset_id("github")
+    assert found is not None
+    assert found["id"] == saved["id"]
+    assert store.find_by_preset_id("missing") is None
+

@@ -1,0 +1,73 @@
+from app.extension_catalog import (
+    PRESET_CATEGORIES,
+    all_presets,
+    find_preset,
+    preset_to_registry_entry,
+    search_presets,
+)
+
+
+def test_catalog_contains_requested_categories_and_key_presets():
+    assert PRESET_CATEGORIES == (
+        "Productivity",
+        "Creativity",
+        "Developer Tools",
+        "Business & Operations",
+    )
+
+    names = {item["name"] for item in all_presets()}
+    for expected in {
+        "Google Calendar",
+        "Notion",
+        "Dropbox",
+        "Canva",
+        "Figma",
+        "Adobe",
+        "GitHub",
+        "Supabase",
+        "HubSpot",
+    }:
+        assert expected in names
+
+
+def test_catalog_search_matches_name_description_and_capability():
+    assert [item["name"] for item in search_presets("github")] == ["GitHub"]
+
+    creativity = search_presets("", "Creativity")
+    assert creativity
+    assert all(item["category"] == "Creativity" for item in creativity)
+
+    repo_matches = search_presets("repo_read")
+    assert any(item["name"] == "GitHub" for item in repo_matches)
+
+
+def test_find_preset_returns_copy_and_unknown_id_raises():
+    github = find_preset("github")
+    github["name"] = "Changed"
+
+    assert find_preset("github")["name"] == "GitHub"
+
+    try:
+        find_preset("missing")
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("unknown preset id must raise KeyError")
+
+
+def test_preset_install_payload_is_disabled_and_secret_free():
+    preset = find_preset("github")
+    payload = preset_to_registry_entry(preset)
+
+    assert payload["name"] == "GitHub"
+    assert payload["type"] == "mcp_connector"
+    assert payload["enabled"] is False
+    assert payload["endpoint"] == ""
+    assert payload["auth_type"] == "oauth"
+    assert payload["config"]["preset_id"] == "github"
+    assert payload["config"]["provider_url"].startswith("https://")
+
+    serialized = repr(payload).lower()
+    assert "access_token" not in serialized
+    assert "client_secret" not in serialized
+    assert "password" not in serialized
