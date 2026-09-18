@@ -13,6 +13,7 @@ def test_catalog_contains_requested_categories_and_key_presets():
         "Creativity",
         "Developer Tools",
         "Business & Operations",
+        "Communication",
     )
 
     names = {item["name"] for item in all_presets()}
@@ -26,6 +27,7 @@ def test_catalog_contains_requested_categories_and_key_presets():
         "GitHub",
         "Supabase",
         "HubSpot",
+        "Discord Webhook",
     }:
         assert expected in names
 
@@ -71,3 +73,17 @@ def test_preset_install_payload_is_disabled_and_secret_free():
     assert "access_token" not in serialized
     assert "client_secret" not in serialized
     assert "password" not in serialized
+
+
+def test_discord_webhook_preset_is_secret_url_metadata_only():
+    preset = find_preset("discord-webhook")
+    payload = preset_to_registry_entry(preset)
+
+    assert preset["category"] == "Communication"
+    assert preset["auth_type"] == "secret_url"
+    assert preset["capabilities"] == ("send_message", "send_embed")
+    assert payload["endpoint"] == ""
+    assert payload["enabled"] is False
+    assert payload["config"]["preset_id"] == "discord-webhook"
+    assert "webhook" not in payload.get("credential_ref", "").lower()
+
