@@ -40,7 +40,7 @@ _HUNGARIAN_WORDS = {
     "kapható",
 }
 
-_HUNGARIAN_CHARS = set("áéíóöőúüű")
+_STRONG_HUNGARIAN_CHARS = set("őű")
 
 
 def _fold(value):
@@ -57,7 +57,7 @@ def detect_user_language(text):
     tokens = re.findall(r"[\wÀ-ž]+", lowered, flags=re.UNICODE)
     folded_tokens = {_fold(token) for token in tokens}
 
-    if any(char in lowered for char in _HUNGARIAN_CHARS):
+    if any(char in lowered for char in _STRONG_HUNGARIAN_CHARS):
         return "hu"
 
     marker_hits = 0
