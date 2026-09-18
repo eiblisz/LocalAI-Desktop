@@ -71,6 +71,11 @@ The Extensions view supports:
 
 Raw API keys, passwords and tokens are deliberately not stored in the registry. Credential storage/binding and runtime capability injection are separate future layers. Enabling an extension in this foundation slice does not give the chat access to it.
 
+
+### Preset catalog
+
+The Extensions dialog also includes a searchable preset catalog grouped into Productivity, Creativity, Developer Tools, and Business & Operations. Adding a preset creates a disabled registry entry with public provider metadata, authentication type, and declared capabilities. Presets do not store credentials and do not grant chat/runtime access.
+
 ## Private runtime data
 
 Chats, schedules and persistent memory are user data, not repository state. They are stored outside the Git clone so switching branches, worktrees or clones does not make them disappear.
