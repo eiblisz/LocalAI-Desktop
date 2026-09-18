@@ -108,3 +108,79 @@ def test_hungarian_renderer_fails_closed_without_product_evidence():
 def test_generic_web_search_is_not_misclassified_as_shopping():
     assert not is_generic_shopping_request("Keress nekem valamit az interneten")
 
+
+def test_inflected_hungarian_shopping_command_is_detected():
+    assert is_generic_shopping_request(
+        "Keressel nekem 4tb-os ssd merevlemezt"
+    )
+
+
+def test_ssd_shopping_rejects_article_category_comparison_and_hdd_pages():
+    results = [
+        {
+            "title": "SSD kaufen: Warum 4 TB gerade günstiger sind als zweimal 2 TB",
+            "url": "https://www.pcgameshardware.de/SSD-Hardware-255552/Specials/SSD-Preise-2026-Preis-pro-Terabyte-Kaufberatung-1553743/",
+            "snippet": "4 TB SSD Preise 169,99 EUR",
+            "page_text": "",
+        },
+        {
+            "title": "4TB SSDs: Riesiger Speicher mit maximaler Geschwindigkeit",
+            "url": "https://www.computeruniverse.net/de/c/hardware-komponenten/ssd-4tb",
+            "snippet": "4 TB SSD Kategorie",
+            "page_text": "",
+        },
+        {
+            "title": "Hordozható SSD | Külső SSD | Alza.hu",
+            "url": "https://www.alza.hu/kulso-ssd-meghajtok/18855664.htm",
+            "snippet": "4 TB SSD választék",
+            "page_text": "",
+        },
+        {
+            "title": "Külső ssd 4tb ÁrGép",
+            "url": "https://www.argep.hu/trend/KUEL/Kuelsoe-ssd-4tb.html",
+            "snippet": "4 TB SSD árösszehasonlítás",
+            "page_text": "",
+        },
+        {
+            "title": "SSD Merevlemez 4TB | Mediamarkt",
+            "url": "https://www.mediamarkt.hu/v/ssd-merevlemez-4tb",
+            "snippet": "4 TB SSD kategória",
+            "page_text": "",
+        },
+        {
+            "title": "Külső merevlemez - 4TB - iPon.hu",
+            "url": "https://ipon.hu/shop/csoport/szamitogep-alkatresz/merevlemez-kulso/192/4-tb/200",
+            "snippet": "4 TB külső merevlemez",
+            "page_text": "",
+        },
+    ]
+
+    assert build_generic_shopping_records(QUERY, results) == []
+
+
+def test_only_explicit_product_url_is_accepted_for_ssd_query():
+    results = [
+        {
+            "title": "Samsung 870 QVO 4TB SSD",
+            "url": "https://shop.example.de/product/samsung-870-qvo-4tb",
+            "snippet": "Samsung 870 QVO 4 TB SSD 289 EUR",
+            "page_text": "",
+        },
+        {
+            "title": "4TB SSD category",
+            "url": "https://shop.example.de/ssd/4tb",
+            "snippet": "4 TB SSD products",
+            "page_text": "",
+        },
+    ]
+
+    records = build_generic_shopping_records(QUERY, results)
+
+    assert records == [
+        {
+            "title": "Samsung 870 QVO 4TB SSD",
+            "url": "https://shop.example.de/product/samsung-870-qvo-4tb",
+            "price": ("EUR", 289.0),
+        }
+    ]
+
