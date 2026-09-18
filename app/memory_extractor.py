@@ -168,6 +168,10 @@ PERSON_RELATION_SUFFIX_HU = {
     "ferje": "husband_of",
     "felesége": "wife_of",
     "felesege": "wife_of",
+    "barátnője": "girlfriend_of",
+    "baratnoje": "girlfriend_of",
+    "barátja": "boyfriend_of",
+    "baratja": "boyfriend_of",
     "anyja": "mother_of",
     "apja": "father_of",
     "testvére": "sibling_of",
@@ -302,8 +306,9 @@ def extract_explicit_memories(client, model, user_text):
                 "explicitly makes the fact project-specific. Use relationship_to_user ONLY "
                 "when the named person's relationship is explicitly to the human user. "
                 "For relationships between two other people use directional keys such as "
-                "son_of, daughter_of, partner_of, mother_of, or father_of, with the related "
-                "person as the value. Use stable concise keys such as preferred_shell. "
+                "son_of, daughter_of, girlfriend_of, boyfriend_of, partner_of, mother_of, "
+                "or father_of, with the related person as the value. Use stable concise keys "
+                "such as preferred_shell. "
                 "Never invent missing information. Return only data matching the supplied JSON schema."
             ),
         },

@@ -15,6 +15,7 @@ from .evidence_verifier import (
     verify_answer_against_evidence,
 )
 from .memory_runtime import remember_explicit_request
+from .language_policy import response_language_instruction
 from .ollama_client import OllamaClient
 from .weather_tool import get_weather, weather_context_text
 from .web_search_tool import (
@@ -191,24 +192,7 @@ class ChatWebWorker(QObject):
         return any(marker in normalized for marker in reference_markers)
 
     def _conversation_language_instruction(self):
-        sample_parts = [
-            self.user_prompt,
-            *self._recent_user_requests(limit=3),
-        ]
-        sample = " ".join(sample_parts).lower()
-        hungarian_markers = [
-            " keress", " nézd", " nezd", " most ", " újra", " ujra",
-            " alatt", " mennyi", " milyen", " nekem", " legyen",
-            " kapható", " kaphato", " ár", " ar ", " videokárty",
-            " videokarty", " memória", " memoria",
-        ]
-        if any(marker in f" {sample} " for marker in hungarian_markers):
-            return (
-                "The user is speaking Hungarian. The final answer must be in Hungarian."
-            )
-        return (
-            "Answer in the same language the user is using in the conversation."
-        )
+        return response_language_instruction(self.user_prompt)
 
     def _query_is_literal_followup_command(self, query):
         normalized = self._fold_text(query)

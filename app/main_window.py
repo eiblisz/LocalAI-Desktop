@@ -46,6 +46,7 @@ from .docx_tool import create_docx
 from .excel_tool import create_conversation_excel, create_structured_excel
 from .file_reader import read_attachment
 from .html_tool import create_html
+from .language_policy import response_language_instruction
 from .memory_answers import direct_user_memory_answer
 from .memory_extractor import is_explicit_memory_request
 from .memory_store import MemoryStore
@@ -893,7 +894,9 @@ class MainWindow(QMainWindow):
             self._load_chat_list()
             return
 
-        system_prompt = DEFAULT_SYSTEM_PROMPT
+        system_prompt = (
+            f"{DEFAULT_SYSTEM_PROMPT}\n\n{response_language_instruction(text)}"
+        )
         memory_context = self._build_memory_context(text)
         if memory_context:
             system_prompt = f"{system_prompt}\n\n{memory_context}"
