@@ -1,4 +1,5 @@
 from app.generic_shopping_evidence import (
+    build_generic_shopping_queries,
     build_generic_shopping_records,
     is_generic_shopping_request,
     render_generic_shopping_answer,
@@ -183,4 +184,18 @@ def test_only_explicit_product_url_is_accepted_for_ssd_query():
             "price": ("EUR", 289.0),
         }
     ]
+
+
+def test_inflected_ssd_query_builds_product_page_searches():
+    queries = build_generic_shopping_queries(
+        "Keressel nekem 4tb-os ssd merevlemezt"
+    )
+
+    assert len(queries) == 4
+    assert all("4 TB SSD" in query for query in queries)
+    assert all("merevlemez" not in query.lower() for query in queries)
+    assert any("mediamarkt.de/de/product" in query for query in queries)
+    assert any("alternate.de" in query for query in queries)
+    assert any("amazon.de/dp" in query for query in queries)
+    assert any("otto.de/p/" in query for query in queries)
 
