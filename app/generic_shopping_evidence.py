@@ -115,7 +115,7 @@ def is_generic_shopping_request(text):
     if any(marker in folded for marker in _STRONG_SHOPPING_MARKERS):
         return True
 
-    if re.search(r"\bkeress\b", folded):
+    if re.search(r"\bkeress[a-z0-9]*\b", folded):
         return True
 
     return False
