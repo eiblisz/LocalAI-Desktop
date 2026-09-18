@@ -330,6 +330,55 @@ class MemoryStore:
             rows = db.execute(query, params).fetchall()
         return [self._row_to_dict(row) for row in rows]
 
+    def retrieve_memories(self, query, *, scope=None, limit=8):
+        """Return a bounded set of active long-term memories relevant to query."""
+        query = _clean(query)
+        if not query:
+            return []
+
+        limit = int(limit)
+        if limit < 1:
+            return []
+
+        query_tokens = set(re.findall(r"[a-z0-9_]+", query.lower()))
+        candidates = self.list_memories(
+            scope=scope,
+            statuses=("active",),
+            include_session_only=False,
+        )
+
+        importance_weight = {
+            "PINNED": 40,
+            "IMPORTANT": 20,
+            "REMEMBER": 10,
+        }
+
+        ranked = []
+        for memory in candidates:
+            if memory.get("importance") == "IGNORE":
+                continue
+
+            searchable = " ".join(
+                str(memory.get(field, ""))
+                for field in ("category", "scope", "subject", "key", "value")
+            ).lower()
+            memory_tokens = set(re.findall(r"[a-z0-9_]+", searchable))
+            overlap = len(query_tokens & memory_tokens)
+
+            # PINNED memories are always eligible as durable global context.
+            if overlap == 0 and memory.get("importance") != "PINNED":
+                continue
+
+            score = (
+                overlap * 100
+                + importance_weight.get(memory.get("importance"), 0)
+                + int(float(memory.get("confidence", 0.0)) * 10)
+            )
+            ranked.append((score, memory.get("updated_at", ""), memory))
+
+        ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return [item[2] for item in ranked[:limit]]
+
     def archive_memory(self, memory_id):
         return self._set_status(memory_id, "archived")
 

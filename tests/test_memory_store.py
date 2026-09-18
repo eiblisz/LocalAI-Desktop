@@ -201,3 +201,93 @@ def test_default_memory_db_is_canonical_private_store():
     from app.config import ROOT_DIR
 
     assert DEFAULT_MEMORY_DB == ROOT_DIR / "memory" / "canonical" / "memory.sqlite3"
+
+
+def test_retrieve_memories_is_relevant_bounded_and_long_term_only(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+
+    btc = store.add_memory(
+        category="PROJECT",
+        scope="global",
+        subject="QuantAI",
+        key="primary_asset",
+        value="BTCUSDT 15m realistic",
+        importance="REMEMBER",
+    )
+    store.add_memory(
+        category="PREFERENCE",
+        scope="global",
+        subject="Interface",
+        key="theme",
+        value="dark desktop",
+        importance="REMEMBER",
+    )
+    store.add_memory(
+        category="WORKING",
+        scope="global",
+        subject="Temporary",
+        key="note",
+        value="BTCUSDT temporary experiment",
+        importance="SESSION_ONLY",
+    )
+    store.add_memory(
+        category="PROJECT",
+        scope="global",
+        subject="Ignored",
+        key="asset",
+        value="BTCUSDT ignored candidate",
+        importance="IGNORE",
+    )
+
+    results = store.retrieve_memories("What is the BTCUSDT project?", limit=1)
+
+    assert len(results) == 1
+    assert results[0]["id"] == btc["id"]
+
+
+def test_retrieve_memories_excludes_non_active(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+
+    archived = store.add_memory(
+        category="PROJECT",
+        scope="global",
+        subject="OldProject",
+        key="asset",
+        value="ETHUSDT archived project",
+        importance="IMPORTANT",
+    )
+    store.archive_memory(archived["id"])
+
+    assert store.retrieve_memories("ETHUSDT project") == []
+
+
+def test_retrieve_memories_includes_pinned_without_lexical_overlap(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+
+    pinned = store.add_memory(
+        category="RULE",
+        scope="global",
+        subject="Communication",
+        key="output_rule",
+        value="Use concise answers",
+        importance="PINNED",
+    )
+
+    results = store.retrieve_memories("Completely unrelated question")
+
+    assert [item["id"] for item in results] == [pinned["id"]]
+
+
+def test_retrieve_memories_empty_query_returns_nothing(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+
+    store.add_memory(
+        category="PROJECT",
+        scope="global",
+        subject="QuantAI",
+        key="asset",
+        value="BTCUSDT",
+    )
+
+    assert store.retrieve_memories("") == []
+    assert store.retrieve_memories("   ") == []

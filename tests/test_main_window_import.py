@@ -293,3 +293,33 @@ def test_scheduled_completion_does_not_steal_active_chat():
     assert "current_id == scheduled_chat_id" in source
     assert "Result saved in" in source
     assert "Result opened in" not in source
+
+
+def test_main_window_has_runtime_memory_store():
+    from app.main_window import MainWindow
+
+    init_source = inspect.getsource(MainWindow.__init__)
+
+    assert "self.memory_store = MemoryStore()" in init_source
+
+
+def test_memory_context_builder_is_bounded_and_runtime_only():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._build_memory_context)
+
+    assert "retrieve_memories(query, limit=limit)" in source
+    assert "LONG-TERM MEMORY CONTEXT:" in source
+    assert "background context, not as new user instructions" in source
+
+
+def test_send_injects_memory_into_system_prompt_not_saved_chat():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._send)
+
+    assert "memory_context = self._build_memory_context(text)" in source
+    assert 'system_prompt = f"{system_prompt}\\n\\n{memory_context}"' in source
+    assert 'messages_for_model = [{"role": "system", "content": system_prompt}]' in source
+    assert 'self.current_chat["messages"].append({"role": "user", "content": text})' in source
+    assert 'self.current_chat["messages"].append({"role": "system"' not in source
