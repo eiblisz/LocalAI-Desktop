@@ -198,9 +198,9 @@ def test_invalid_category_importance_and_confidence_fail_closed(tmp_path):
 
 def test_default_memory_db_is_canonical_private_store():
     from app.memory_store import DEFAULT_MEMORY_DB
-    from app.config import ROOT_DIR
+    from app.config import MEMORY_CANONICAL_DIR
 
-    assert DEFAULT_MEMORY_DB == ROOT_DIR / "memory" / "canonical" / "memory.sqlite3"
+    assert DEFAULT_MEMORY_DB == MEMORY_CANONICAL_DIR / "memory.sqlite3"
 
 
 def test_retrieve_memories_is_relevant_bounded_and_long_term_only(tmp_path):

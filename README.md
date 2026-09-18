@@ -49,6 +49,32 @@ Or:
 .\run.ps1
 ```
 
+
+## Private runtime data
+
+Chats, schedules and persistent memory are user data, not repository state. They are stored outside the Git clone so switching branches, worktrees or clones does not make them disappear.
+
+Default Windows location:
+
+```text
+%LOCALAPPDATA%\LocalAI-Desktop\
+  chats\
+  schedules\
+  memory\
+    canonical\
+    backups\
+    documents\
+    archive\
+    exports\
+    vectors\
+```
+
+The root can be overridden with the `LOCALAI_DESKTOP_DATA_DIR` environment variable.
+
+On the first launch after upgrading from a repo-local data layout, LocalAI Desktop copies existing `data/chats`, `data/schedules`, and private `memory/*` runtime files into the stable user-data root. Migration is one-time, non-destructive, and does not overwrite files already present in the target. Legacy files are left untouched for rollback.
+
+Generated artifacts remain under the repository-local `output\` directory.
+
 ## PDF behavior
 
 Click `PDF` in the right sidebar and then `CREATE PDF`.
@@ -99,7 +125,7 @@ Current MVP:
 - Hourly schedules with a configurable interval.
 - Daily schedules at a selected local time.
 - RUN NOW for immediate execution.
-- Persistent task storage under `data/schedules/tasks.json`.
+- Persistent task storage under the private runtime root: `%LOCALAPPDATA%\LocalAI-Desktop\schedules\tasks.json` on Windows.
 - Results are written to a dedicated `[SCHEDULE] ...` chat.
 - Scheduled work is postponed while a normal chat or document generation is using Ollama.
 

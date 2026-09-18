@@ -7,6 +7,19 @@ The language model is a replaceable component.
 
 Memory must remain usable when Qwen, Devstral, or any future model is replaced.
 
+
+## Runtime location
+
+The versioned `memory/` directory in the repository contains architecture documentation and schemas only.
+
+Private live memory is stored under the clone-independent user runtime root. On Windows the default canonical database is:
+
+```text
+%LOCALAPPDATA%\LocalAI-Desktop\memory\canonical\memory.sqlite3
+```
+
+The root may be overridden with `LOCALAI_DESKTOP_DATA_DIR`. Legacy repo-local private memory is copied once into the stable runtime root without deleting the original source.
+
 ## Storage roles
 
 canonical/
