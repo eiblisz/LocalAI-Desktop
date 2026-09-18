@@ -478,3 +478,18 @@ def test_web_auto_detects_inflected_hungarian_search_command():
         "Keressel nekem 4tb-os ssd merevlemezt",
     )
 
+
+def test_extensions_dialog_is_wired_but_not_injected_into_chat_runtime():
+    from app.main_window import MainWindow
+
+    init_source = inspect.getsource(MainWindow.__init__)
+    open_source = inspect.getsource(MainWindow._open_extensions)
+    send_source = inspect.getsource(MainWindow._send)
+
+    assert "self.extension_store = ExtensionStore()" in init_source
+    assert "self.extensions_dialog = None" in init_source
+    assert "ExtensionsDialog(" in open_source
+    assert "self.extension_store" in open_source
+    assert "extension_store" not in send_source
+    assert "extensions_dialog" not in send_source
+
