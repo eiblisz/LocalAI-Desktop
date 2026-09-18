@@ -291,3 +291,85 @@ def test_retrieve_memories_empty_query_returns_nothing(tmp_path):
 
     assert store.retrieve_memories("") == []
     assert store.retrieve_memories("   ") == []
+
+
+def test_remember_explicit_persists_user_provenance(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+
+    memory = store.remember_explicit(
+        category="USER_PROFILE",
+        scope="USER",
+        subject="Annamaria",
+        key="relationship_to_user",
+        value="partner",
+        source_chat_id="chat-123",
+        source_excerpt="Remember that Annamaria is my partner.",
+    )
+
+    sources = store.list_memory_sources(memory["id"])
+
+    assert memory["status"] == "active"
+    assert memory["value"] == "partner"
+    assert len(sources) == 1
+    assert sources[0]["source_type"] == "explicit_user"
+    assert sources[0]["source_ref"] == "chat-123"
+
+
+def test_remember_explicit_is_idempotent_for_same_fact(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+
+    first = store.remember_explicit(
+        category="USER_PROFILE",
+        scope="USER",
+        subject="Lilla",
+        key="relationship_to_user",
+        value="daughter",
+    )
+    second = store.remember_explicit(
+        category="USER_PROFILE",
+        scope="USER",
+        subject="Lilla",
+        key="relationship_to_user",
+        value="daughter",
+    )
+
+    assert first["id"] == second["id"]
+    assert len(store.list_memories(scope="USER")) == 1
+    assert len(store.list_memory_sources(first["id"])) == 2
+
+
+def test_remember_explicit_supersedes_changed_fact(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+
+    old = store.remember_explicit(
+        category="PREFERENCE",
+        scope="USER",
+        subject="Shell",
+        key="preferred",
+        value="CMD",
+    )
+    new = store.remember_explicit(
+        category="PREFERENCE",
+        scope="USER",
+        subject="Shell",
+        key="preferred",
+        value="PowerShell",
+    )
+
+    assert store.get_memory(old["id"])["status"] == "superseded"
+    assert new["status"] == "active"
+    assert new["supersedes_id"] == old["id"]
+    assert new["value"] == "PowerShell"
+
+
+def test_remember_explicit_still_rejects_secrets(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+
+    with pytest.raises(ValueError, match="secret memory rejected"):
+        store.remember_explicit(
+            category="USER_PROFILE",
+            scope="USER",
+            subject="Account",
+            key="password",
+            value="do-not-store-this",
+        )

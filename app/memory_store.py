@@ -274,6 +274,114 @@ class MemoryStore:
 
         return self.get_memory(memory_id)
 
+    def remember_explicit(
+        self,
+        *,
+        category,
+        scope,
+        subject,
+        key,
+        value,
+        source_chat_id=None,
+        source_excerpt=None,
+        importance="IMPORTANT",
+        confidence=1.0,
+    ):
+        """Persist an explicit user memory idempotently with provenance."""
+        category = _clean(category).upper()
+        scope = _clean(scope)
+        subject = _clean(subject)
+        key = _clean(key)
+        value = _clean(value)
+
+        self._validate_enum("category", category, ALLOWED_CATEGORIES)
+
+        with self._connect() as db:
+            existing = db.execute(
+                """
+                SELECT *
+                FROM memories
+                WHERE category = ?
+                  AND scope = ?
+                  AND subject = ?
+                  AND key = ?
+                  AND status = 'active'
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (category, scope, subject, key),
+            ).fetchone()
+
+        if existing is not None and _clean(existing["value"]) == value:
+            memory = self._row_to_dict(existing)
+            self._record_source(
+                memory["id"],
+                source_type="explicit_user",
+                source_ref=source_chat_id,
+                excerpt=source_excerpt,
+            )
+            return memory
+
+        memory = self.add_memory(
+            category=category,
+            scope=scope,
+            subject=subject,
+            key=key,
+            value=value,
+            importance=importance,
+            confidence=confidence,
+            source_chat_id=source_chat_id,
+            supersedes_id=(existing["id"] if existing is not None else None),
+        )
+
+        self._record_source(
+            memory["id"],
+            source_type="explicit_user",
+            source_ref=source_chat_id,
+            excerpt=source_excerpt,
+        )
+        return memory
+
+    def _record_source(
+        self,
+        memory_id,
+        *,
+        source_type,
+        source_ref=None,
+        excerpt=None,
+    ):
+        now = _now()
+        with self._connect() as db:
+            db.execute(
+                """
+                INSERT INTO memory_sources (
+                    id, memory_id, source_type, source_ref, excerpt, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    uuid.uuid4().hex,
+                    memory_id,
+                    _clean(source_type),
+                    _clean(source_ref) or None,
+                    _clean(excerpt) or None,
+                    now,
+                ),
+            )
+
+    def list_memory_sources(self, memory_id):
+        self.get_memory(memory_id)
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT *
+                FROM memory_sources
+                WHERE memory_id = ?
+                ORDER BY created_at ASC
+                """,
+                (memory_id,),
+            ).fetchall()
+        return [self._row_to_dict(row) for row in rows]
+
     def get_memory(self, memory_id):
         with self._connect() as db:
             row = db.execute(
