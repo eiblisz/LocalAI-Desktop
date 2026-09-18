@@ -395,3 +395,12 @@ def test_memory_context_renders_personal_facts_as_plain_semantics():
     assert "the user's name is Iblisz" in context
     assert "Lilla is the user's daughter" in context
 
+def test_memory_context_marks_persistent_facts_as_durable_authority():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._build_memory_context)
+
+    assert "durable user-approved facts loaded from persistent memory" in source
+    assert "Do not describe a matching memory as being only part of the current conversation" in source
+    assert "answer the fact directly" in source
+\n
