@@ -46,6 +46,7 @@ from .docx_tool import create_docx
 from .excel_tool import create_conversation_excel, create_structured_excel
 from .file_reader import read_attachment
 from .html_tool import create_html
+from .memory_answers import direct_user_memory_answer
 from .memory_extractor import is_explicit_memory_request
 from .memory_store import MemoryStore
 from .ollama_client import OllamaClient
@@ -755,6 +756,15 @@ class MainWindow(QMainWindow):
         ]
         return any(marker in normalized for marker in markers)
 
+    def _direct_user_memory_answer(self, query):
+        memories = self.memory_store.list_memories(
+            scope="USER",
+            category="USER_PROFILE",
+            statuses=("active",),
+            include_session_only=False,
+        )
+        return direct_user_memory_answer(query, memories)
+
     def _build_memory_context(self, query, *, limit=8):
         """Build bounded runtime-only long-term memory context for the model."""
         memories = self.memory_store.retrieve_memories(query, limit=limit)
@@ -862,6 +872,17 @@ class MainWindow(QMainWindow):
             self.stop_button.setEnabled(False)
             self.status.setText("Saving memory...")
             self.thread.start()
+            return
+
+        direct_memory_answer = self._direct_user_memory_answer(text)
+        if direct_memory_answer:
+            self.current_chat["messages"].append(
+                {"role": "assistant", "content": direct_memory_answer}
+            )
+            self.store.save(self.current_chat)
+            self.status.setText("Memory answer")
+            self._render_chat()
+            self._load_chat_list()
             return
 
         system_prompt = DEFAULT_SYSTEM_PROMPT
