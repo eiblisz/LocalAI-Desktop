@@ -270,3 +270,55 @@ def test_hungarian_user_son_relation_stays_relationship_to_user():
     ]
     assert client.calls == []
 
+
+def test_hungarian_girlfriend_relation_is_third_person_fact():
+    client = FakeClient({
+        "memories": [
+            {
+                "category": "USER_PROFILE",
+                "scope": "USER",
+                "subject": "wrong",
+                "key": "relationship_to_user",
+                "value": "friend",
+            }
+        ]
+    })
+
+    memories = extract_explicit_memories(
+        client,
+        "qwen-test",
+        "Jegyezd meg hogy Zsofia Kristof baratnoje.",
+    )
+
+    assert memories == [
+        {
+            "category": "USER_PROFILE",
+            "scope": "USER",
+            "subject": "Zsofia",
+            "key": "girlfriend_of",
+            "value": "Kristof",
+        }
+    ]
+    assert client.calls == []
+
+
+def test_hungarian_accented_girlfriend_relation_is_supported():
+    client = FakeClient({"memories": []})
+
+    memories = extract_explicit_memories(
+        client,
+        "qwen-test",
+        "Jegyezd meg, hogy Zsófia Kristóf barátnője.",
+    )
+
+    assert memories == [
+        {
+            "category": "USER_PROFILE",
+            "scope": "USER",
+            "subject": "Zsófia",
+            "key": "girlfriend_of",
+            "value": "Kristóf",
+        }
+    ]
+    assert client.calls == []
+
