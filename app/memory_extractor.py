@@ -168,23 +168,39 @@ def _explicit_relationship_memories(user_text):
     relation_terms = "|".join(
         sorted((re.escape(term) for term in RELATIONSHIP_TO_USER), key=len, reverse=True)
     )
-    pattern = re.compile(
-        rf"(?:\ba\s+)?(?P<relation>{relation_terms})\s+"
-        rf"(?P<name>.+?)"
-        rf"(?=(?:\s+(?:és|es|and)\s+(?:a\s+)?(?:{relation_terms})\b)|[,.!?;]|$)",
+    relation_first = re.compile(
+        rf"^(?:a\s+)?(?P<relation>{relation_terms})\s+(?P<name>.+)$",
+        re.IGNORECASE,
+    )
+    relation_last = re.compile(
+        rf"^(?P<name>.+?)\s+(?:a\s+)?(?P<relation>{relation_terms})$",
         re.IGNORECASE,
     )
 
+    body = re.sub(
+        r"^.*?\b(?:jegyezd\s+meg|emlekezz|emlékezz|remember(?:\s+that)?)\b\s*",
+        "",
+        user_text,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    body = re.sub(r"^(?:,?\s*hogy\s+)", "", body, count=1, flags=re.IGNORECASE)
+
     memories = []
     seen = set()
-    for match in pattern.finditer(user_text):
-        relation_token = match.group("relation").lower()
-        name = _clean(match.group("name")).strip(" ,.;:!?")
-        if not name:
+    for clause in re.split(r"\s+(?:és|es|and)\s+", body, flags=re.IGNORECASE):
+        clause = _clean(clause).strip(" ,.;:!?")
+        if not clause:
             continue
 
+        match = relation_first.match(clause) or relation_last.match(clause)
+        if not match:
+            continue
+
+        relation_token = match.group("relation").lower()
+        name = _clean(match.group("name")).strip(" ,.;:!?")
         relation = RELATIONSHIP_TO_USER.get(relation_token)
-        if not relation:
+        if not name or not relation:
             continue
 
         identity = (name.casefold(), relation)
