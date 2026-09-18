@@ -42,3 +42,8 @@ memory/backups/*
 !memory/README.md
 !memory/schemas/
 !memory/schemas/**
+
+# Legacy/private runtime data must never be committed.
+data/schedules/*
+!data/schedules/.gitkeep
+data-backup-before-restore-*/
