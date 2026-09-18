@@ -404,3 +404,43 @@ def test_memory_context_marks_persistent_facts_as_durable_authority():
     assert "Do not describe a matching memory as being only part of the current conversation" in source
     assert "answer the fact directly" in source
 
+def test_memory_context_enforces_user_second_person_perspective():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._build_memory_context)
+
+    assert "you are the assistant, and USER refers to the human user" in source
+    assert "Never adopt USER profile facts as your own identity or relationships" in source
+    assert "express USER self/profile facts in second person" in source
+    assert "Your name is Iblisz" in source
+    assert "Lilla is your daughter" in source
+    assert "My name is Iblisz" in source
+    assert "Lilla is my daughter" in source
+
+def test_direct_personal_memory_answers_bypass_model_generation():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._send)
+
+    assert "direct_memory_answer = self._direct_user_memory_answer(text)" in source
+    assert '{"role": "assistant", "content": direct_memory_answer}' in source
+    assert 'self.status.setText("Memory answer")' in source
+
+    direct_index = source.index(
+        "direct_memory_answer = self._direct_user_memory_answer(text)"
+    )
+    worker_index = source.index("self.thread = QThread()", direct_index)
+    assert direct_index < worker_index
+
+
+def test_direct_user_memory_answer_reads_only_active_user_profile_memories():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._direct_user_memory_answer)
+
+    assert 'scope="USER"' in source
+    assert 'category="USER_PROFILE"' in source
+    assert 'statuses=("active",)' in source
+    assert "include_session_only=False" in source
+    assert "direct_user_memory_answer(query, memories)" in source
+
