@@ -1,0 +1,14 @@
+{
+  "id": "example.user.preferred_shell",
+  "subject": "user",
+  "predicate": "preferred_shell",
+  "value": "PowerShell",
+  "memory_class": "explicit",
+  "scope": "global",
+  "source": "user",
+  "status": "active",
+  "created_at": "2026-01-01T00:00:00Z",
+  "updated_at": "2026-01-01T00:00:00Z",
+  "tags": ["example"],
+  "supersedes": null
+}

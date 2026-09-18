@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LocalAI Desktop Memory Record V1",
+  "type": "object",
+  "required": [
+    "id",
+    "subject",
+    "predicate",
+    "value",
+    "memory_class",
+    "source",
+    "status",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "subject": {
+      "type": "string"
+    },
+    "predicate": {
+      "type": "string"
+    },
+    "value": {},
+    "memory_class": {
+      "enum": ["explicit", "candidate", "temporary"]
+    },
+    "scope": {
+      "type": "string",
+      "default": "global"
+    },
+    "source": {
+      "enum": ["user", "assistant", "system", "import"]
+    },
+    "status": {
+      "enum": ["active", "superseded", "archived", "deleted"]
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "supersedes": {
+      "type": ["string", "null"]
+    }
+  },
+  "additionalProperties": true
+}

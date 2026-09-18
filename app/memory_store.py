@@ -7,7 +7,7 @@ from pathlib import Path
 from .config import ROOT_DIR
 
 
-DEFAULT_MEMORY_DB = ROOT_DIR / "data" / "memory.sqlite3"
+DEFAULT_MEMORY_DB = ROOT_DIR / "memory" / "canonical" / "memory.sqlite3"
 
 ALLOWED_CATEGORIES = {
     "USER_PROFILE",

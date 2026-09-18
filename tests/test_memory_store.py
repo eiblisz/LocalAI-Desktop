@@ -194,3 +194,10 @@ def test_invalid_category_importance_and_confidence_fail_closed(tmp_path):
             value="x",
             confidence=1.5,
         )
+
+
+def test_default_memory_db_is_canonical_private_store():
+    from app.memory_store import DEFAULT_MEMORY_DB
+    from app.config import ROOT_DIR
+
+    assert DEFAULT_MEMORY_DB == ROOT_DIR / "memory" / "canonical" / "memory.sqlite3"

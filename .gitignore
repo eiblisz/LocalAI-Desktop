@@ -9,3 +9,36 @@ data/chats/*.json
 !data/chats/.gitkeep
 output/*
 !output/.gitkeep
+
+# ============================================================
+# LocalAI Desktop - Private Runtime Memory
+# ============================================================
+
+# Canonical user memory is private runtime data.
+memory/canonical/*
+!memory/canonical/.gitkeep
+
+# Derived vector/embedding indexes are rebuildable.
+memory/vectors/*
+!memory/vectors/.gitkeep
+
+# User-provided memory source documents are private.
+memory/documents/*
+!memory/documents/.gitkeep
+
+# Archived runtime memories remain private.
+memory/archive/*
+!memory/archive/.gitkeep
+
+# Portable exports may contain personal data.
+memory/exports/*
+!memory/exports/.gitkeep
+
+# Memory backups are always private.
+memory/backups/*
+!memory/backups/.gitkeep
+
+# Memory architecture, documentation and schemas ARE versioned.
+!memory/README.md
+!memory/schemas/
+!memory/schemas/**
