@@ -359,3 +359,12 @@ def test_memory_write_failure_has_distinct_bounded_error_dialog():
     assert "len(summary) > 520" in source
     assert "setDetailedText(full_message)" in source
 
+def test_memory_context_explains_relationship_semantics():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._build_memory_context)
+
+    assert "relationship_to_user" in source
+    assert "literal relationship" in source
+    assert "answer direct relationship questions" in source
+
