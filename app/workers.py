@@ -11,14 +11,26 @@ from .computer_status_tool import (
 from .ebay_tool import ebay_context_text, search_ebay
 from .evidence_verifier import (
     evidence_ledger_context_text,
+    evidence_required,
     filter_verified_results,
     verify_answer_against_evidence,
 )
+from .generic_shopping_evidence import (
+    build_generic_shopping_queries,
+    build_generic_shopping_records,
+    is_generic_shopping_request,
+    render_generic_shopping_answer,
+)
 from .memory_runtime import remember_explicit_request
-from .language_policy import response_language_instruction
+from .language_policy import (
+    detect_user_language,
+    response_language_instruction,
+    response_language_matches,
+)
 from .ollama_client import OllamaClient
 from .weather_tool import get_weather, weather_context_text
 from .web_search_tool import (
+    build_search_plan,
     search_web,
     source_entries,
     source_urls,
@@ -193,6 +205,54 @@ class ChatWebWorker(QObject):
 
     def _conversation_language_instruction(self):
         return response_language_instruction(self.user_prompt)
+
+    def _repair_response_language(self, answer):
+        if response_language_matches(self.user_prompt, answer):
+            return answer
+
+        expected = detect_user_language(self.user_prompt)
+        language_name = {
+            "hu": "Hungarian",
+            "de": "German",
+            "en": "English",
+        }.get(expected)
+        if not language_name:
+            return answer
+
+        repaired = self.client.chat_once(
+            model=self.model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        f"Rewrite the supplied answer in {language_name}. "
+                        "Preserve every URL, number, product name, and factual claim exactly. "
+                        "Do not add, remove, infer, or correct facts. Return only the rewritten answer."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": answer,
+                },
+            ],
+        ).strip()
+
+        if repaired and response_language_matches(self.user_prompt, repaired):
+            return repaired
+
+        if expected == "hu":
+            return (
+                "A generált webes válasz nyelve nem egyezett a kérdés nyelvével. "
+                "A rendszer nem jeleníti meg a hibás nyelvű választ."
+            )
+        if expected == "de":
+            return (
+                "Die Sprache der generierten Web-Antwort stimmte nicht mit der "
+                "Sprache der Anfrage überein. Die fehlerhafte Antwort wird nicht angezeigt."
+            )
+        return (
+            "The generated web answer used the wrong language and was not shown."
+        )
 
     def _query_is_literal_followup_command(self, query):
         normalized = self._fold_text(query)
@@ -420,7 +480,19 @@ class ChatWebWorker(QObject):
             if not self.user_prompt:
                 raise RuntimeError("Web chat request is empty.")
 
-            queries = self._generate_search_queries()
+            generic_shopping_mode = (
+                is_generic_shopping_request(self.user_prompt)
+                and not self._has_multiple_research_topics()
+                and not evidence_required(build_search_plan(self.user_prompt))
+            )
+            queries = (
+                build_generic_shopping_queries(self.user_prompt)
+                if generic_shopping_mode
+                else self._generate_search_queries()
+            )
+            generic_shopping_records = []
+            generic_shopping_queries = []
+            generic_shopping_providers = []
             contexts = []
             urls = []
             entries = []
@@ -440,13 +512,41 @@ class ChatWebWorker(QObject):
                 try:
                     payload = search_web(
                         query,
-                        max_results=6,
+                        max_results=10 if generic_shopping_mode else 6,
                         fetch_pages=True,
                     )
                 except Exception as exc:
                     failed_queries.append(
                         f"{query}: {self._compact_web_error(exc)}"
                     )
+                    continue
+
+                if generic_shopping_mode:
+                    if query not in generic_shopping_queries:
+                        generic_shopping_queries.append(query)
+                    provider = str(payload.get("provider", "")).strip() or "unknown"
+                    if provider not in generic_shopping_providers:
+                        generic_shopping_providers.append(provider)
+                    for note in payload.get("provider_chain_errors") or []:
+                        if note not in provider_fallback_notes:
+                            provider_fallback_notes.append(str(note))
+
+                    records = build_generic_shopping_records(
+                        query,
+                        payload.get("results") or [],
+                        limit=6,
+                    )
+                    known_urls = {
+                        item["url"] for item in generic_shopping_records
+                    }
+                    for record in records:
+                        if record["url"] not in known_urls:
+                            generic_shopping_records.append(record)
+                            known_urls.add(record["url"])
+                    if not records:
+                        failed_queries.append(
+                            f"{query}: no product-specific shopping evidence"
+                        )
                     continue
 
                 context_body = web_search_context_text(payload)
@@ -495,6 +595,68 @@ class ChatWebWorker(QObject):
                         item["url"] for item in entries
                     }:
                         entries.append(entry)
+
+            if generic_shopping_mode:
+                answer = render_generic_shopping_answer(
+                    self.user_prompt,
+                    generic_shopping_records,
+                )
+                self.token.emit(answer)
+
+                if generic_shopping_queries:
+                    if len(generic_shopping_queries) == 1:
+                        query_footer = (
+                            f"Search query: {generic_shopping_queries[0]}"
+                        )
+                    else:
+                        query_footer = (
+                            "Search queries:\n"
+                            + "\n".join(
+                                f"- {query}"
+                                for query in generic_shopping_queries
+                            )
+                        )
+                else:
+                    query_footer = f"Search query: {self.user_prompt}"
+
+                if len(generic_shopping_providers) == 1:
+                    provider_footer = (
+                        f"Search provider: {generic_shopping_providers[0]}"
+                    )
+                elif generic_shopping_providers:
+                    provider_footer = (
+                        "Search providers: "
+                        + ", ".join(generic_shopping_providers)
+                    )
+                else:
+                    provider_footer = "Search provider: none"
+
+                if generic_shopping_records:
+                    source_lines = "\n".join(
+                        f"- [{item['title']}]({item['url']})"
+                        for item in generic_shopping_records[:12]
+                    )
+                    evidence_status = (
+                        "Shopping evidence: PASS "
+                        f"({len(generic_shopping_records)} product-level result(s))"
+                    )
+                else:
+                    source_lines = "- No verified product-level source"
+                    evidence_status = (
+                        "Shopping evidence: FAIL-CLOSED "
+                        "(0 product-level results)"
+                    )
+
+                self.token.emit(
+                    "\n\n---\n"
+                    f"{query_footer}\n"
+                    f"{provider_footer}\n"
+                    f"{evidence_status}\n"
+                    "Web results / sources:\n"
+                    f"{source_lines}"
+                )
+                self.finished.emit()
+                return
 
             if not contexts or not urls:
                 if constrained_rejections:
@@ -599,6 +761,8 @@ class ChatWebWorker(QObject):
             answer = "".join(answer_parts).strip()
             if not answer:
                 raise RuntimeError("The model returned an empty web answer.")
+
+            answer = self._repair_response_language(answer)
 
             verification_status = ""
             unique_verification_queries = list(dict.fromkeys(verification_queries))

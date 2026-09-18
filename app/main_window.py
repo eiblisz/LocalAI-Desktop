@@ -1,4 +1,5 @@
 import html
+import re
 import webbrowser
 from datetime import datetime
 from pathlib import Path
@@ -755,7 +756,10 @@ class MainWindow(QMainWindow):
             "in stock",
             "available now",
         ]
-        return any(marker in normalized for marker in markers)
+        return (
+            any(marker in normalized for marker in markers)
+            or bool(re.search(r"\bkeress\w*\b", normalized, flags=re.IGNORECASE))
+        )
 
     def _direct_user_memory_answer(self, query):
         memories = self.memory_store.list_memories(

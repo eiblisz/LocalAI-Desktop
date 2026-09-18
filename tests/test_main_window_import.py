@@ -469,3 +469,12 @@ def test_normal_chat_system_prompt_enforces_current_user_language():
         "messages_for_model ="
     )
 
+
+def test_web_auto_detects_inflected_hungarian_search_command():
+    from app.main_window import MainWindow
+
+    assert MainWindow._looks_like_web_request(
+        None,
+        "Keressel nekem 4tb-os ssd merevlemezt",
+    )
+

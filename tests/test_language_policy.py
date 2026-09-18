@@ -33,3 +33,25 @@ def test_unknown_language_still_forbids_unrequested_switching():
 def test_german_umlaut_alone_is_not_misclassified_as_hungarian():
     assert detect_user_language("Wie viel kostet das für mich?") != "hu"
 
+
+def test_detects_german_request():
+    assert detect_user_language("Wie viel kostet diese SSD und wo kann ich sie kaufen?") == "de"
+
+
+def test_hungarian_response_language_rejects_clearly_german_answer():
+    from app.language_policy import response_language_matches
+
+    assert not response_language_matches(
+        "Keress nekem 4 TB-os SSD-t",
+        "Die Suche zeigt viele Angebote und Preise. Hier sind die besten Produkte.",
+    )
+
+
+def test_hungarian_response_language_accepts_hungarian_answer():
+    from app.language_policy import response_language_matches
+
+    assert response_language_matches(
+        "Keress nekem 4 TB-os SSD-t",
+        "Ellenőrzött termékszintű találatok. Csak olyan árat mutatok, amely igazolt.",
+    )
+
