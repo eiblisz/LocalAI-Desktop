@@ -50,6 +50,27 @@ Or:
 ```
 
 
+
+## Extensions foundation
+
+LocalAI Desktop includes an Extensions registry for saving external tool/service endpoints without wiring them into chat automatically.
+
+The registry is stored as private runtime data:
+
+```text
+%LOCALAPPDATA%\LocalAI-Desktop\extensions\
+  registry.json
+  configs\
+```
+
+The Extensions view supports:
+- HTTP API, local service, MCP/connector and custom-tool records
+- endpoint, enabled state, capabilities, authentication type and timeout metadata
+- asynchronous connection testing for HTTP API and local-service endpoints
+- persisted connection status and last-test time
+
+Raw API keys, passwords and tokens are deliberately not stored in the registry. Credential storage/binding and runtime capability injection are separate future layers. Enabling an extension in this foundation slice does not give the chat access to it.
+
 ## Private runtime data
 
 Chats, schedules and persistent memory are user data, not repository state. They are stored outside the Git clone so switching branches, worktrees or clones does not make them disappear.
