@@ -27,6 +27,7 @@ AUTH_TYPES = {
     "bearer": "Bearer Token",
     "basic": "Basic Auth",
     "oauth": "OAuth",
+    "secret_url": "Secret URL",
 }
 
 _SECRET_TOKENS = {
