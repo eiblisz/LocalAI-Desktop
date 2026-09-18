@@ -42,6 +42,24 @@ _HUNGARIAN_WORDS = {
 
 _STRONG_HUNGARIAN_CHARS = set("őű")
 
+_GERMAN_WORDS = {
+    "der", "die", "das", "und", "oder", "mit", "fuer", "für", "ist", "sind",
+    "preis", "preise", "kaufen", "suche", "suchen", "guenstig", "günstig",
+    "angebot", "angebote", "keine", "einer", "eine", "einen", "hier",
+}
+
+_ENGLISH_WORDS = {
+    "the", "and", "or", "with", "is", "are", "price", "prices", "buy",
+    "search", "find", "verified", "product", "products", "source", "sources",
+}
+
+_HUNGARIAN_RESPONSE_WORDS = {
+    "a", "az", "es", "és", "vagy", "van", "vannak", "arat", "árat", "arak",
+    "árak", "termek", "termék", "termekek", "termékek", "forras", "forrás",
+    "forrasok", "források", "talalat", "találat", "talalatok", "találatok",
+    "ellenorzott", "ellenőrzött", "csak", "olyan", "nem", "tudtam", "lehetett",
+}
+
 
 def _fold(value):
     text = unicodedata.normalize("NFKD", str(value or "").casefold())
@@ -71,6 +89,13 @@ def detect_user_language(text):
     ):
         return "hu"
 
+    german_hits = sum(
+        1 for token in folded_tokens
+        if token in {_fold(value) for value in _GERMAN_WORDS}
+    )
+    if german_hits >= 2:
+        return "de"
+
     if any(token in folded_tokens for token in {"who", "what", "how", "remember", "search"}):
         return "en"
 
@@ -89,7 +114,51 @@ def response_language_instruction(text):
             "RESPONSE LANGUAGE: The current user message is English. "
             "Answer in English unless the user explicitly asks for another language."
         )
+    if language == "de":
+        return (
+            "RESPONSE LANGUAGE: The current user message is German. "
+            "Answer in German unless the user explicitly asks for another language."
+        )
     return (
         "RESPONSE LANGUAGE: Answer in the same language as the current user message. "
         "Do not switch languages without an explicit user request."
     )
+
+
+
+def _response_language_scores(text):
+    raw = str(text or "")
+    lowered = raw.casefold()
+    tokens = re.findall(r"[\wÀ-ž]+", lowered, flags=re.UNICODE)
+    folded_tokens = [_fold(token) for token in tokens]
+
+    hu_values = {_fold(value) for value in _HUNGARIAN_RESPONSE_WORDS}
+    de_values = {_fold(value) for value in _GERMAN_WORDS}
+    en_values = {_fold(value) for value in _ENGLISH_WORDS}
+
+    scores = {
+        "hu": sum(1 for token in folded_tokens if token in hu_values),
+        "de": sum(1 for token in folded_tokens if token in de_values),
+        "en": sum(1 for token in folded_tokens if token in en_values),
+    }
+    if any(char in lowered for char in _STRONG_HUNGARIAN_CHARS):
+        scores["hu"] += 2
+    return scores
+
+
+def response_language_matches(user_text, response_text):
+    expected = detect_user_language(user_text)
+    if expected not in {"hu", "de", "en"}:
+        return True
+
+    scores = _response_language_scores(response_text)
+    expected_score = scores.get(expected, 0)
+    foreign_scores = [
+        score for language, score in scores.items()
+        if language != expected
+    ]
+    strongest_foreign = max(foreign_scores or [0])
+
+    if strongest_foreign < 2:
+        return True
+    return expected_score >= strongest_foreign
