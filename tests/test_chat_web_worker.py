@@ -586,3 +586,18 @@ def test_referential_followup_still_keeps_previous_context():
     )
 
     assert worker._needs_previous_search_context()
+
+
+def test_short_hungarian_web_prompt_stays_hungarian():
+    worker = workers.ChatWebWorker(
+        DummyWebClient(),
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "ki Zsofia?",
+    )
+
+    instruction = worker._conversation_language_instruction()
+    assert "Hungarian" in instruction
+    assert "Answer in Hungarian" in instruction
+    assert "Do not switch to English" in instruction
+
