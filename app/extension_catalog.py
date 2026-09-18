@@ -9,9 +9,21 @@ PRESET_CATEGORIES = (
     "Creativity",
     "Developer Tools",
     "Business & Operations",
+    "Communication",
 )
 
 EXTENSION_PRESETS = (
+    {
+        "id": "discord-webhook",
+        "name": "Discord Webhook",
+        "category": "Communication",
+        "description": "Send LocalAI Desktop messages and notifications to a Discord channel.",
+        "type": "http_api",
+        "auth_type": "secret_url",
+        "capabilities": ("send_message", "send_embed"),
+        "provider_url": "https://discord.com/",
+        "docs_url": "https://discord.com/developers/docs/resources/webhook",
+    },
     {
         "id": "google-calendar",
         "name": "Google Calendar",
