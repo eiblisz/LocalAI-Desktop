@@ -103,3 +103,8 @@ def test_hungarian_renderer_fails_closed_without_product_evidence():
 
     assert "Nem találtam olyan termékszintű forrást" in answer
     assert "Nem fogok kitalált árat vagy specifikációt" in answer
+
+
+def test_generic_web_search_is_not_misclassified_as_shopping():
+    assert not is_generic_shopping_request("Keress nekem valamit az interneten")
+
