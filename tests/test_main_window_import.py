@@ -368,3 +368,30 @@ def test_memory_context_explains_relationship_semantics():
     assert "literal relationship" in source
     assert "answer direct relationship questions" in source
 
+def test_memory_context_renders_personal_facts_as_plain_semantics():
+    from types import SimpleNamespace
+    from app.main_window import MainWindow
+
+    class Store:
+        def retrieve_memories(self, query, limit=8):
+            return [
+                {
+                    "category": "USER_PROFILE",
+                    "subject": "USER",
+                    "key": "name",
+                    "value": "Iblisz",
+                },
+                {
+                    "category": "USER_PROFILE",
+                    "subject": "Lilla",
+                    "key": "relationship_to_user",
+                    "value": "daughter",
+                },
+            ]
+
+    host = SimpleNamespace(memory_store=Store())
+    context = MainWindow._build_memory_context(host, "Ki Iblisz es ki Lilla?")
+
+    assert "the user's name is Iblisz" in context
+    assert "Lilla is the user's daughter" in context
+
