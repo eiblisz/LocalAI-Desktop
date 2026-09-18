@@ -108,10 +108,76 @@ def validate_memory_candidate(candidate):
     }
 
 
+RELATIONSHIP_TO_USER = {
+    "párom": "partner",
+    "parom": "partner",
+    "lányom": "daughter",
+    "lanyom": "daughter",
+    "fiam": "son",
+    "férjem": "husband",
+    "ferjem": "husband",
+    "feleségem": "wife",
+    "felesegem": "wife",
+    "anyám": "mother",
+    "anyam": "mother",
+    "apám": "father",
+    "apam": "father",
+    "testvérem": "sibling",
+    "testverem": "sibling",
+}
+
+
+def _explicit_relationship_memories(user_text):
+    """Deterministically extract common user relationships from explicit memory requests."""
+    if not is_explicit_memory_request(user_text):
+        return []
+
+    relation_terms = "|".join(
+        sorted((re.escape(term) for term in RELATIONSHIP_TO_USER), key=len, reverse=True)
+    )
+    pattern = re.compile(
+        rf"(?:\ba\s+)?(?P<relation>{relation_terms})\s+"
+        rf"(?P<name>.+?)"
+        rf"(?=(?:\s+(?:és|es|and)\s+(?:a\s+)?(?:{relation_terms})\b)|[,.!?;]|$)",
+        re.IGNORECASE,
+    )
+
+    memories = []
+    seen = set()
+    for match in pattern.finditer(user_text):
+        relation_token = match.group("relation").lower()
+        name = _clean(match.group("name")).strip(" ,.;:!?")
+        if not name:
+            continue
+
+        relation = RELATIONSHIP_TO_USER.get(relation_token)
+        if not relation:
+            continue
+
+        identity = (name.casefold(), relation)
+        if identity in seen:
+            continue
+        seen.add(identity)
+
+        memories.append({
+            "category": "USER_PROFILE",
+            "scope": "USER",
+            "subject": name,
+            "key": "relationship_to_user",
+            "value": relation,
+        })
+
+    return memories
+
+
 def extract_explicit_memories(client, model, user_text):
     user_text = _clean(user_text)
     if not is_explicit_memory_request(user_text):
         return []
+
+    deterministic_relationships = _explicit_relationship_memories(user_text)
+    if deterministic_relationships:
+        return [validate_memory_candidate(item) for item in deterministic_relationships]
 
     messages = [
         {
