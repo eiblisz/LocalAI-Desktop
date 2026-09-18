@@ -14,6 +14,7 @@ from .evidence_verifier import (
     filter_verified_results,
     verify_answer_against_evidence,
 )
+from .memory_runtime import remember_explicit_request
 from .ollama_client import OllamaClient
 from .weather_tool import get_weather, weather_context_text
 from .web_search_tool import (
@@ -51,6 +52,48 @@ class ChatWorker(QObject):
 
     def stop(self):
         self._stop_event.set()
+
+
+class MemoryWriteWorker(QObject):
+    finished = Signal()
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        client: OllamaClient,
+        model: str,
+        user_text: str,
+        memory_store,
+        source_chat_id: str,
+    ):
+        super().__init__()
+        self.client = client
+        self.model = model
+        self.user_text = str(user_text or "").strip()
+        self.memory_store = memory_store
+        self.source_chat_id = str(source_chat_id or "").strip()
+        self.saved_count = 0
+
+    @Slot()
+    def run(self):
+        try:
+            written = remember_explicit_request(
+                self.client,
+                self.model,
+                self.user_text,
+                self.memory_store,
+                source_chat_id=self.source_chat_id or None,
+            )
+            self.saved_count = len(written)
+            self.finished.emit()
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+    def stop(self):
+        # The extraction call is a bounded non-streaming request and cannot be
+        # interrupted safely once submitted. Keep the worker API compatible
+        # with MainWindow's shared stop/cleanup path.
+        return None
 
 
 class ChatWebWorker(QObject):
