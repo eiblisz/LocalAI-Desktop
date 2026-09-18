@@ -601,3 +601,123 @@ def test_short_hungarian_web_prompt_stays_hungarian():
     assert "Answer in Hungarian" in instruction
     assert "Do not switch to English" in instruction
 
+
+def test_unconstrained_ssd_shopping_uses_deterministic_product_evidence(monkeypatch):
+    monkeypatch.setattr(
+        workers.ChatWebWorker,
+        "_generate_search_queries",
+        lambda self: ["4 TB SSD Germany"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "search_web",
+        lambda query, max_results=6, fetch_pages=True: {
+            "provider": "Brave Search API",
+            "query": query,
+            "provider_chain_errors": [],
+            "results": [
+                {
+                    "title": "4 TB SSD (2026) Preisvergleich",
+                    "url": "https://www.idealo.de/preisvergleich/ProductCategory/14613F9786619.html",
+                    "snippet": "4 TB SSD Preisvergleich",
+                    "page_text": "",
+                },
+                {
+                    "title": "SAMSUNG 870 QVO 4TB, 4 TB, SSD, intern",
+                    "url": "https://www.mediamarkt.de/de/product/_samsung-870-qvo-4tb-12345.html",
+                    "snippet": "SAMSUNG 870 QVO 4TB SSD 289,00 EUR",
+                    "page_text": "",
+                },
+            ],
+        },
+    )
+
+    client = DummyWebClient()
+    tokens = []
+    failed = []
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Keress nekem 4 TB-os SSD-t",
+    )
+    worker.token.connect(tokens.append)
+    worker.failed.connect(failed.append)
+    worker.run()
+
+    assert not failed
+    assert client.stream_calls == []
+
+    combined = "".join(tokens)
+    assert "Ellenőrzött termékszintű találatok:" in combined
+    assert "SAMSUNG 870 QVO 4TB" in combined
+    assert "289,00 EUR" in combined
+    assert "mediamarkt.de/de/product/" in combined
+    assert "Idealo" not in combined
+    assert "Preis-Leistungs" not in combined
+    assert "MB/s" not in combined
+    assert "Shopping evidence: PASS" in combined
+
+
+def test_unconstrained_shopping_fails_closed_without_product_page(monkeypatch):
+    monkeypatch.setattr(
+        workers.ChatWebWorker,
+        "_generate_search_queries",
+        lambda self: ["4 TB SSD Germany"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "search_web",
+        lambda query, max_results=6, fetch_pages=True: {
+            "provider": "Brave Search API",
+            "query": query,
+            "provider_chain_errors": [],
+            "results": [
+                {
+                    "title": "4 TB SSD (2026) Preisvergleich",
+                    "url": "https://www.idealo.de/preisvergleich/ProductCategory/14613F9786619.html",
+                    "snippet": "4 TB SSD Preisvergleich",
+                    "page_text": "",
+                },
+            ],
+        },
+    )
+
+    client = DummyWebClient()
+    tokens = []
+    failed = []
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Keress nekem 4 TB-os SSD-t",
+    )
+    worker.token.connect(tokens.append)
+    worker.failed.connect(failed.append)
+    worker.run()
+
+    assert not failed
+    assert client.stream_calls == []
+
+    combined = "".join(tokens)
+    assert "Nem találtam olyan termékszintű forrást" in combined
+    assert "Nem fogok kitalált árat vagy specifikációt" in combined
+    assert "Shopping evidence: FAIL-CLOSED" in combined
+
+
+def test_price_bounded_teakettle_keeps_existing_verified_model_path(monkeypatch):
+    worker = workers.ChatWebWorker(
+        DummyWebClient(),
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Keress nekem teaskannat 100 EUR alatt",
+    )
+
+    source = worker.user_prompt
+    from app.evidence_verifier import evidence_required
+    from app.web_search_tool import build_search_plan
+    from app.generic_shopping_evidence import is_generic_shopping_request
+
+    assert is_generic_shopping_request(source)
+    assert evidence_required(build_search_plan(source))
+
