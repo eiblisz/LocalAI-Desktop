@@ -108,6 +108,39 @@ def validate_memory_candidate(candidate):
     }
 
 
+SELF_NAME_PATTERNS = (
+    re.compile(
+        r"\b(?:az\s+én\s+nevem|az\s+en\s+nevem|a\s+nevem)\s+(?P<name>[^,.!?;]+)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bmy\s+name\s+is\s+(?P<name>[^,.!?;]+)",
+        re.IGNORECASE,
+    ),
+)
+
+
+def _explicit_self_name_memories(user_text):
+    if not is_explicit_memory_request(user_text):
+        return []
+
+    for pattern in SELF_NAME_PATTERNS:
+        match = pattern.search(user_text)
+        if not match:
+            continue
+        name = _clean(match.group("name")).strip(" ,.;:!?")
+        if not name:
+            return []
+        return [{
+            "category": "USER_PROFILE",
+            "scope": "USER",
+            "subject": "USER",
+            "key": "name",
+            "value": name,
+        }]
+    return []
+
+
 RELATIONSHIP_TO_USER = {
     "párom": "partner",
     "parom": "partner",
@@ -175,9 +208,12 @@ def extract_explicit_memories(client, model, user_text):
     if not is_explicit_memory_request(user_text):
         return []
 
-    deterministic_relationships = _explicit_relationship_memories(user_text)
-    if deterministic_relationships:
-        return [validate_memory_candidate(item) for item in deterministic_relationships]
+    deterministic_memories = (
+        _explicit_self_name_memories(user_text)
+        + _explicit_relationship_memories(user_text)
+    )
+    if deterministic_memories:
+        return [validate_memory_candidate(item) for item in deterministic_memories]
 
     messages = [
         {
