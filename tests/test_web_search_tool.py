@@ -17,6 +17,7 @@ class SearchResponse:
 
 
 def test_web_search_uses_bing_rss_primary(monkeypatch):
+    monkeypatch.setattr(web_search_tool, "brave_search_configured", lambda: False)
     rss = """<?xml version="1.0"?>
     <rss><channel>
       <item>
@@ -49,6 +50,7 @@ def test_web_search_uses_bing_rss_primary(monkeypatch):
 
 
 def test_web_search_falls_back_to_bing_html(monkeypatch):
+    monkeypatch.setattr(web_search_tool, "brave_search_configured", lambda: False)
     monkeypatch.setattr(
         web_search_tool,
         "_search_bing_rss",
@@ -82,6 +84,7 @@ def test_web_search_falls_back_to_bing_html(monkeypatch):
 
 
 def test_web_search_falls_back_to_yahoo_after_bing_paths(monkeypatch):
+    monkeypatch.setattr(web_search_tool, "brave_search_configured", lambda: False)
     monkeypatch.setattr(
         web_search_tool,
         "_search_bing_rss",
@@ -158,6 +161,7 @@ def test_yahoo_redirect_url_is_decoded():
 
 
 def test_web_search_uses_edge_browser_as_final_fallback(monkeypatch):
+    monkeypatch.setattr(web_search_tool, "brave_search_configured", lambda: False)
     monkeypatch.setattr(
         web_search_tool,
         "_search_bing_rss",
