@@ -444,3 +444,13 @@ def test_direct_user_memory_answer_reads_only_active_user_profile_memories():
     assert "include_session_only=False" in source
     assert "direct_user_memory_answer(query, memories)" in source
 
+
+def test_memory_context_marks_person_relations_as_not_user_relations():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._build_memory_context)
+
+    assert 'normalized_key.endswith("_of")' in source
+    assert "Durable person fact" in source
+    assert "relationship between two people, not a relationship to the user" in source
+
