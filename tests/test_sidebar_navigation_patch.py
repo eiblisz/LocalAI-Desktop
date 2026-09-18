@@ -50,7 +50,8 @@ def test_sidebar_has_navigation_then_distinct_schedule_and_chat_sections():
 
     assert 'QPushButton("+  NEW CHAT")' in source
     assert 'self.schedule_button = QPushButton("SCHEDULE")' in source
-    assert '["PROJECTS", "BROWSER", "MEMORY", "SETTINGS"]' in source
+    assert '["PROJECTS", "BROWSER", "MEMORY", "EXTENSIONS", "SETTINGS"]' in source
+    assert 'button.clicked.connect(self._open_extensions)' in source
     assert 'QLabel("SCHEDULES")' in source
     assert 'QLabel("CHATS")' in source
     assert source.index('QLabel("SCHEDULES")') < source.index('QLabel("CHATS")')
