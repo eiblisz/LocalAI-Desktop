@@ -15,6 +15,7 @@ def test_new_chat_and_roundtrip(tmp_path: Path):
     assert loaded["messages"][0]["content"] == "hello"
     assert loaded["pinned"] is False
     assert loaded["closed"] is False
+    assert loaded["attached_extensions"] == []
 
 
 def test_title_is_bounded():
@@ -53,3 +54,29 @@ def test_pinned_chats_sort_before_unpinned(tmp_path: Path):
 
     chats = store.list_chats()
     assert chats[0]["id"] == first["id"]
+
+
+def test_chat_extension_attachments_round_trip_and_deduplicate(tmp_path: Path):
+    store = ChatStore(tmp_path)
+    chat = store.new_chat("model")
+    chat["attached_extensions"] = ["ext-a", "ext-b", "ext-a", "", None]
+    store.save(chat)
+
+    loaded = store.load(chat["id"])
+    assert loaded["attached_extensions"] == ["ext-a", "ext-b"]
+
+
+def test_legacy_chat_without_extension_field_gets_empty_attachment_list(tmp_path: Path):
+    store = ChatStore(tmp_path)
+    chat = store.new_chat("model")
+    path = tmp_path / f"{chat['id']}.json"
+
+    import json
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("attached_extensions", None)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = store.load(chat["id"])
+    assert loaded["attached_extensions"] == []
+
