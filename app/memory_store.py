@@ -4,10 +4,10 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from .config import ROOT_DIR
+from .config import MEMORY_CANONICAL_DIR
 
 
-DEFAULT_MEMORY_DB = ROOT_DIR / "memory" / "canonical" / "memory.sqlite3"
+DEFAULT_MEMORY_DB = MEMORY_CANONICAL_DIR / "memory.sqlite3"
 
 ALLOWED_CATEGORIES = {
     "USER_PROFILE",
