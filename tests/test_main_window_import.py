@@ -403,4 +403,4 @@ def test_memory_context_marks_persistent_facts_as_durable_authority():
     assert "durable user-approved facts loaded from persistent memory" in source
     assert "Do not describe a matching memory as being only part of the current conversation" in source
     assert "answer the fact directly" in source
-\n
+
