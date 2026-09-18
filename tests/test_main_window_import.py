@@ -323,3 +323,84 @@ def test_send_injects_memory_into_system_prompt_not_saved_chat():
     assert 'messages_for_model = [{"role": "system", "content": system_prompt}]' in source
     assert 'self.current_chat["messages"].append({"role": "user", "content": text})' in source
     assert 'self.current_chat["messages"].append({"role": "system"' not in source
+
+def test_explicit_memory_request_uses_dedicated_background_worker():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._send)
+
+    assert "if is_explicit_memory_request(text):" in source
+    assert "self.worker = MemoryWriteWorker(" in source
+    assert "self.memory_store" in source
+    assert "self.generation_chat_id" in source
+    assert "self.worker.finished.connect(self._on_memory_finished)" in source
+    assert "self.worker.failed.connect(self._on_memory_failed)" in source
+    assert source.index("if is_explicit_memory_request(text):") < source.index("use_web = (")
+
+
+def test_memory_write_completion_is_bound_to_originating_chat():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._on_memory_finished)
+
+    assert "self.store.load(self.generation_chat_id)" in source
+    assert 'getattr(self.worker, "saved_count", 0)' in source
+    assert "current_id == target_id" in source
+    assert "Memory saved" in source
+
+
+def test_memory_write_failure_has_distinct_bounded_error_dialog():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._on_memory_failed)
+
+    assert 'self.status.setText("Memory save failed")' in source
+    assert 'dialog.setWindowTitle("Memory error")' in source
+    assert "len(summary) > 520" in source
+    assert "setDetailedText(full_message)" in source
+
+def test_memory_context_explains_relationship_semantics():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._build_memory_context)
+
+    assert "relationship_to_user" in source
+    assert "literal relationship" in source
+    assert "answer direct relationship questions" in source
+
+def test_memory_context_renders_personal_facts_as_plain_semantics():
+    from types import SimpleNamespace
+    from app.main_window import MainWindow
+
+    class Store:
+        def retrieve_memories(self, query, limit=8):
+            return [
+                {
+                    "category": "USER_PROFILE",
+                    "subject": "USER",
+                    "key": "name",
+                    "value": "Iblisz",
+                },
+                {
+                    "category": "USER_PROFILE",
+                    "subject": "Lilla",
+                    "key": "relationship_to_user",
+                    "value": "daughter",
+                },
+            ]
+
+    host = SimpleNamespace(memory_store=Store())
+    context = MainWindow._build_memory_context(host, "Ki Iblisz es ki Lilla?")
+
+    assert "the user's name is Iblisz" in context
+    assert "Lilla is the user's daughter" in context
+
+def test_memory_context_marks_persistent_facts_as_durable_authority():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._build_memory_context)
+
+    assert "durable user-approved facts loaded from persistent memory" in source
+    assert "Do not describe a matching memory as being only part of the current conversation" in source
+    assert "answer the fact directly" in source
+

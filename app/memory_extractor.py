@@ -108,10 +108,128 @@ def validate_memory_candidate(candidate):
     }
 
 
+SELF_NAME_PATTERNS = (
+    re.compile(
+        r"\b(?:az\s+én\s+nevem|az\s+en\s+nevem|a\s+nevem)\s+(?P<name>[^,.!?;]+)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bmy\s+name\s+is\s+(?P<name>[^,.!?;]+)",
+        re.IGNORECASE,
+    ),
+)
+
+
+def _explicit_self_name_memories(user_text):
+    if not is_explicit_memory_request(user_text):
+        return []
+
+    for pattern in SELF_NAME_PATTERNS:
+        match = pattern.search(user_text)
+        if not match:
+            continue
+        name = _clean(match.group("name")).strip(" ,.;:!?")
+        if not name:
+            return []
+        return [{
+            "category": "USER_PROFILE",
+            "scope": "USER",
+            "subject": "USER",
+            "key": "name",
+            "value": name,
+        }]
+    return []
+
+
+RELATIONSHIP_TO_USER = {
+    "párom": "partner",
+    "parom": "partner",
+    "lányom": "daughter",
+    "lanyom": "daughter",
+    "fiam": "son",
+    "férjem": "husband",
+    "ferjem": "husband",
+    "feleségem": "wife",
+    "felesegem": "wife",
+    "anyám": "mother",
+    "anyam": "mother",
+    "apám": "father",
+    "apam": "father",
+    "testvérem": "sibling",
+    "testverem": "sibling",
+}
+
+
+def _explicit_relationship_memories(user_text):
+    """Deterministically extract common user relationships from explicit memory requests."""
+    if not is_explicit_memory_request(user_text):
+        return []
+
+    relation_terms = "|".join(
+        sorted((re.escape(term) for term in RELATIONSHIP_TO_USER), key=len, reverse=True)
+    )
+    relation_first = re.compile(
+        rf"^(?:a\s+)?(?P<relation>{relation_terms})\s+(?P<name>.+)$",
+        re.IGNORECASE,
+    )
+    relation_last = re.compile(
+        rf"^(?P<name>.+?)\s+(?:a\s+)?(?P<relation>{relation_terms})$",
+        re.IGNORECASE,
+    )
+
+    body = re.sub(
+        r"^.*?\b(?:jegyezd\s+meg|emlekezz|emlékezz|remember(?:\s+that)?)\b\s*",
+        "",
+        user_text,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    body = re.sub(r"^(?:,?\s*hogy\s+)", "", body, count=1, flags=re.IGNORECASE)
+
+    memories = []
+    seen = set()
+    for clause in re.split(r"\s+(?:és|es|and)\s+", body, flags=re.IGNORECASE):
+        clause = _clean(clause).strip(" ,.;:!?")
+        if not clause:
+            continue
+
+        match = relation_first.match(clause) or relation_last.match(clause)
+        if not match:
+            continue
+
+        relation_token = match.group("relation").lower()
+        name = _clean(match.group("name")).strip(" ,.;:!?")
+        relation = RELATIONSHIP_TO_USER.get(relation_token)
+        if not name or not relation:
+            continue
+
+        identity = (name.casefold(), relation)
+        if identity in seen:
+            continue
+        seen.add(identity)
+
+        memories.append({
+            "category": "USER_PROFILE",
+            "scope": "USER",
+            "subject": name,
+            "key": "relationship_to_user",
+            "value": relation,
+        })
+
+    return memories
+
+
 def extract_explicit_memories(client, model, user_text):
     user_text = _clean(user_text)
     if not is_explicit_memory_request(user_text):
         return []
+
+    deterministic_memories = (
+        _explicit_self_name_memories(user_text)
+        + _explicit_relationship_memories(user_text)
+    )
+    if deterministic_memories:
+        return [validate_memory_candidate(item) for item in deterministic_memories]
 
     messages = [
         {

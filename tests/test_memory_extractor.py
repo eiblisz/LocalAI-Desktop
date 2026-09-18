@@ -150,3 +150,71 @@ def test_too_many_memories_fail_closed():
             "qwen-test",
             "Jegyezd meg ezeket.",
         )
+
+def test_hungarian_relationship_request_uses_deterministic_two_fact_path():
+    client = FakeClient({
+        "memories": [
+            {
+                "category": "USER_PROFILE",
+                "scope": "USER",
+                "subject": "bogus",
+                "key": "name",
+                "value": "bogus",
+            }
+        ]
+    })
+
+    memories = extract_explicit_memories(
+        client,
+        "qwen-test",
+        "Jegyezd meg, hogy a párom Annamária és a lányom Lilla.",
+    )
+
+    assert memories == [
+        {
+            "category": "USER_PROFILE",
+            "scope": "USER",
+            "subject": "Annamária",
+            "key": "relationship_to_user",
+            "value": "partner",
+        },
+        {
+            "category": "USER_PROFILE",
+            "scope": "USER",
+            "subject": "Lilla",
+            "key": "relationship_to_user",
+            "value": "daughter",
+        },
+    ]
+    assert client.calls == []
+
+def test_hungarian_self_name_request_is_normalized_to_user_profile():
+    client = FakeClient({
+        "memories": [
+            {
+                "category": "USER_PROFILE",
+                "scope": "USER",
+                "subject": "wrong",
+                "key": "wrong",
+                "value": "wrong",
+            }
+        ]
+    })
+
+    memories = extract_explicit_memories(
+        client,
+        "qwen-test",
+        "Jegyezd meg az en nevem Iblisz.",
+    )
+
+    assert memories == [
+        {
+            "category": "USER_PROFILE",
+            "scope": "USER",
+            "subject": "USER",
+            "key": "name",
+            "value": "Iblisz",
+        }
+    ]
+    assert client.calls == []
+
