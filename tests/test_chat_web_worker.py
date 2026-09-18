@@ -721,3 +721,53 @@ def test_price_bounded_teakettle_keeps_existing_verified_model_path(monkeypatch)
     assert is_generic_shopping_request(source)
     assert evidence_required(build_search_plan(source))
 
+
+def test_web_worker_repairs_clearly_german_answer_for_hungarian_request():
+    class LanguageRepairClient(DummyWebClient):
+        def __init__(self):
+            super().__init__()
+            self.repair_calls = []
+
+        def chat_once(self, model, messages, timeout=600.0):
+            if messages and "Rewrite the supplied answer in Hungarian" in messages[0]["content"]:
+                self.repair_calls.append((model, messages))
+                return "Ellenőrzött találat magyarul, változatlan tényekkel."
+            return super().chat_once(model, messages, timeout=timeout)
+
+    client = LanguageRepairClient()
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Keress nekem SSD-t",
+    )
+
+    repaired = worker._repair_response_language(
+        "Die Suche zeigt viele Angebote und Preise. Hier sind die besten Produkte."
+    )
+
+    assert repaired.startswith("Ellenőrzött találat")
+    assert len(client.repair_calls) == 1
+
+
+def test_web_worker_fails_closed_when_language_repair_stays_wrong():
+    class BadRepairClient(DummyWebClient):
+        def chat_once(self, model, messages, timeout=600.0):
+            if messages and "Rewrite the supplied answer in Hungarian" in messages[0]["content"]:
+                return "Die Antwort bleibt leider auf Deutsch und enthaelt viele Preise."
+            return super().chat_once(model, messages, timeout=timeout)
+
+    worker = workers.ChatWebWorker(
+        BadRepairClient(),
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Keress nekem SSD-t",
+    )
+
+    repaired = worker._repair_response_language(
+        "Die Suche zeigt viele Angebote und Preise. Hier sind die besten Produkte."
+    )
+
+    assert "nem egyezett a kérdés nyelvével" in repaired
+    assert "hibás nyelvű választ" in repaired
+
