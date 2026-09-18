@@ -16,6 +16,7 @@ from .evidence_verifier import (
     verify_answer_against_evidence,
 )
 from .generic_shopping_evidence import (
+    build_generic_shopping_queries,
     build_generic_shopping_records,
     is_generic_shopping_request,
     render_generic_shopping_answer,
@@ -479,11 +480,15 @@ class ChatWebWorker(QObject):
             if not self.user_prompt:
                 raise RuntimeError("Web chat request is empty.")
 
-            queries = self._generate_search_queries()
             generic_shopping_mode = (
                 is_generic_shopping_request(self.user_prompt)
                 and not self._has_multiple_research_topics()
                 and not evidence_required(build_search_plan(self.user_prompt))
+            )
+            queries = (
+                build_generic_shopping_queries(self.user_prompt)
+                if generic_shopping_mode
+                else self._generate_search_queries()
             )
             generic_shopping_records = []
             generic_shopping_queries = []
@@ -507,7 +512,7 @@ class ChatWebWorker(QObject):
                 try:
                     payload = search_web(
                         query,
-                        max_results=6,
+                        max_results=10 if generic_shopping_mode else 6,
                         fetch_pages=True,
                     )
                 except Exception as exc:
