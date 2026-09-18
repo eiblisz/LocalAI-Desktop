@@ -69,11 +69,18 @@ def install_sidebar_navigation_patch(main_window_module):
         layout.addWidget(self.schedule_button)
 
         self.sidebar_navigation_buttons = {}
-        for text in ["PROJECTS", "BROWSER", "MEMORY", "SETTINGS"]:
+        for text in ["PROJECTS", "BROWSER", "MEMORY", "EXTENSIONS", "SETTINGS"]:
             button = QPushButton(text)
             button.setObjectName("subtleButton")
-            button.setEnabled(False)
-            button.setToolTip(f"{text.title()} view is not implemented yet.")
+            if text == "EXTENSIONS":
+                button.setEnabled(True)
+                button.setToolTip(
+                    "Manage saved extension endpoints, capabilities and connection state."
+                )
+                button.clicked.connect(self._open_extensions)
+            else:
+                button.setEnabled(False)
+                button.setToolTip(f"{text.title()} view is not implemented yet.")
             self.sidebar_navigation_buttons[text] = button
             layout.addWidget(button)
 
