@@ -5,6 +5,7 @@ from pathlib import Path
 
 RUNTIME_ENV_VAR = "LOCALAI_DESKTOP_DATA_DIR"
 APP_DATA_FOLDER = "LocalAI-Desktop"
+LEGACY_MIGRATION_MARKER = ".legacy-runtime-migration-v1"
 
 
 def runtime_root(env=None, home=None):
@@ -79,14 +80,20 @@ def ensure_runtime_layout(root):
 
 def migrate_legacy_runtime_data(repo_root, target_root):
     """
-    Copy legacy repo-local private runtime data into the stable per-user root.
+    Copy legacy repo-local private runtime data into the stable per-user root once.
 
     Migration is deliberately non-destructive and never overwrites an existing
-    target file. The legacy source remains untouched for rollback.
+    target file. The legacy source remains untouched for rollback. A marker in
+    the stable root prevents deleted runtime data from being resurrected by a
+    later branch/worktree launch.
     """
     repo_root = Path(repo_root)
     target_root = Path(target_root)
     layout = ensure_runtime_layout(target_root)
+    marker = target_root / LEGACY_MIGRATION_MARKER
+
+    if marker.exists():
+        return {"chats": 0, "schedules": 0, "memory": 0}
 
     summary = {
         "chats": _copy_missing_tree(
@@ -117,4 +124,8 @@ def migrate_legacy_runtime_data(repo_root, target_root):
             skip_names={".gitkeep"},
         )
 
+    marker.write_text(
+        "Legacy repo-local runtime data migrated without overwriting existing target files.\n",
+        encoding="utf-8",
+    )
     return summary
