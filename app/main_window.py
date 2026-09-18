@@ -775,6 +775,21 @@ class MainWindow(QMainWindow):
             key = str(memory.get("key", "")).strip()
             value = str(memory.get("value", "")).strip()
 
+            normalized_key = key.casefold()
+            if category == "USER_PROFILE" and normalized_key in {
+                "name",
+                "user_name",
+                "preferred_name",
+            }:
+                lines.append(f"- Durable user fact: the user's name is {value}.")
+                continue
+
+            if category == "USER_PROFILE" and normalized_key == "relationship_to_user":
+                lines.append(
+                    f"- Durable user fact: {subject} is the user's {value}."
+                )
+                continue
+
             lines.append(
                 f"- [{category}] {subject} | {key}: {value}"
             )
