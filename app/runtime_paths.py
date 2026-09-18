@@ -95,6 +95,13 @@ def migrate_legacy_runtime_data(repo_root, target_root):
     if marker.exists():
         return {"chats": 0, "schedules": 0, "memory": 0}
 
+    target_had_private_data = any(
+        item.is_file()
+        for key, directory in layout.items()
+        if key != "memory"
+        for item in directory.rglob("*")
+    )
+
     summary = {
         "chats": _copy_missing_tree(
             repo_root / "data" / "chats",
@@ -124,8 +131,9 @@ def migrate_legacy_runtime_data(repo_root, target_root):
             skip_names={".gitkeep"},
         )
 
-    marker.write_text(
-        "Legacy repo-local runtime data migrated without overwriting existing target files.\n",
-        encoding="utf-8",
-    )
+    if target_had_private_data or any(summary.values()):
+        marker.write_text(
+            "Legacy repo-local runtime data migrated without overwriting existing target files.\n",
+            encoding="utf-8",
+        )
     return summary
