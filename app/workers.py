@@ -21,7 +21,11 @@ from .generic_shopping_evidence import (
     render_generic_shopping_answer,
 )
 from .memory_runtime import remember_explicit_request
-from .language_policy import response_language_instruction
+from .language_policy import (
+    detect_user_language,
+    response_language_instruction,
+    response_language_matches,
+)
 from .ollama_client import OllamaClient
 from .weather_tool import get_weather, weather_context_text
 from .web_search_tool import (
@@ -200,6 +204,54 @@ class ChatWebWorker(QObject):
 
     def _conversation_language_instruction(self):
         return response_language_instruction(self.user_prompt)
+
+    def _repair_response_language(self, answer):
+        if response_language_matches(self.user_prompt, answer):
+            return answer
+
+        expected = detect_user_language(self.user_prompt)
+        language_name = {
+            "hu": "Hungarian",
+            "de": "German",
+            "en": "English",
+        }.get(expected)
+        if not language_name:
+            return answer
+
+        repaired = self.client.chat_once(
+            model=self.model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        f"Rewrite the supplied answer in {language_name}. "
+                        "Preserve every URL, number, product name, and factual claim exactly. "
+                        "Do not add, remove, infer, or correct facts. Return only the rewritten answer."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": answer,
+                },
+            ],
+        ).strip()
+
+        if repaired and response_language_matches(self.user_prompt, repaired):
+            return repaired
+
+        if expected == "hu":
+            return (
+                "A generált webes válasz nyelve nem egyezett a kérdés nyelvével. "
+                "A rendszer nem jeleníti meg a hibás nyelvű választ."
+            )
+        if expected == "de":
+            return (
+                "Die Sprache der generierten Web-Antwort stimmte nicht mit der "
+                "Sprache der Anfrage überein. Die fehlerhafte Antwort wird nicht angezeigt."
+            )
+        return (
+            "The generated web answer used the wrong language and was not shown."
+        )
 
     def _query_is_literal_followup_command(self, query):
         normalized = self._fold_text(query)
@@ -704,6 +756,8 @@ class ChatWebWorker(QObject):
             answer = "".join(answer_parts).strip()
             if not answer:
                 raise RuntimeError("The model returned an empty web answer.")
+
+            answer = self._repair_response_language(answer)
 
             verification_status = ""
             unique_verification_queries = list(dict.fromkeys(verification_queries))
