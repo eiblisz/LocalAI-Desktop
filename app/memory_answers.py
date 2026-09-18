@@ -203,6 +203,23 @@ def _answer_part(part, profiles):
         if asks_own_name or asks_about_saved_name:
             return f"A neved {name}." if is_hu else f"Your name is {name}."
 
+    person_relationships = _person_relationship_memories(profiles)
+
+    # A specific third-person reverse query such as "Ki Annamaria fia?"
+    # must outrank a broader USER relationship match on "Annamaria".
+    if is_hu:
+        for query_term, canonical in _HU_PERSON_RELATION_QUERY.items():
+            if query_term not in folded:
+                continue
+            matches = [
+                memory
+                for memory in person_relationships
+                if _fold(memory.get("key")) == canonical
+                and _fold(memory.get("value")) in folded
+            ]
+            if len(matches) == 1:
+                return _format_person_relation(matches[0], hungarian=True)
+
     relationships = _relationship_memories(profiles)
 
     for memory in relationships:
@@ -232,7 +249,6 @@ def _answer_part(part, profiles):
                 if subject and relation_text:
                     return f"{subject} a {relation_text}."
 
-    person_relationships = _person_relationship_memories(profiles)
     asks_user_relation = (
         "nekem" in folded
         or "hozzam" in folded
@@ -257,19 +273,6 @@ def _answer_part(part, profiles):
                     + " There is no saved relationship between this person and you."
                 )
             return relation_text
-
-    if is_hu:
-        for query_term, canonical in _HU_PERSON_RELATION_QUERY.items():
-            if query_term not in folded:
-                continue
-            matches = [
-                memory
-                for memory in person_relationships
-                if _fold(memory.get("key")) == canonical
-                and _fold(memory.get("value")) in folded
-            ]
-            if len(matches) == 1:
-                return _format_person_relation(matches[0], hungarian=True)
 
     return ""
 
