@@ -188,3 +188,33 @@ def test_hungarian_relationship_request_uses_deterministic_two_fact_path():
     ]
     assert client.calls == []
 
+def test_hungarian_self_name_request_is_normalized_to_user_profile():
+    client = FakeClient({
+        "memories": [
+            {
+                "category": "USER_PROFILE",
+                "scope": "USER",
+                "subject": "wrong",
+                "key": "wrong",
+                "value": "wrong",
+            }
+        ]
+    })
+
+    memories = extract_explicit_memories(
+        client,
+        "qwen-test",
+        "Jegyezd meg az en nevem Iblisz.",
+    )
+
+    assert memories == [
+        {
+            "category": "USER_PROFILE",
+            "scope": "USER",
+            "subject": "USER",
+            "key": "name",
+            "value": "Iblisz",
+        }
+    ]
+    assert client.calls == []
+
