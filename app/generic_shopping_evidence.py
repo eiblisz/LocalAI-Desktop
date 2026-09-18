@@ -130,6 +130,63 @@ def is_generic_shopping_request(text):
     return False
 
 
+def _shopping_subject(text):
+    raw = " ".join(str(text or "").split())
+    raw = re.sub(
+        r"^\s*keress\w*\s+(?:nekem\s+)?",
+        "",
+        raw,
+        flags=re.IGNORECASE,
+    ).strip()
+    raw = re.sub(
+        r"\b(\d+(?:[.,]\d+)?)\s*tb(?:-?os)?\b",
+        lambda match: f"{match.group(1).replace(',', '.')} TB",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    raw = re.sub(
+        r"\b(\d+(?:[.,]\d+)?)\s*gb(?:-?os)?\b",
+        lambda match: f"{match.group(1).replace(',', '.')} GB",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    if re.search(r"\bssd\b", raw, flags=re.IGNORECASE):
+        raw = re.sub(
+            r"\bmerevlemez(?:t|et)?\b",
+            "",
+            raw,
+            flags=re.IGNORECASE,
+        )
+    raw = " ".join(raw.split())
+    return raw[:160] or "product"
+
+
+def build_generic_shopping_queries(user_prompt):
+    subject = _shopping_subject(user_prompt)
+    folded = _fold(subject)
+    electronics = any(
+        token in set(re.findall(r"[a-z0-9]+", folded))
+        for token in {"ssd", "hdd", "ram", "gpu", "videokartya", "monitor", "laptop", "router", "nas"}
+    )
+
+    if electronics:
+        targets = (
+            "site:mediamarkt.de/de/product",
+            "site:alternate.de product",
+            "site:amazon.de/dp",
+            "site:otto.de/p/",
+        )
+    else:
+        targets = (
+            "site:amazon.de/dp",
+            "site:otto.de/p/",
+            "site:ebay.de/itm",
+            "site:kaufland.de/product",
+        )
+
+    return [f"{subject} {target}" for target in targets]
+
+
 def _capacity_tokens(text):
     values = set()
     for match in re.finditer(
