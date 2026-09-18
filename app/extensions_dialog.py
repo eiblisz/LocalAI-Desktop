@@ -1,4 +1,4 @@
-from PySide6.QtCore import QObject, QThread, Signal, Slot
+from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -185,7 +185,7 @@ class ExtensionsDialog(QDialog):
             item = QListWidgetItem(
                 f"{dot}  {extension.get('name', 'Extension')}  —  {label}"
             )
-            item.setData(256, extension.get("id", ""))
+            item.setData(Qt.UserRole, extension.get("id", ""))
             item.setToolTip(
                 "Endpoint: {endpoint}\nCapabilities: {capabilities}\n"
                 "Last status: {status}\nLast tested: {tested}".format(
@@ -218,7 +218,7 @@ class ExtensionsDialog(QDialog):
         self.delete_button.setEnabled(False)
 
     def _extension_selected(self, item):
-        extension_id = str(item.data(256) or "")
+        extension_id = str(item.data(Qt.UserRole) or "")
         try:
             extension = self.store.get(extension_id)
         except Exception as exc:
@@ -291,7 +291,7 @@ class ExtensionsDialog(QDialog):
             "Delete extension",
             "Delete this extension entry? No external service will be modified.",
         )
-        if answer != QMessageBox.Yes:
+        if answer != QMessageBox.StandardButton.Yes:
             return
 
         try:
