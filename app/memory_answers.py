@@ -24,6 +24,40 @@ _RELATIONSHIP_EN = {
     "sibling": "sibling",
 }
 
+_PERSON_RELATION_HU = {
+    "son_of": "fia",
+    "daughter_of": "lánya",
+    "husband_of": "férje",
+    "wife_of": "felesége",
+    "mother_of": "anyja",
+    "father_of": "apja",
+    "sibling_of": "testvére",
+    "partner_of": "párja",
+}
+
+_PERSON_RELATION_EN = {
+    "son_of": "son",
+    "daughter_of": "daughter",
+    "husband_of": "husband",
+    "wife_of": "wife",
+    "mother_of": "mother",
+    "father_of": "father",
+    "sibling_of": "sibling",
+    "partner_of": "partner",
+}
+
+_HU_PERSON_RELATION_QUERY = {
+    "fia": "son_of",
+    "lanya": "daughter_of",
+    "ferje": "husband_of",
+    "felesege": "wife_of",
+    "anyja": "mother_of",
+    "apja": "father_of",
+    "testvere": "sibling_of",
+    "parja": "partner_of",
+}
+
+
 _HU_RELATION_QUERY = {
     "parom": "partner",
     "partnerem": "partner",
@@ -81,6 +115,15 @@ def _relationship_memories(memories):
         memory
         for memory in memories
         if _fold(memory.get("key")) == "relationship_to_user"
+    ]
+
+
+def _person_relationship_memories(memories):
+    allowed = set(_PERSON_RELATION_HU)
+    return [
+        memory
+        for memory in memories
+        if _fold(memory.get("key")) in allowed
     ]
 
 
@@ -185,7 +228,64 @@ def direct_user_memory_answer(query, memories):
     for part in parts:
         answer = _answer_part(part, profiles)
         if not answer:
-            return ""
+            person_relationships = _person_relationship_memories(profiles)
+
+    asks_user_relation = (
+        "nekem" in folded
+        or "hozzam" in folded
+        or "hozzám" in part.casefold()
+        or " my " in f" {folded} "
+    )
+
+    for memory in person_relationships:
+        subject = _clean(memory.get("subject"))
+        relation = _fold(memory.get("key"))
+        related = _clean(memory.get("value"))
+        if not subject or not related:
+            continue
+
+        if _fold(subject) in folded:
+            if asks_user_relation:
+                if is_hu:
+                    relation_text = _PERSON_RELATION_HU.get(relation)
+                    if relation_text:
+                        return (
+                            f"{subject} {related} {relation_text}. "
+                            "A hozzád való kapcsolatáról nincs eltett adat."
+                        )
+                relation_text = _PERSON_RELATION_EN.get(relation)
+                if relation_text:
+                    return (
+                        f"{subject} is {related}'s {relation_text}. "
+                        "There is no saved relationship between this person and you."
+                    )
+
+            if is_hu:
+                relation_text = _PERSON_RELATION_HU.get(relation)
+                if relation_text:
+                    return f"{subject} {related} {relation_text}."
+            relation_text = _PERSON_RELATION_EN.get(relation)
+            if relation_text:
+                return f"{subject} is {related}'s {relation_text}."
+
+    if is_hu:
+        for query_term, canonical in _HU_PERSON_RELATION_QUERY.items():
+            if query_term not in folded:
+                continue
+            matches = [
+                memory
+                for memory in person_relationships
+                if _fold(memory.get("key")) == canonical
+                and _fold(memory.get("value")) in folded
+            ]
+            if len(matches) == 1:
+                subject = _clean(matches[0].get("subject"))
+                related = _clean(matches[0].get("value"))
+                relation_text = _PERSON_RELATION_HU.get(canonical)
+                if subject and related and relation_text:
+                    return f"{subject} {related} {relation_text}."
+
+    return ""
         answers.append(answer)
 
     return "\n\n".join(answers)
