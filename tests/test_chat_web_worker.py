@@ -771,3 +771,55 @@ def test_web_worker_fails_closed_when_language_repair_stays_wrong():
     assert "nem egyezett a kérdés nyelvével" in repaired
     assert "hibás nyelvű választ" in repaired
 
+
+def test_generic_shopping_bypasses_model_query_generation(monkeypatch):
+    monkeypatch.setattr(
+        workers.ChatWebWorker,
+        "_generate_search_queries",
+        lambda self: (_ for _ in ()).throw(
+            AssertionError("generic shopping must not use model query generation")
+        ),
+    )
+
+    seen_queries = []
+
+    def fake_search(query, max_results=6, fetch_pages=True):
+        seen_queries.append((query, max_results))
+        if "mediamarkt.de/de/product" in query:
+            return {
+                "provider": "Brave Search API",
+                "query": query,
+                "provider_chain_errors": [],
+                "results": [{
+                    "title": "Samsung 870 QVO 4TB SSD",
+                    "url": "https://www.mediamarkt.de/de/product/_samsung-870-qvo-4tb-12345.html",
+                    "snippet": "Samsung 870 QVO 4 TB SSD 289 EUR",
+                    "page_text": "",
+                }],
+            }
+        return {
+            "provider": "Brave Search API",
+            "query": query,
+            "provider_chain_errors": [],
+            "results": [],
+        }
+
+    monkeypatch.setattr(workers, "search_web", fake_search)
+
+    client = DummyWebClient()
+    tokens = []
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Keressel nekem 4tb-os ssd merevlemezt",
+    )
+    worker.token.connect(tokens.append)
+    worker.run()
+
+    combined = "".join(tokens)
+    assert "Samsung 870 QVO 4TB SSD" in combined
+    assert "Shopping evidence: PASS" in combined
+    assert seen_queries
+    assert all(max_results == 10 for _, max_results in seen_queries)
+
