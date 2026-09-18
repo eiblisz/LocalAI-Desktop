@@ -19,14 +19,16 @@ def test_extensions_dialog_exposes_registry_foundation_controls():
     assert "self.enabled_button" in source
 
 
-def test_extensions_dialog_does_not_collect_raw_secrets():
-    source = inspect.getsource(ExtensionsDialog._build_ui).lower()
+def test_extensions_dialog_uses_password_field_and_os_secret_store_for_discord():
+    source = inspect.getsource(ExtensionsDialog._build_ui)
+    save_source = inspect.getsource(ExtensionsDialog._save_secret)
 
-    assert "api key:" not in source
-    assert "password_edit" not in source
-    assert "token_edit" not in source
-    assert "secret_edit" not in source
-    assert "credentials are intentionally not stored here" in source
+    assert "QLineEdit.EchoMode.Password" in source
+    assert 'QPushButton("SAVE SECRET")' in source
+    assert 'QPushButton("CLEAR SECRET")' in source
+    assert "operating-system credential store" in source
+    assert "self.secret_store.set_secret" in save_source
+    assert 'extension["credential_ref"] = credential_ref' in save_source
 
 
 def test_extensions_connection_test_runs_off_ui_thread():
@@ -70,4 +72,23 @@ def test_catalog_install_is_disabled_by_default_and_deduplicated():
     assert "preset_to_registry_entry" in source
     assert "self.store.save" in source
     assert "self.tabs.setCurrentIndex(0)" in source
+
+
+def test_discord_webhook_actions_use_background_worker_and_secret_reference():
+    start = inspect.getsource(ExtensionsDialog._start_discord_worker)
+    send = inspect.getsource(ExtensionsDialog._send_discord_test_message)
+    secret = inspect.getsource(ExtensionsDialog._discord_secret)
+
+    assert "DiscordWebhookWorker(" in start
+    assert "QThread(self)" in start
+    assert "self.test_thread.start()" in start
+    assert 'self._start_discord_worker("send")' in send
+    assert "self.secret_store.get_secret" in secret
+
+
+def test_deleting_extension_removes_bound_secret_first():
+    source = inspect.getsource(ExtensionsDialog._delete_extension)
+
+    assert "self.secret_store.delete_secret(self.current_credential_ref)" in source
+    assert source.index("delete_secret") < source.index("self.store.delete")
 
