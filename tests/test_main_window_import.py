@@ -404,3 +404,16 @@ def test_memory_context_marks_persistent_facts_as_durable_authority():
     assert "Do not describe a matching memory as being only part of the current conversation" in source
     assert "answer the fact directly" in source
 
+def test_memory_context_enforces_user_second_person_perspective():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._build_memory_context)
+
+    assert "you are the assistant, and USER refers to the human user" in source
+    assert "Never adopt USER profile facts as your own identity or relationships" in source
+    assert "express USER self/profile facts in second person" in source
+    assert "Your name is Iblisz" in source
+    assert "Lilla is your daughter" in source
+    assert "My name is Iblisz" in source
+    assert "Lilla is my daughter" in source
+
