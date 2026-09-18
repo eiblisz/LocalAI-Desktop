@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from app.runtime_paths import (
+    LEGACY_MIGRATION_MARKER,
     RUNTIME_ENV_VAR,
     ensure_runtime_layout,
     migrate_legacy_runtime_data,
@@ -80,7 +81,7 @@ def test_legacy_runtime_migration_copies_private_data_without_overwrite(tmp_path
     ).read_text(encoding="utf-8") == '{"title":"newer target chat"}'
 
 
-def test_migration_from_another_clone_uses_same_target(tmp_path):
+def test_migration_marker_prevents_other_clones_from_reimporting_data(tmp_path):
     clone_a = tmp_path / "clone-a"
     clone_b = tmp_path / "clone-b"
     target = tmp_path / "stable-runtime"
@@ -91,9 +92,27 @@ def test_migration_from_another_clone_uses_same_target(tmp_path):
     (clone_b / "data" / "chats" / "b.json").write_text("{}", encoding="utf-8")
 
     migrate_legacy_runtime_data(clone_a, target)
-    migrate_legacy_runtime_data(clone_b, target)
+    second = migrate_legacy_runtime_data(clone_b, target)
 
+    assert (target / LEGACY_MIGRATION_MARKER).is_file()
+    assert second == {"chats": 0, "schedules": 0, "memory": 0}
     assert sorted(path.name for path in (target / "chats").glob("*.json")) == [
         "a.json",
-        "b.json",
     ]
+
+
+def test_deleted_migrated_chat_is_not_resurrected_on_next_launch(tmp_path):
+    repo = tmp_path / "clone"
+    target = tmp_path / "stable-runtime"
+    source_chat = repo / "data" / "chats" / "old.json"
+    source_chat.parent.mkdir(parents=True)
+    source_chat.write_text("{}", encoding="utf-8")
+
+    migrate_legacy_runtime_data(repo, target)
+    migrated = target / "chats" / "old.json"
+    assert migrated.exists()
+
+    migrated.unlink()
+    migrate_legacy_runtime_data(repo, target)
+
+    assert not migrated.exists()
