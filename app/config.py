@@ -16,6 +16,8 @@ SCHEDULE_DIR = RUNTIME_PATHS["schedules"]
 MEMORY_DIR = RUNTIME_PATHS["memory"]
 MEMORY_CANONICAL_DIR = RUNTIME_PATHS["memory_canonical"]
 MEMORY_BACKUP_DIR = RUNTIME_PATHS["memory_backups"]
+EXTENSIONS_DIR = RUNTIME_PATHS["extensions"]
+EXTENSION_CONFIG_DIR = RUNTIME_PATHS["extension_configs"]
 OUTPUT_DIR = ROOT_DIR / "output"
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)

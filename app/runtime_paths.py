@@ -72,6 +72,8 @@ def ensure_runtime_layout(root):
         "memory_archive": root / "memory" / "archive",
         "memory_exports": root / "memory" / "exports",
         "memory_backups": root / "memory" / "backups",
+        "extensions": root / "extensions",
+        "extension_configs": root / "extensions" / "configs",
     }
     for path in paths.values():
         path.mkdir(parents=True, exist_ok=True)

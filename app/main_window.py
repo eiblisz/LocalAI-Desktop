@@ -45,6 +45,8 @@ from .document_tools import (
 from .artifact_themes import document_preset_labels, workbook_preset_labels
 from .docx_tool import create_docx
 from .excel_tool import create_conversation_excel, create_structured_excel
+from .extension_store import ExtensionStore
+from .extensions_dialog import ExtensionsDialog
 from .file_reader import read_attachment
 from .html_tool import create_html
 from .language_policy import response_language_instruction
@@ -215,6 +217,8 @@ class MainWindow(QMainWindow):
         self.last_artifact_path = None
         self.scheduler_store = ScheduledTaskStore()
         self.scheduler_dialog = None
+        self.extension_store = ExtensionStore()
+        self.extensions_dialog = None
         self.scheduled_thread = None
         self.scheduled_worker = None
         self.pending_scheduled_task_id = ""
@@ -1242,6 +1246,19 @@ class MainWindow(QMainWindow):
         self.scheduler_dialog.raise_()
         self.scheduler_dialog.activateWindow()
         self._refresh_schedule_indicator()
+
+    def _open_extensions(self):
+        if self.extensions_dialog is None:
+            self.extensions_dialog = ExtensionsDialog(
+                self.extension_store,
+                parent=self,
+            )
+        else:
+            self.extensions_dialog._refresh_list()
+
+        self.extensions_dialog.show()
+        self.extensions_dialog.raise_()
+        self.extensions_dialog.activateWindow()
 
     def _schedule_health_state(self):
         tasks = self.scheduler_store.list_tasks()

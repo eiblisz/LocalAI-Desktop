@@ -35,6 +35,8 @@ def test_runtime_layout_is_clone_independent(tmp_path):
     assert paths["chats"] == root / "chats"
     assert paths["schedules"] == root / "schedules"
     assert paths["memory_canonical"] == root / "memory" / "canonical"
+    assert paths["extensions"] == root / "extensions"
+    assert paths["extension_configs"] == root / "extensions" / "configs"
     assert all(path.is_dir() for path in paths.values())
 
 
