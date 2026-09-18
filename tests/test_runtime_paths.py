@@ -116,3 +116,26 @@ def test_deleted_migrated_chat_is_not_resurrected_on_next_launch(tmp_path):
     migrate_legacy_runtime_data(repo, target)
 
     assert not migrated.exists()
+
+
+def test_empty_worktree_does_not_block_later_real_migration(tmp_path):
+    empty_clone = tmp_path / "empty-clone"
+    real_clone = tmp_path / "real-clone"
+    target = tmp_path / "stable-runtime"
+    empty_clone.mkdir()
+
+    first = migrate_legacy_runtime_data(empty_clone, target)
+
+    assert first == {"chats": 0, "schedules": 0, "memory": 0}
+    assert not (target / LEGACY_MIGRATION_MARKER).exists()
+
+    source_chat = real_clone / "data" / "chats" / "real.json"
+    source_chat.parent.mkdir(parents=True)
+    source_chat.write_text("{}", encoding="utf-8")
+
+    second = migrate_legacy_runtime_data(real_clone, target)
+
+    assert second == {"chats": 1, "schedules": 0, "memory": 0}
+    assert (target / LEGACY_MIGRATION_MARKER).is_file()
+    assert (target / "chats" / "real.json").is_file()
+
