@@ -51,3 +51,23 @@ def test_foundation_slice_does_not_claim_chat_runtime_access():
 
     assert "Enabling an extension does not give the chat access yet." in source
     assert "Runtime tool injection is deliberately not enabled yet." in source
+
+
+def test_extensions_dialog_has_installed_and_catalog_tabs():
+    source = inspect.getsource(ExtensionsDialog._build_ui)
+
+    assert 'self.tabs.addTab(installed_page, "INSTALLED")' in source
+    assert 'self.tabs.addTab(catalog_page, "CATALOG")' in source
+    assert 'self.catalog_search.setPlaceholderText("Search extensions...")' in source
+    assert "PRESET_CATEGORIES" in source
+    assert 'QPushButton("ADD PRESET")' in source
+
+
+def test_catalog_install_is_disabled_by_default_and_deduplicated():
+    source = inspect.getsource(ExtensionsDialog._install_selected_preset)
+
+    assert "self.store.find_by_preset_id" in source
+    assert "preset_to_registry_entry" in source
+    assert "self.store.save" in source
+    assert "self.tabs.setCurrentIndex(0)" in source
+
