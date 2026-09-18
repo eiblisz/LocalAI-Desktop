@@ -1,0 +1,160 @@
+import json
+import re
+
+from .memory_store import ALLOWED_CATEGORIES, is_secret_memory_candidate
+
+
+MAX_EXPLICIT_MEMORIES = 8
+
+MEMORY_EXTRACTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "memories": {
+            "type": "array",
+            "maxItems": MAX_EXPLICIT_MEMORIES,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "category": {"type": "string"},
+                    "scope": {"type": "string"},
+                    "subject": {"type": "string"},
+                    "key": {"type": "string"},
+                    "value": {"type": "string"},
+                },
+                "required": [
+                    "category",
+                    "scope",
+                    "subject",
+                    "key",
+                    "value",
+                ],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["memories"],
+    "additionalProperties": False,
+}
+
+_MEMORY_FIELDS = {"category", "scope", "subject", "key", "value"}
+
+_EXPLICIT_MEMORY_PATTERNS = (
+    re.compile(r"\bjegyezd\s+meg\b", re.IGNORECASE),
+    re.compile(r"\bemlekezz\b", re.IGNORECASE),
+    re.compile(r"\bemlékezz\b", re.IGNORECASE),
+    re.compile(r"\bremember(?:\s+that)?\b", re.IGNORECASE),
+)
+
+
+def _clean(value):
+    return " ".join(str(value or "").strip().split())
+
+
+def is_explicit_memory_request(text):
+    text = _clean(text)
+    if not text:
+        return False
+    return any(pattern.search(text) for pattern in _EXPLICIT_MEMORY_PATTERNS)
+
+
+def validate_memory_candidate(candidate):
+    if not isinstance(candidate, dict):
+        raise ValueError("memory candidate must be an object")
+
+    unexpected = set(candidate) - _MEMORY_FIELDS
+    if unexpected:
+        raise ValueError("memory candidate contains unexpected fields")
+
+    category = _clean(candidate.get("category")).upper()
+    scope = _clean(candidate.get("scope"))
+    subject = _clean(candidate.get("subject"))
+    key = _clean(candidate.get("key"))
+    value = _clean(candidate.get("value"))
+
+    if category not in ALLOWED_CATEGORIES:
+        raise ValueError(f"invalid memory category: {category}")
+
+    if not scope:
+        raise ValueError("memory scope is required")
+    if not subject:
+        raise ValueError("memory subject is required")
+    if not key:
+        raise ValueError("memory key is required")
+    if not value:
+        raise ValueError("memory value is required")
+
+    if len(scope) > 160:
+        raise ValueError("memory scope is too long")
+    if len(subject) > 160:
+        raise ValueError("memory subject is too long")
+    if len(key) > 160:
+        raise ValueError("memory key is too long")
+    if len(value) > 4000:
+        raise ValueError("memory value is too long")
+
+    if is_secret_memory_candidate(
+        key=key,
+        value=value,
+        subject=subject,
+    ):
+        raise ValueError("secret memory candidate rejected")
+
+    return {
+        "category": category,
+        "scope": scope,
+        "subject": subject,
+        "key": key,
+        "value": value,
+    }
+
+
+def extract_explicit_memories(client, model, user_text):
+    user_text = _clean(user_text)
+    if not is_explicit_memory_request(user_text):
+        return []
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Extract ONLY information that the user explicitly asked to remember. "
+                "Do not infer additional facts. Split multiple independent facts into "
+                "separate atomic memory records. Preserve names exactly as provided. "
+                "Use one category from USER_PROFILE, PROJECT, PREFERENCE, RULE, LESSON, "
+                "or WORKING. Use scope USER for general personal facts unless the user "
+                "explicitly makes the fact project-specific. Use stable concise keys "
+                "such as relationship_to_user or preferred_shell. Never invent missing "
+                "information. Return only data matching the supplied JSON schema."
+            ),
+        },
+        {
+            "role": "user",
+            "content": user_text,
+        },
+    ]
+
+    raw = client.chat_once(
+        model=model,
+        messages=messages,
+        response_format=MEMORY_EXTRACTION_SCHEMA,
+    )
+
+    try:
+        payload = json.loads(raw)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("memory extractor returned invalid JSON") from exc
+
+    if not isinstance(payload, dict):
+        raise ValueError("memory extractor payload must be an object")
+
+    if set(payload) != {"memories"}:
+        raise ValueError("memory extractor payload contains unexpected fields")
+
+    items = payload.get("memories")
+    if not isinstance(items, list):
+        raise ValueError("memory extractor memories must be a list")
+
+    if len(items) > MAX_EXPLICIT_MEMORIES:
+        raise ValueError("too many explicit memories in one request")
+
+    return [validate_memory_candidate(item) for item in items]
