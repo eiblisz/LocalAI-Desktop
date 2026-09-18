@@ -504,11 +504,14 @@ class ExtensionsDialog(QDialog):
             return
 
         try:
+            if self.current_credential_ref:
+                self.secret_store.delete_secret(self.current_credential_ref)
             self.store.delete(self.current_id)
         except Exception as exc:
             QMessageBox.critical(self, "Extension delete error", str(exc))
             return
 
+        self.current_credential_ref = ""
         self._refresh_list()
         self._new_extension()
 
