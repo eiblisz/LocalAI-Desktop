@@ -46,6 +46,7 @@ from .docx_tool import create_docx
 from .excel_tool import create_conversation_excel, create_structured_excel
 from .file_reader import read_attachment
 from .html_tool import create_html
+from .memory_extractor import is_explicit_memory_request
 from .memory_store import MemoryStore
 from .ollama_client import OllamaClient
 from .pdf_tool import create_pdf
@@ -53,7 +54,13 @@ from .resource_monitor import format_resource_summary, get_system_metrics
 from .scheduler_dialog import SchedulerDialog
 from .scheduler_store import ScheduledTaskStore
 from .storage import ChatStore
-from .workers import ChatWebWorker, ChatWorker, DocumentWorker, ScheduledTaskWorker
+from .workers import (
+    ChatWebWorker,
+    ChatWorker,
+    DocumentWorker,
+    MemoryWriteWorker,
+    ScheduledTaskWorker,
+)
 
 
 STYLE = """
@@ -809,6 +816,29 @@ class MainWindow(QMainWindow):
         self._load_chat_list()
         self._render_chat()
 
+        if is_explicit_memory_request(text):
+            self.partial_assistant = ""
+            self.current_chat_uses_web = False
+            self.thread = QThread()
+            self.worker = MemoryWriteWorker(
+                self.client,
+                model,
+                text,
+                self.memory_store,
+                self.generation_chat_id,
+            )
+            self.worker.moveToThread(self.thread)
+            self.thread.started.connect(self.worker.run)
+            self.worker.finished.connect(self._on_memory_finished)
+            self.worker.failed.connect(self._on_memory_failed)
+            self.worker.finished.connect(self.thread.quit)
+            self.worker.failed.connect(self.thread.quit)
+            self.thread.finished.connect(self._cleanup_worker)
+            self.stop_button.setEnabled(False)
+            self.status.setText("Saving memory...")
+            self.thread.start()
+            return
+
         system_prompt = DEFAULT_SYSTEM_PROMPT
         memory_context = self._build_memory_context(text)
         if memory_context:
@@ -891,6 +921,54 @@ class MainWindow(QMainWindow):
         if content:
             self.status.setText("Ollama connected")
         self._load_chat_list()
+
+    def _on_memory_finished(self):
+        target_chat = self.current_chat
+        if self.generation_chat_id:
+            try:
+                target_chat = self.store.load(self.generation_chat_id)
+            except Exception:
+                target_chat = self.current_chat
+
+        saved_count = int(getattr(self.worker, "saved_count", 0) or 0)
+        if saved_count > 0:
+            content = f"Memory saved: {saved_count} item(s)."
+            self.status.setText("Memory saved")
+        else:
+            content = "No memory was saved."
+            self.status.setText("No memory saved")
+
+        if target_chat is not None:
+            target_chat["messages"].append(
+                {"role": "assistant", "content": content}
+            )
+            self.store.save(target_chat)
+
+            current_id = str((self.current_chat or {}).get("id", ""))
+            target_id = str(target_chat.get("id", ""))
+            if current_id == target_id:
+                self.current_chat = target_chat
+                self._render_chat()
+
+        self.stop_button.setEnabled(False)
+        self._load_chat_list()
+
+    def _on_memory_failed(self, message):
+        self.stop_button.setEnabled(False)
+        self.status.setText("Memory save failed")
+
+        full_message = " ".join(str(message or "").split())
+        summary = full_message
+        if len(summary) > 520:
+            summary = summary[:517].rstrip() + "..."
+
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Critical)
+        dialog.setWindowTitle("Memory error")
+        dialog.setText(summary or "Unknown memory error")
+        if full_message and full_message != summary:
+            dialog.setDetailedText(full_message)
+        dialog.exec()
 
     def _on_failed(self, message):
         self._stop_thinking_indicator()
