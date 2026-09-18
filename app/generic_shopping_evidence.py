@@ -53,6 +53,15 @@ _GENERIC_PATH_MARKERS = (
     "/category/",
     "/collections/",
     "/ul/",
+    "/specials/",
+    "/news/",
+    "/ratgeber/",
+    "/guide/",
+    "/blog/",
+    "/de/c/",
+    "/shop/csoport/",
+    "/trend/",
+    "/v/",
 )
 
 _GENERIC_TITLE_MARKERS = (
@@ -176,7 +185,18 @@ def _is_product_specific_url(url):
     if path.startswith("/s-") and path.endswith("/k0"):
         return False
 
-    if any(marker in path for marker in ("/product/", "/produkte/", "/produkt/", "/itm/", "/dp/")):
+    product_path_markers = (
+        "/product/",
+        "/produkte/",
+        "/produkt/",
+        "/itm/",
+        "/dp/",
+        "/p/",
+        "/termek/",
+        "/productdetail/",
+        "/product-details/",
+    )
+    if any(marker in path for marker in product_path_markers):
         return True
 
     generic_query_keys = {
@@ -185,7 +205,9 @@ def _is_product_specific_url(url):
     if generic_query_keys.intersection(query):
         return False
 
-    return bool(path and path != "/")
+    # Fail closed on ambiguous leaf URLs. Search/category/article pages must never
+    # be promoted to product evidence merely because their path is non-empty.
+    return False
 
 
 def _title_looks_generic(title):
@@ -199,7 +221,6 @@ def _topic_matches(query, item):
     evidence = _fold(" ".join([
         str(item.get("title", "")),
         str(item.get("snippet", "")),
-        str(item.get("page_text", "")),
     ]))
     if not evidence:
         return False
