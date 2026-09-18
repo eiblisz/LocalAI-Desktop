@@ -11,14 +11,21 @@ from .computer_status_tool import (
 from .ebay_tool import ebay_context_text, search_ebay
 from .evidence_verifier import (
     evidence_ledger_context_text,
+    evidence_required,
     filter_verified_results,
     verify_answer_against_evidence,
+)
+from .generic_shopping_evidence import (
+    build_generic_shopping_records,
+    is_generic_shopping_request,
+    render_generic_shopping_answer,
 )
 from .memory_runtime import remember_explicit_request
 from .language_policy import response_language_instruction
 from .ollama_client import OllamaClient
 from .weather_tool import get_weather, weather_context_text
 from .web_search_tool import (
+    build_search_plan,
     search_web,
     source_entries,
     source_urls,
@@ -421,6 +428,14 @@ class ChatWebWorker(QObject):
                 raise RuntimeError("Web chat request is empty.")
 
             queries = self._generate_search_queries()
+            generic_shopping_mode = (
+                is_generic_shopping_request(self.user_prompt)
+                and not self._has_multiple_research_topics()
+                and not evidence_required(build_search_plan(self.user_prompt))
+            )
+            generic_shopping_records = []
+            generic_shopping_queries = []
+            generic_shopping_providers = []
             contexts = []
             urls = []
             entries = []
@@ -447,6 +462,34 @@ class ChatWebWorker(QObject):
                     failed_queries.append(
                         f"{query}: {self._compact_web_error(exc)}"
                     )
+                    continue
+
+                if generic_shopping_mode:
+                    if query not in generic_shopping_queries:
+                        generic_shopping_queries.append(query)
+                    provider = str(payload.get("provider", "")).strip() or "unknown"
+                    if provider not in generic_shopping_providers:
+                        generic_shopping_providers.append(provider)
+                    for note in payload.get("provider_chain_errors") or []:
+                        if note not in provider_fallback_notes:
+                            provider_fallback_notes.append(str(note))
+
+                    records = build_generic_shopping_records(
+                        query,
+                        payload.get("results") or [],
+                        limit=6,
+                    )
+                    known_urls = {
+                        item["url"] for item in generic_shopping_records
+                    }
+                    for record in records:
+                        if record["url"] not in known_urls:
+                            generic_shopping_records.append(record)
+                            known_urls.add(record["url"])
+                    if not records:
+                        failed_queries.append(
+                            f"{query}: no product-specific shopping evidence"
+                        )
                     continue
 
                 context_body = web_search_context_text(payload)
@@ -495,6 +538,68 @@ class ChatWebWorker(QObject):
                         item["url"] for item in entries
                     }:
                         entries.append(entry)
+
+            if generic_shopping_mode:
+                answer = render_generic_shopping_answer(
+                    self.user_prompt,
+                    generic_shopping_records,
+                )
+                self.token.emit(answer)
+
+                if generic_shopping_queries:
+                    if len(generic_shopping_queries) == 1:
+                        query_footer = (
+                            f"Search query: {generic_shopping_queries[0]}"
+                        )
+                    else:
+                        query_footer = (
+                            "Search queries:\n"
+                            + "\n".join(
+                                f"- {query}"
+                                for query in generic_shopping_queries
+                            )
+                        )
+                else:
+                    query_footer = f"Search query: {self.user_prompt}"
+
+                if len(generic_shopping_providers) == 1:
+                    provider_footer = (
+                        f"Search provider: {generic_shopping_providers[0]}"
+                    )
+                elif generic_shopping_providers:
+                    provider_footer = (
+                        "Search providers: "
+                        + ", ".join(generic_shopping_providers)
+                    )
+                else:
+                    provider_footer = "Search provider: none"
+
+                if generic_shopping_records:
+                    source_lines = "\n".join(
+                        f"- [{item['title']}]({item['url']})"
+                        for item in generic_shopping_records[:12]
+                    )
+                    evidence_status = (
+                        "Shopping evidence: PASS "
+                        f"({len(generic_shopping_records)} product-level result(s))"
+                    )
+                else:
+                    source_lines = "- No verified product-level source"
+                    evidence_status = (
+                        "Shopping evidence: FAIL-CLOSED "
+                        "(0 product-level results)"
+                    )
+
+                self.token.emit(
+                    "\n\n---\n"
+                    f"{query_footer}\n"
+                    f"{provider_footer}\n"
+                    f"{evidence_status}\n"
+                    "Web results / sources:\n"
+                    f"{source_lines}"
+                )
+                self.finished.emit()
+                return
 
             if not contexts or not urls:
                 if constrained_rejections:
