@@ -808,6 +808,14 @@ class MainWindow(QMainWindow):
                 )
                 continue
 
+            if category == "USER_PROFILE" and normalized_key.endswith("_of"):
+                relation_text = normalized_key.replace("_", " ")
+                lines.append(
+                    f"- Durable person fact: {subject} is the {relation_text} {value}. "
+                    "This is a relationship between two people, not a relationship to the user."
+                )
+                continue
+
             lines.append(
                 f"- [{category}] {subject} | {key}: {value}"
             )
