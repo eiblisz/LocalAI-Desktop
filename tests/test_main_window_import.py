@@ -493,3 +493,35 @@ def test_extensions_dialog_is_wired_but_not_injected_into_chat_runtime():
     assert "extension_store" not in send_source
     assert "extensions_dialog" not in send_source
 
+
+def test_chat_panel_exposes_extension_attachment_button():
+    from app.main_window import MainWindow
+
+    build = inspect.getsource(MainWindow._build_chat_panel)
+    open_source = inspect.getsource(MainWindow._open_chat_extensions)
+    refresh_source = inspect.getsource(MainWindow._refresh_chat_extensions_button)
+
+    assert 'self.chat_extensions_button = QPushButton("EXT 0")' in build
+    assert "ChatExtensionsDialog(" in open_source
+    assert "dialog.saved.connect(self._chat_extensions_saved)" in open_source
+    assert 'button.setText(f"EXT {count}")' in refresh_source
+    assert "runtime execution is not enabled yet" in refresh_source.lower()
+
+
+def test_chat_extension_attachments_are_not_injected_into_model_runtime_yet():
+    from app.main_window import MainWindow
+
+    send_source = inspect.getsource(MainWindow._send)
+
+    assert "attached_extensions" not in send_source
+    assert "extension_store" not in send_source
+    assert "ChatExtensionsDialog" not in send_source
+
+
+def test_chat_render_refreshes_extension_attachment_badge():
+    from app.main_window import MainWindow
+
+    render_source = inspect.getsource(MainWindow._render_chat)
+
+    assert "self._refresh_chat_extensions_button()" in render_source
+
