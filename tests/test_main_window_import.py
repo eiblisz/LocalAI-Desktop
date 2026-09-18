@@ -454,3 +454,18 @@ def test_memory_context_marks_person_relations_as_not_user_relations():
     assert "Durable person fact" in source
     assert "relationship between two people, not a relationship to the user" in source
 
+
+def test_normal_chat_system_prompt_enforces_current_user_language():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._send)
+
+    assert "response_language_instruction(text)" in source
+    assert (
+        'f"{DEFAULT_SYSTEM_PROMPT}\\n\\n{response_language_instruction(text)}"'
+        in source
+    )
+    assert source.index("response_language_instruction(text)") < source.index(
+        "messages_for_model ="
+    )
+
