@@ -28,3 +28,8 @@ def test_unknown_language_still_forbids_unrequested_switching():
     instruction = response_language_instruction("Zsofia?")
     assert "same language as the current user message" in instruction
     assert "Do not switch languages" in instruction
+
+
+def test_german_umlaut_alone_is_not_misclassified_as_hungarian():
+    assert detect_user_language("Wie viel kostet das für mich?") != "hu"
+
