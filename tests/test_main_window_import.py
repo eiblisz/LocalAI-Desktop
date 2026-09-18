@@ -323,3 +323,39 @@ def test_send_injects_memory_into_system_prompt_not_saved_chat():
     assert 'messages_for_model = [{"role": "system", "content": system_prompt}]' in source
     assert 'self.current_chat["messages"].append({"role": "user", "content": text})' in source
     assert 'self.current_chat["messages"].append({"role": "system"' not in source
+
+def test_explicit_memory_request_uses_dedicated_background_worker():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._send)
+
+    assert "if is_explicit_memory_request(text):" in source
+    assert "self.worker = MemoryWriteWorker(" in source
+    assert "self.memory_store" in source
+    assert "self.generation_chat_id" in source
+    assert "self.worker.finished.connect(self._on_memory_finished)" in source
+    assert "self.worker.failed.connect(self._on_memory_failed)" in source
+    assert source.index("if is_explicit_memory_request(text):") < source.index("use_web = (")
+
+
+def test_memory_write_completion_is_bound_to_originating_chat():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._on_memory_finished)
+
+    assert "self.store.load(self.generation_chat_id)" in source
+    assert 'getattr(self.worker, "saved_count", 0)' in source
+    assert "current_id == target_id" in source
+    assert "Memory saved" in source
+
+
+def test_memory_write_failure_has_distinct_bounded_error_dialog():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._on_memory_failed)
+
+    assert 'self.status.setText("Memory save failed")' in source
+    assert 'dialog.setWindowTitle("Memory error")' in source
+    assert "len(summary) > 520" in source
+    assert "setDetailedText(full_message)" in source
+
