@@ -181,3 +181,24 @@ def test_store_can_find_installed_catalog_preset(tmp_path):
     assert found["id"] == saved["id"]
     assert store.find_by_preset_id("missing") is None
 
+
+def test_secret_url_auth_stores_reference_not_secret_value(tmp_path):
+    store = ExtensionStore(tmp_path)
+    saved = store.save({
+        "name": "Discord Webhook",
+        "type": "http_api",
+        "endpoint": "",
+        "enabled": False,
+        "auth_type": "secret_url",
+        "credential_ref": "extension:abc:discord_webhook_url",
+        "capabilities": ["send_message", "send_embed"],
+        "config": {"preset_id": "discord-webhook"},
+    })
+
+    assert saved["auth_type"] == "secret_url"
+    assert saved["credential_ref"] == "extension:abc:discord_webhook_url"
+
+    raw = store.path.read_text(encoding="utf-8")
+    assert "discord.com/api/webhooks/" not in raw
+    assert "token-value" not in raw
+
