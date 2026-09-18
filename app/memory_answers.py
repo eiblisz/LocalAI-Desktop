@@ -24,6 +24,28 @@ _RELATIONSHIP_EN = {
     "sibling": "sibling",
 }
 
+_PERSON_RELATION_HU = {
+    "son_of": "fia",
+    "daughter_of": "lánya",
+    "husband_of": "férje",
+    "wife_of": "felesége",
+    "mother_of": "anyja",
+    "father_of": "apja",
+    "sibling_of": "testvére",
+    "partner_of": "párja",
+}
+
+_PERSON_RELATION_EN = {
+    "son_of": "son",
+    "daughter_of": "daughter",
+    "husband_of": "husband",
+    "wife_of": "wife",
+    "mother_of": "mother",
+    "father_of": "father",
+    "sibling_of": "sibling",
+    "partner_of": "partner",
+}
+
 _HU_RELATION_QUERY = {
     "parom": "partner",
     "partnerem": "partner",
@@ -34,6 +56,17 @@ _HU_RELATION_QUERY = {
     "anyam": "mother",
     "apam": "father",
     "testverem": "sibling",
+}
+
+_HU_PERSON_RELATION_QUERY = {
+    "fia": "son_of",
+    "lanya": "daughter_of",
+    "ferje": "husband_of",
+    "felesege": "wife_of",
+    "anyja": "mother_of",
+    "apja": "father_of",
+    "testvere": "sibling_of",
+    "parja": "partner_of",
 }
 
 
@@ -84,6 +117,15 @@ def _relationship_memories(memories):
     ]
 
 
+def _person_relationship_memories(memories):
+    allowed = set(_PERSON_RELATION_HU)
+    return [
+        memory
+        for memory in memories
+        if _fold(memory.get("key")) in allowed
+    ]
+
+
 def _is_hungarian(text):
     folded = _fold(text)
     markers = (
@@ -100,8 +142,35 @@ def _is_hungarian(text):
         "anyam",
         "apam",
         "testverem",
+        "fia",
+        "lanya",
+        "ferje",
+        "felesege",
+        "anyja",
+        "apja",
+        "testvere",
+        "parja",
     )
     return any(marker in folded for marker in markers)
+
+
+def _format_person_relation(memory, *, hungarian):
+    subject = _clean(memory.get("subject"))
+    relation = _fold(memory.get("key"))
+    related = _clean(memory.get("value"))
+    if not subject or not related:
+        return ""
+
+    if hungarian:
+        relation_text = _PERSON_RELATION_HU.get(relation)
+        if not relation_text:
+            return ""
+        return f"{subject} {related} {relation_text}."
+
+    relation_text = _PERSON_RELATION_EN.get(relation)
+    if not relation_text:
+        return ""
+    return f"{subject} is {related}'s {relation_text}."
 
 
 def _answer_part(part, profiles):
@@ -134,6 +203,23 @@ def _answer_part(part, profiles):
         if asks_own_name or asks_about_saved_name:
             return f"A neved {name}." if is_hu else f"Your name is {name}."
 
+    person_relationships = _person_relationship_memories(profiles)
+
+    # A specific third-person reverse query such as "Ki Annamaria fia?"
+    # must outrank a broader USER relationship match on "Annamaria".
+    if is_hu:
+        for query_term, canonical in _HU_PERSON_RELATION_QUERY.items():
+            if query_term not in folded:
+                continue
+            matches = [
+                memory
+                for memory in person_relationships
+                if _fold(memory.get("key")) == canonical
+                and _fold(memory.get("value")) in folded
+            ]
+            if len(matches) == 1:
+                return _format_person_relation(matches[0], hungarian=True)
+
     relationships = _relationship_memories(profiles)
 
     for memory in relationships:
@@ -162,6 +248,31 @@ def _answer_part(part, profiles):
                 relation_text = _RELATIONSHIP_HU.get(canonical)
                 if subject and relation_text:
                     return f"{subject} a {relation_text}."
+
+    asks_user_relation = (
+        "nekem" in folded
+        or "hozzam" in folded
+        or "hozzám" in part.casefold()
+        or " my " in f" {folded} "
+    )
+
+    for memory in person_relationships:
+        subject = _clean(memory.get("subject"))
+        if subject and _fold(subject) in folded:
+            relation_text = _format_person_relation(memory, hungarian=is_hu)
+            if not relation_text:
+                continue
+            if asks_user_relation:
+                if is_hu:
+                    return (
+                        relation_text
+                        + " A hozzád való kapcsolatáról nincs eltett adat."
+                    )
+                return (
+                    relation_text
+                    + " There is no saved relationship between this person and you."
+                )
+            return relation_text
 
     return ""
 

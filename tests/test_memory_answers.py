@@ -84,3 +84,47 @@ def test_non_profile_memory_is_not_used():
         }
     ]
     assert direct_user_memory_answer("Ki Iblisz?", memories) == ""
+
+
+PERSON_RELATION_MEMORIES = MEMORIES + [
+    {
+        "category": "USER_PROFILE",
+        "scope": "USER",
+        "subject": "Kristof",
+        "key": "son_of",
+        "value": "Annamaria",
+        "status": "active",
+    },
+]
+
+
+def test_third_person_relation_answers_without_claiming_user_relationship():
+    assert (
+        direct_user_memory_answer("Ki Kristof?", PERSON_RELATION_MEMORIES)
+        == "Kristof Annamaria fia."
+    )
+
+
+def test_reverse_third_person_relation_query_is_supported():
+    assert (
+        direct_user_memory_answer("Ki Annamaria fia?", PERSON_RELATION_MEMORIES)
+        == "Kristof Annamaria fia."
+    )
+
+
+def test_asking_relationship_to_user_does_not_infer_from_third_person_relation():
+    assert (
+        direct_user_memory_answer("Ki nekem Kristof?", PERSON_RELATION_MEMORIES)
+        == (
+            "Kristof Annamaria fia. "
+            "A hozzád való kapcsolatáról nincs eltett adat."
+        )
+    )
+
+
+def test_known_user_relationship_still_has_priority():
+    assert (
+        direct_user_memory_answer("Ki Annamária?", PERSON_RELATION_MEMORIES)
+        == "Annamária a párod."
+    )
+

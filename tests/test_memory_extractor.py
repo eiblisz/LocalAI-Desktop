@@ -218,3 +218,55 @@ def test_hungarian_self_name_request_is_normalized_to_user_profile():
     ]
     assert client.calls == []
 
+
+def test_hungarian_third_person_relation_is_not_assigned_to_user():
+    client = FakeClient({
+        "memories": [
+            {
+                "category": "USER_PROFILE",
+                "scope": "USER",
+                "subject": "wrong",
+                "key": "relationship_to_user",
+                "value": "son",
+            }
+        ]
+    })
+
+    memories = extract_explicit_memories(
+        client,
+        "qwen-test",
+        "Jegyezd meg Kristof Annamaria fia.",
+    )
+
+    assert memories == [
+        {
+            "category": "USER_PROFILE",
+            "scope": "USER",
+            "subject": "Kristof",
+            "key": "son_of",
+            "value": "Annamaria",
+        }
+    ]
+    assert client.calls == []
+
+
+def test_hungarian_user_son_relation_stays_relationship_to_user():
+    client = FakeClient({"memories": []})
+
+    memories = extract_explicit_memories(
+        client,
+        "qwen-test",
+        "Jegyezd meg, hogy a fiam Kristof.",
+    )
+
+    assert memories == [
+        {
+            "category": "USER_PROFILE",
+            "scope": "USER",
+            "subject": "Kristof",
+            "key": "relationship_to_user",
+            "value": "son",
+        }
+    ]
+    assert client.calls == []
+
