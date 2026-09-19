@@ -940,3 +940,15 @@ def test_side_chat_list_matches_menu_width_and_hover_language():
     assert "margin: 2px 1px;" in main_window_module.STYLE
     assert "border-radius: 10px;" in main_window_module.STYLE
     assert "QListWidget#sideChatList::item:hover" in main_window_module.STYLE
+
+
+def test_side_menu_uses_explicit_shared_base_background():
+    import app.main_window as main_window_module
+
+    style = main_window_module.STYLE
+
+    assert "QPushButton#sideMenuButton {" in style
+    assert "background: #141A20;" in style
+    assert "QPushButton#sideMenuButton:hover" in style
+    assert "background: #1D2630;" in style
+    assert "color: #FFFFFF;" in style
