@@ -859,7 +859,7 @@ def test_local_model_hub_lists_all_ollama_models_and_supports_refresh():
     from app.main_window import MainWindow
 
     build_source = inspect.getsource(MainWindow._build_ui)
-    load_source = inspect.getsource(MainWindow._load_models)
+    load_source = inspect.getsource(MainWindow._refresh_local_model_hub)
     changed_source = inspect.getsource(MainWindow._model_changed)
 
     assert 'QLabel("LOCAL MODELS")' in build_source
@@ -882,7 +882,7 @@ def test_local_model_hub_lists_all_ollama_models_and_supports_refresh():
 def test_model_refresh_preserves_saved_or_current_chat_model():
     from app.main_window import MainWindow
 
-    source = inspect.getsource(MainWindow._load_models)
+    source = inspect.getsource(MainWindow._refresh_local_model_hub)
 
     assert 'saved = str(self.current_chat.get("model") or "").strip()' in source
     assert "preferred = saved or previous" in source
