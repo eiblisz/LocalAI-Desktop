@@ -626,4 +626,6 @@ def test_freshness_sensitive_requests_route_to_web_without_search_verb():
     assert is_freshness_sensitive_request("Mennyi most egy 4 TB SSD ára?")
     assert is_freshness_sensitive_request("What is the latest Qwen release?")
     assert not is_freshness_sensitive_request("Mi az a neurális háló?")
+    assert not is_freshness_sensitive_request("Magyarázd el röviden, mi az a TCP.")
+    assert not is_freshness_sensitive_request("Készíts rövid témaleírást.")
 
