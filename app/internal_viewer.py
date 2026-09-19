@@ -355,6 +355,14 @@ class DocumentView(QWidget):
 
         view = QTextBrowser()
         view.setOpenExternalLinks(False)
+        view.setStyleSheet(
+            "QTextBrowser {"
+            "background:#FFFFFF;"
+            "color:#20242A;"
+            "border:none;"
+            "padding:0px;"
+            "}"
+        )
         view.setHtml(render_docx_html(path))
         root.addWidget(view, 1)
 
