@@ -1730,7 +1730,7 @@ class MainWindow(QMainWindow):
             "background:#202730;"
             "border:1px solid #323C48;"
             "border-radius:10px;"
-            "padding:9px 13px;"
+            "padding:5px 10px;"
             "color:#F4F6F8;"
             "font-weight:700;"
             "min-height:32px;"
@@ -1740,6 +1740,7 @@ class MainWindow(QMainWindow):
             "background:#29323D;"
             "}"
         )
+        self.schedule_button.setFixedHeight(34)
 
     def _clear_schedule_task_labels(self):
         if not hasattr(self, "schedule_task_status_layout"):
