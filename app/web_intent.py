@@ -120,6 +120,46 @@ def is_freshness_sensitive_request(text):
     if not normalized:
         return False
 
+    explanatory_markers = (
+        "magyarázd el",
+        "magyarazd el",
+        "mi az a ",
+        "mi az az ",
+        "mi a különbség",
+        "mi a kulonbseg",
+        "explain ",
+        "what is ",
+        "what are ",
+        "difference between",
+        "erkläre ",
+        "erklaere ",
+        "was ist ",
+        "was sind ",
+        "unterschied zwischen",
+    )
+    explicit_recency_markers = (
+        "most",
+        "jelenlegi",
+        "aktuális",
+        "aktualis",
+        "mostani",
+        "legfrissebb",
+        "legújabb",
+        "legujabb",
+        "mai ",
+        "latest",
+        "current",
+        "today",
+        "now",
+        "aktuell",
+        "heute",
+        "neueste",
+    )
+    if any(marker in normalized for marker in explanatory_markers) and not any(
+        marker in normalized for marker in explicit_recency_markers
+    ):
+        return False
+
     markers = (
         "legfrissebb",
         "friss hírek",
