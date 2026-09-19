@@ -438,6 +438,7 @@ class DiscordBotBridge(QObject):
 
         memory_context = self._build_memory_context(prompt)
         system = str(messages[0]["content"])
+        system += "\n\n" + response_language_instruction(prompt)
         system += (
             "\n\nThe host application will render your output into the requested "
             f"{artifact_request.format.upper()} artifact. Do not say that you cannot "
