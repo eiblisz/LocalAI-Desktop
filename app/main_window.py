@@ -127,7 +127,7 @@ QPushButton#primary:hover {
     background: #D24A57;
 }
 QPushButton#sideMenuButton {
-    background: transparent;
+    background: #141A20;
     border: 1px solid #2D3742;
     border-radius: 10px;
     min-height: 32px;
@@ -146,7 +146,7 @@ QPushButton#sideMenuButton:pressed {
     color: #FFFFFF;
 }
 QPushButton#sideMenuButton:disabled {
-    background: transparent;
+    background: #141A20;
     border-color: #25303A;
     color: #6F7884;
 }
