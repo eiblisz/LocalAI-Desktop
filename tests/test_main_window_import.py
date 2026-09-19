@@ -211,13 +211,15 @@ def test_web_auto_detects_shopping_price_requests_without_search_verbs():
     )
 
 
-def test_chat_link_handler_opens_http_links_externally():
+def test_chat_link_handler_routes_http_and_artifacts_to_internal_viewer():
     from app.main_window import MainWindow
 
     source = inspect.getsource(MainWindow._open_artifact_link)
     assert 'url.scheme().lower() in {"http", "https"}' in source
-    assert "webbrowser.open" in source
+    assert "self._open_resource(url.toString())" in source
     assert "path_from_artifact_url" in source
+    assert "self._open_resource(target)" in source
+    assert "webbrowser.open" not in source
 
 
 def test_chat_view_wraps_long_urls_without_horizontal_growth():
@@ -740,4 +742,43 @@ def test_discord_bridge_receives_shared_extension_store_for_market_runtime():
     sync_source = inspect.getsource(MainWindow._sync_discord_bot_bridge)
 
     assert "extension_store=self.extension_store" in sync_source
+
+
+def test_workspace_hosts_chat_and_closeable_internal_resource_tabs():
+    from app.main_window import MainWindow
+
+    build_source = inspect.getsource(MainWindow._build_workspace_panel)
+    close_source = inspect.getsource(MainWindow._close_workspace_tab)
+
+    assert "QTabWidget()" in build_source
+    assert "setTabsClosable(True)" in build_source
+    assert "setMovable(True)" in build_source
+    assert "self._build_chat_panel()" in build_source
+    assert 'addTab(self.chat_workspace, "Chat")' in build_source
+    assert "widget is self.chat_workspace" in close_source
+    assert "removeTab(index)" in close_source
+
+
+def test_open_resource_creates_internal_tab_and_keeps_browser_navigation_internal():
+    from app.main_window import MainWindow
+
+    open_source = inspect.getsource(MainWindow._open_resource)
+
+    assert "resource_identity(target)" in open_source
+    assert 'existing.property("resource_target") == resource_key' in open_source
+    assert 'widget.setProperty("resource_target", resource_key)' in open_source
+    assert "create_resource_view(" in open_source
+    assert "open_resource=self._open_resource" in open_source
+    assert "self.workspace_tabs.addTab" in open_source
+    assert "self.workspace_tabs.setCurrentIndex" in open_source
+    assert "BrowserView" in open_source
+
+
+def test_open_file_button_uses_internal_resource_viewer():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._open_last_artifact)
+
+    assert "self._open_resource(self.last_artifact_path)" in source
+    assert "open_file(" not in source
 
