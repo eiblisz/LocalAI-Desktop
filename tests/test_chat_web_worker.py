@@ -878,3 +878,66 @@ def test_run_chat_web_request_collects_grounded_worker_output(monkeypatch):
     assert "Search query: latest Qwen local AI news" in answer
     assert "https://example.com/qwen" in answer
 
+
+def test_adaptive_chat_worker_retries_grounded_web_when_local_answer_is_stale(monkeypatch):
+    class StaleClient:
+        def __init__(self):
+            self.calls = []
+
+        def chat_once(self, model, messages, timeout=600.0):
+            self.calls.append((model, messages))
+            return "Nincs friss információm erről a kiadásról."
+
+    monkeypatch.setattr(
+        workers,
+        "run_chat_web_request",
+        lambda client, model, messages, prompt: "Friss, ellenőrzött webes válasz.",
+    )
+
+    client = StaleClient()
+    tokens = []
+    finished = []
+    failed = []
+    worker = workers.AdaptiveChatWorker(
+        client,
+        "qwen-test",
+        [{"role": "user", "content": "Melyik Qwen verzió a legújabb?"}],
+        "Melyik Qwen verzió a legújabb?",
+    )
+    worker.token.connect(tokens.append)
+    worker.finished.connect(lambda: finished.append(True))
+    worker.failed.connect(failed.append)
+    worker.run()
+
+    assert not failed
+    assert finished == [True]
+    assert tokens == ["Friss, ellenőrzött webes válasz."]
+    assert worker.used_web_fallback is True
+
+
+def test_adaptive_chat_worker_keeps_confident_local_answer_without_web(monkeypatch):
+    class LocalClient:
+        def chat_once(self, model, messages, timeout=600.0):
+            return "A TCP egy megbízható, kapcsolatorientált protokoll."
+
+    monkeypatch.setattr(
+        workers,
+        "run_chat_web_request",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("stable answer must not trigger web fallback")
+        ),
+    )
+
+    tokens = []
+    worker = workers.AdaptiveChatWorker(
+        LocalClient(),
+        "qwen-test",
+        [{"role": "user", "content": "Mi az a TCP?"}],
+        "Mi az a TCP?",
+    )
+    worker.token.connect(tokens.append)
+    worker.run()
+
+    assert tokens == ["A TCP egy megbízható, kapcsolatorientált protokoll."]
+    assert worker.used_web_fallback is False
+
