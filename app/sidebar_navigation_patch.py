@@ -60,11 +60,13 @@ def install_sidebar_navigation_patch(main_window_module):
         layout.setSpacing(6)
 
         new_chat = QPushButton("+  NEW CHAT")
+        new_chat.setFixedHeight(34)
         new_chat.clicked.connect(self._new_chat)
         layout.addWidget(new_chat)
 
         self.schedule_button = QPushButton("SCHEDULE")
         self.schedule_button.setObjectName("toolButton")
+        self.schedule_button.setFixedHeight(34)
         self.schedule_button.clicked.connect(self._open_scheduler)
         layout.addWidget(self.schedule_button)
 
@@ -72,6 +74,7 @@ def install_sidebar_navigation_patch(main_window_module):
         for text in ["PROJECTS", "BROWSER", "MEMORY", "EXTENSIONS", "SETTINGS"]:
             button = QPushButton(text)
             button.setObjectName("subtleButton")
+            button.setFixedHeight(34)
             if text == "BROWSER":
                 button.setEnabled(True)
                 button.setToolTip(
