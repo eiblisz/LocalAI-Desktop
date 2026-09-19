@@ -51,6 +51,7 @@ def test_sidebar_has_navigation_then_distinct_schedule_and_chat_sections():
     assert 'QPushButton("+  NEW CHAT")' in source
     assert 'self.schedule_button = QPushButton("SCHEDULE")' in source
     assert '["PROJECTS", "BROWSER", "MEMORY", "EXTENSIONS", "SETTINGS"]' in source
+    assert 'button.clicked.connect(self._open_market_browser)' in source
     assert 'button.clicked.connect(self._open_extensions)' in source
     assert 'QLabel("SCHEDULES")' in source
     assert 'QLabel("CHATS")' in source
@@ -117,3 +118,13 @@ def test_existing_scheduler_completion_still_persists_and_does_not_steal_chat():
     assert "self.scheduler_store.mark_result" in source
     assert "current_id == scheduled_chat_id" in source
     assert "_load_chat_list()" in source
+
+
+def test_browser_sidebar_opens_tradingview_inside_workspace():
+    source = inspect.getsource(MainWindow._build_sidebar)
+    open_source = inspect.getsource(MainWindow._open_market_browser)
+
+    assert 'if text == "BROWSER"' in source
+    assert 'button.setEnabled(True)' in source
+    assert 'button.clicked.connect(self._open_market_browser)' in source
+    assert "self._open_resource(self._tradingview_workspace_url())" in open_source

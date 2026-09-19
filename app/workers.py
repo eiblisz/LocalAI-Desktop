@@ -23,6 +23,7 @@ from .generic_shopping_evidence import (
     render_generic_shopping_answer,
 )
 from .memory_runtime import remember_explicit_request
+from .multi_asset_market_data import run_multi_asset_market_request
 from .language_policy import (
     detect_user_language,
     response_language_instruction,
@@ -149,7 +150,7 @@ class MarketDataWorker(QObject):
                 ).strip()
             except Exception:
                 self.used_web_fallback = True
-                answer = run_chat_web_request(
+                answer = run_market_web_request(
                     self.client,
                     self.model,
                     self.messages,
@@ -172,6 +173,65 @@ class MarketDataWorker(QObject):
         self._stop_event.set()
 
 
+class MultiAssetMarketDataWorker(QObject):
+    token = Signal(str)
+    finished = Signal()
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        client: OllamaClient,
+        model: str,
+        messages: list[dict],
+        user_prompt: str,
+        extension: dict,
+    ):
+        super().__init__()
+        self.client = client
+        self.model = model
+        self.messages = [dict(message) for message in messages]
+        self.user_prompt = str(user_prompt or "").strip()
+        self.extension = dict(extension or {})
+        self._stop_event = threading.Event()
+        self.used_web_fallback = False
+
+    @Slot()
+    def run(self):
+        try:
+            if self._stop_event.is_set():
+                self.finished.emit()
+                return
+
+            try:
+                answer = run_multi_asset_market_request(
+                    self.extension,
+                    self.user_prompt,
+                ).strip()
+            except Exception:
+                self.used_web_fallback = True
+                answer = run_market_web_request(
+                    self.client,
+                    self.model,
+                    self.messages,
+                    self.user_prompt,
+                ).strip()
+
+            if self._stop_event.is_set():
+                self.finished.emit()
+                return
+
+            if not answer:
+                raise RuntimeError("Multi-asset market data returned an empty answer.")
+
+            self.token.emit(answer)
+            self.finished.emit()
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+    def stop(self):
+        self._stop_event.set()
+
+
 class ChatWebWorker(QObject):
     token = Signal(str)
     finished = Signal()
@@ -183,12 +243,15 @@ class ChatWebWorker(QObject):
         model: str,
         messages: list[dict],
         user_prompt: str,
+        *,
+        compact_market_quote: bool = False,
     ):
         super().__init__()
         self.client = client
         self.model = model
         self.messages = [dict(message) for message in messages]
         self.user_prompt = str(user_prompt or "").strip()
+        self.compact_market_quote = bool(compact_market_quote)
         self._stop_event = threading.Event()
 
     def _recent_user_requests(self, limit=4):
@@ -699,6 +762,51 @@ class ChatWebWorker(QObject):
         return compact
 
 
+    def _compact_market_quote_answer(self, answer):
+        original = str(answer or "").strip()
+        if not self.compact_market_quote or not original:
+            return original
+
+        compact = self.client.chat_once(
+            model=self.model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Rewrite the supplied grounded market answer into one short "
+                        "sentence, or at most two short sentences if a material delayed-"
+                        "data or market-state caveat is required. Put the requested current "
+                        "price or exchange rate in the first sentence. Do not include "
+                        "analysis, outlook, investment commentary, bullet lists, search "
+                        "queries, search providers, source inventories, or offers to do "
+                        "more work. Do not add or change any number, price, percentage, "
+                        "currency, ticker, date, URL, or factual claim. "
+                        + self._conversation_language_instruction()
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"USER QUESTION:\n{self.user_prompt}\n\n"
+                        f"GROUNDED MARKET ANSWER:\n{original}"
+                    ),
+                },
+            ],
+        ).strip()
+
+        if not compact or len(compact) > 360:
+            return original
+        if not response_language_matches(self.user_prompt, compact):
+            return original
+        if not self._numeric_fact_tokens(compact).issubset(
+            self._numeric_fact_tokens(original)
+        ):
+            return original
+        if not self._url_tokens(compact).issubset(self._url_tokens(original)):
+            return original
+        return compact
+
+
     def _safe_evidence_failure(self, answer_rejected=False):
         if "Hungarian" in self._conversation_language_instruction():
             if answer_rejected:
@@ -1073,6 +1181,7 @@ class ChatWebWorker(QObject):
                 authoritative_facts,
             )
             answer = self._compact_grounded_answer(answer)
+            answer = self._compact_market_quote_answer(answer)
 
             verification_status = ""
             unique_verification_queries = list(dict.fromkeys(verification_queries))
@@ -1139,15 +1248,16 @@ class ChatWebWorker(QObject):
                 else ""
             )
 
-            self.token.emit(
-                "\n\n---\n"
-                f"{query_footer}\n"
-                f"{provider_footer}"
-                f"{fallback_footer}"
-                f"{verification_footer}\n"
-                "Web results / sources:\n"
-                f"{source_lines}"
-            )
+            if not self.compact_market_quote:
+                self.token.emit(
+                    "\n\n---\n"
+                    f"{query_footer}\n"
+                    f"{provider_footer}"
+                    f"{fallback_footer}"
+                    f"{verification_footer}\n"
+                    "Web results / sources:\n"
+                    f"{source_lines}"
+                )
             self.finished.emit()
         except Exception as exc:
             self.failed.emit(str(exc))
@@ -1156,16 +1266,9 @@ class ChatWebWorker(QObject):
         self._stop_event.set()
 
 
-def run_chat_web_request(client, model, messages, user_prompt):
-    """Run the existing grounded web worker synchronously and collect its answer."""
+def _run_web_worker(worker):
     chunks = []
     errors = []
-    worker = ChatWebWorker(
-        client,
-        model,
-        messages,
-        user_prompt,
-    )
     worker.token.connect(chunks.append)
     worker.failed.connect(errors.append)
     worker.run()
@@ -1177,6 +1280,31 @@ def run_chat_web_request(client, model, messages, user_prompt):
     if not answer:
         raise RuntimeError("Web research returned an empty answer.")
     return answer
+
+
+def run_chat_web_request(client, model, messages, user_prompt):
+    """Run the existing grounded web worker synchronously and collect its answer."""
+    return _run_web_worker(
+        ChatWebWorker(
+            client,
+            model,
+            messages,
+            user_prompt,
+        )
+    )
+
+
+def run_market_web_request(client, model, messages, user_prompt):
+    """Run concise grounded web fallback for a live market-value lookup."""
+    return _run_web_worker(
+        ChatWebWorker(
+            client,
+            model,
+            messages,
+            user_prompt,
+            compact_market_quote=True,
+        )
+    )
 
 
 class AdaptiveChatWorker(QObject):

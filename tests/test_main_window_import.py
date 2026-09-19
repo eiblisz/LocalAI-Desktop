@@ -782,3 +782,74 @@ def test_open_file_button_uses_internal_resource_viewer():
     assert "self._open_resource(self.last_artifact_path)" in source
     assert "open_file(" not in source
 
+
+
+def test_tradingview_workspace_uses_enabled_extension_config_or_safe_default():
+    from app.main_window import MainWindow
+
+    url_source = inspect.getsource(MainWindow._tradingview_workspace_url)
+    open_source = inspect.getsource(MainWindow._open_market_browser)
+
+    assert '"https://www.tradingview.com/markets/"' in url_source
+    assert 'find_by_preset_id(' in url_source
+    assert '"tradingview-workspace"' in url_source
+    assert 'extension.get("enabled", False)' in url_source
+    assert 'config.get("workspace_url")' in url_source
+    assert 'value.startswith(("https://", "http://"))' in url_source
+    assert "self._open_resource(self._tradingview_workspace_url())" in open_source
+
+
+def test_live_stock_forex_and_index_quotes_prefer_multi_asset_extension():
+    from app.main_window import MainWindow
+
+    send_source = inspect.getsource(MainWindow._send)
+    helper_source = inspect.getsource(MainWindow._multi_asset_market_extension)
+
+    assert 'find_by_preset_id(' in helper_source
+    assert '"multi-asset-market-data"' in helper_source
+    assert '"market_quote"' in helper_source
+    assert "is_multi_asset_quote_request(text_for_model)" in send_source
+    assert "MultiAssetMarketDataWorker(" in send_source
+    assert "ChatWebWorker(" in send_source
+    assert send_source.index("MultiAssetMarketDataWorker(") < send_source.index(
+        "ChatWebWorker("
+    )
+
+
+def test_crypto_and_multi_asset_structured_routing_remain_separate():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._send)
+
+    assert "is_crypto_quote_request(text_for_model)" in source
+    assert "is_multi_asset_quote_request(text_for_model)" in source
+    assert "MarketDataWorker(" in source
+    assert "MultiAssetMarketDataWorker(" in source
+
+
+def test_chat_input_accepts_clipboard_images_as_ollama_image_payloads():
+    from app.main_window import MainWindow, PasteAwareTextEdit
+
+    build_source = inspect.getsource(MainWindow._build_chat_panel)
+    send_source = inspect.getsource(MainWindow._send)
+    paste_source = inspect.getsource(PasteAwareTextEdit.insertFromMimeData)
+    attach_source = inspect.getsource(MainWindow._attach_clipboard_image)
+
+    assert "PasteAwareTextEdit()" in build_source
+    assert "imagePasted.connect(self._attach_clipboard_image)" in build_source
+    assert "source.hasImage()" in paste_source
+    assert "self.imagePasted.emit(image)" in paste_source
+    assert "_qimage_to_png_base64(image)" in attach_source
+    assert 'attachment.get("kind") == "image"' in send_source
+    assert 'model_user_message["images"] = image_payloads' in send_source
+
+
+def test_attach_file_supports_common_image_formats():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._attach_file)
+
+    for suffix in (".png", ".jpg", ".jpeg", ".webp", ".bmp"):
+        assert suffix in source
+    assert "base64.b64encode" in source
+    assert "self._add_image_attachment" in source
