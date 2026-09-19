@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import html
 import re
+import shutil
 import webbrowser
 from pathlib import Path
 from urllib.parse import urlparse
@@ -14,10 +15,12 @@ from pypdf import PdfReader
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QTabWidget,
@@ -99,6 +102,60 @@ def resource_identity(target) -> str:
     if parsed.scheme.lower() in {"http", "https"}:
         return value
     return str(Path(value).resolve())
+
+
+def save_resource_copy(source, destination):
+    source_path = Path(source).resolve()
+    destination_path = Path(destination).expanduser().resolve()
+    if not source_path.exists() or not source_path.is_file():
+        raise FileNotFoundError(str(source_path))
+    destination_path.parent.mkdir(parents=True, exist_ok=True)
+    if source_path == destination_path:
+        return destination_path
+    shutil.copy2(source_path, destination_path)
+    return destination_path
+
+
+def _default_save_path(path):
+    path = Path(path).resolve()
+    downloads = Path.home() / "Downloads"
+    base = downloads if downloads.exists() else Path.home()
+    return base / path.name
+
+
+def _save_resource_as_dialog(parent, path):
+    source = Path(path).resolve()
+    destination, _selected_filter = QFileDialog.getSaveFileName(
+        parent,
+        "Save As",
+        str(_default_save_path(source)),
+        f"{source.suffix.upper().lstrip('.')} files (*{source.suffix});;All files (*.*)",
+    )
+    if not destination:
+        return None
+    try:
+        return save_resource_copy(source, destination)
+    except Exception as exc:
+        QMessageBox.critical(parent, "Save file error", str(exc))
+        return None
+
+
+def _add_save_as_toolbar(layout, path, parent):
+    toolbar = QFrame(parent)
+    controls = QHBoxLayout(toolbar)
+    controls.setContentsMargins(8, 7, 8, 7)
+    controls.addStretch()
+    save_button = QPushButton("SAVE AS")
+    save_button.setToolTip("Save a copy of this file to another location.")
+    save_button.clicked.connect(
+        lambda _checked=False, source=Path(path).resolve(): _save_resource_as_dialog(
+            parent,
+            source,
+        )
+    )
+    controls.addWidget(save_button)
+    layout.addWidget(toolbar)
+    return save_button
 
 
 def render_docx_html(path) -> str:
@@ -324,6 +381,7 @@ class PdfViewWidget(QWidget):
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
+        _add_save_as_toolbar(root, path, self)
 
         if QPdfDocument is not None and QPdfView is not None:
             self.document = QPdfDocument(self)
@@ -352,6 +410,7 @@ class DocumentView(QWidget):
         super().__init__(parent)
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
+        _add_save_as_toolbar(root, path, self)
 
         view = QTextBrowser()
         view.setOpenExternalLinks(False)
@@ -372,6 +431,7 @@ class SpreadsheetView(QWidget):
         super().__init__(parent)
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
+        _add_save_as_toolbar(root, path, self)
 
         sheets = QTabWidget()
         previews = spreadsheet_preview(path)
@@ -414,6 +474,7 @@ class MarkdownTextView(QWidget):
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
+        _add_save_as_toolbar(root, path, self)
 
         view = QTextBrowser()
         if markdown_mode:
