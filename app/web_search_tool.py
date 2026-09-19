@@ -1024,9 +1024,9 @@ def _extract_release_value(item):
         return tag_match.group(1)
 
     patterns = [
-        r"Release list\s+(v?\d+\.\d+(?:\.\d+){0,2}(?:[-+][0-9A-Za-z.-]+)?)",
         r"(v?\d+\.\d+(?:\.\d+){0,2}(?:[-+][0-9A-Za-z.-]+)?)\s+Latest\b",
         r"\bLatest\b.{0,100}?(v?\d+\.\d+(?:\.\d+){0,2}(?:[-+][0-9A-Za-z.-]+)?)",
+        r"Release list\s+(v?\d+\.\d+(?:\.\d+){0,2}(?:[-+][0-9A-Za-z.-]+)?)",
     ]
     for pattern in patterns:
         match = re.search(pattern, compact, flags=re.IGNORECASE)
