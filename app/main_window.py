@@ -52,6 +52,7 @@ from .file_reader import read_attachment
 from .internal_viewer import (
     BrowserView,
     create_resource_view,
+    resource_identity,
     resource_title,
 )
 from .language_policy import response_language_instruction
@@ -375,20 +376,31 @@ class MainWindow(QMainWindow):
         return self.workspace_tabs
 
     def _close_workspace_tab(self, index):
-        if index <= 0:
-            return
         widget = self.workspace_tabs.widget(index)
+        if widget is self.chat_workspace:
+            return
         self.workspace_tabs.removeTab(index)
         if widget is not None:
             widget.deleteLater()
 
     def _open_resource(self, target):
         try:
+            resource_key = resource_identity(target)
+            for index in range(self.workspace_tabs.count()):
+                existing = self.workspace_tabs.widget(index)
+                if (
+                    existing is not None
+                    and existing.property("resource_target") == resource_key
+                ):
+                    self.workspace_tabs.setCurrentIndex(index)
+                    return existing
+
             widget = create_resource_view(
                 target,
                 open_resource=self._open_resource,
                 parent=self.workspace_tabs,
             )
+            widget.setProperty("resource_target", resource_key)
             title = resource_title(target)
             index = self.workspace_tabs.addTab(widget, title)
             self.workspace_tabs.setCurrentIndex(index)
