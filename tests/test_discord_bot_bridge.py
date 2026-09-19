@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.artifact_service import ArtifactRequest
+from app.artifact_service import ArtifactPlanItem, ArtifactRequest
 from app.discord_bot_bridge import (
     DiscordBotBridge,
     DiscordBotSettings,
@@ -540,3 +540,106 @@ def test_remote_document_model_path_uses_shared_render_instruction(tmp_path: Pat
     assert artifact.exists()
     assert "DOCX" in answer
     assert "host application will render" in ollama.messages[0]["content"]
+
+
+def test_remote_multi_artifact_request_creates_every_file_once(tmp_path: Path, monkeypatch):
+    import app.discord_bot_bridge as bridge_module
+
+    memory_store = MemoryStore(tmp_path / "memory.sqlite3")
+    memory_store.remember_explicit(
+        category="USER_PROFILE",
+        scope="USER",
+        subject="Lilla",
+        key="relationship_to_user",
+        value="daughter",
+        source_chat_id="seed",
+        source_excerpt="Jegyezd meg, hogy Lilla a lányom.",
+    )
+
+    created = []
+
+    def fake_create_artifact(fmt, **kwargs):
+        created.append((fmt, kwargs))
+        suffix = {
+            "docx": ".docx",
+            "xlsx": ".xlsx",
+            "html": ".html",
+            "summary": ".md",
+        }[fmt]
+        path = tmp_path / f"artifact_{len(created)}{suffix}"
+        path.write_bytes(b"artifact")
+        return path
+
+    monkeypatch.setattr(bridge_module, "create_artifact", fake_create_artifact)
+
+    class FailingOllama:
+        def chat_once(self, model, messages):
+            raise AssertionError("durable memory should answer all four artifact topics")
+
+    settings = DiscordBotSettings(
+        extension_id="ext-multi-artifact",
+        name="Prometheusz",
+        guild_id=111111111111111111,
+        channel_id=222222222222222222,
+        allowed_user_id=333333333333333333,
+        model="qwen3-coder:30b",
+    )
+    bridge = DiscordBotBridge(
+        ollama_client=FailingOllama(),
+        chat_store=ChatStore(tmp_path / "chats"),
+        settings=settings,
+        token="T" * 40,
+        memory_store=memory_store,
+    )
+
+    plans = [
+        ArtifactPlanItem(
+            prompt="Készíts Word dokumentumot Red Executive stílusban arról, hogy ki nekem Lilla.",
+            request=ArtifactRequest("docx", "Red Executive"),
+        ),
+        ArtifactPlanItem(
+            prompt="Készíts Excel fájlt arról, hogy ki nekem Lilla.",
+            request=ArtifactRequest("xlsx", "Red Executive Workbook"),
+        ),
+        ArtifactPlanItem(
+            prompt="Készíts HTML riportot Classic Executive stílusban arról, hogy ki nekem Lilla.",
+            request=ArtifactRequest("html", "Classic Executive"),
+        ),
+        ArtifactPlanItem(
+            prompt="Készíts összefoglaló Markdown fájlt arról, hogy ki nekem Lilla.",
+            request=ArtifactRequest("summary", "Local Summary"),
+        ),
+    ]
+    original = "\n\n".join(item.prompt for item in plans)
+
+    chat_id, results = bridge._create_remote_artifacts(original, plans)
+
+    assert [fmt for fmt, _kwargs in created] == [
+        "docx",
+        "xlsx",
+        "html",
+        "summary",
+    ]
+    assert [kwargs["preset"] for _fmt, kwargs in created] == [
+        "Red Executive",
+        "Red Executive Workbook",
+        "Classic Executive",
+        "Local Summary",
+    ]
+    assert len(results) == 4
+    assert all(path.exists() for _answer, path in results)
+    assert all("Lilla a lányod." in kwargs["content"] for _fmt, kwargs in created)
+
+    chat = bridge.chat_store.load(chat_id)
+    user_messages = [
+        item for item in chat["messages"]
+        if item.get("role") == "user"
+    ]
+    artifacts = [
+        item for item in chat["messages"]
+        if item.get("role") == "artifact"
+    ]
+    assert user_messages[-1]["content"] == original
+    assert len(user_messages) == 1
+    assert len(artifacts) == 4
+
