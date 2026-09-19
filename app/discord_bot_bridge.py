@@ -8,7 +8,12 @@ import discord
 import requests
 from PySide6.QtCore import QObject, Signal
 
-from .artifact_service import create_artifact, infer_artifact_request
+from .artifact_service import (
+    ArtifactPlanItem,
+    create_artifact,
+    infer_artifact_request,
+    infer_artifact_requests,
+)
 from .config import DEFAULT_SYSTEM_PROMPT
 from .document_tools import (
     build_document_messages,
@@ -231,19 +236,20 @@ class DiscordBotBridge(QObject):
 
             async with request_lock:
                 try:
-                    artifact_request = infer_artifact_request(content)
-                    if artifact_request is not None:
+                    artifact_plans = infer_artifact_requests(content)
+                    if artifact_plans:
                         async with message.channel.typing():
-                            answer, chat_id, artifact_path = await asyncio.to_thread(
-                                self._create_remote_artifact,
+                            chat_id, artifact_results = await asyncio.to_thread(
+                                self._create_remote_artifacts,
                                 content,
-                                artifact_request,
+                                artifact_plans,
                             )
-                        await message.reply(
-                            answer,
-                            file=discord.File(str(artifact_path)),
-                            mention_author=False,
-                        )
+                        for answer, artifact_path in artifact_results:
+                            await message.reply(
+                                answer,
+                                file=discord.File(str(artifact_path)),
+                                mention_author=False,
+                            )
                     else:
                         async with message.channel.typing():
                             answer, chat_id = await asyncio.to_thread(
@@ -458,12 +464,7 @@ class DiscordBotBridge(QObject):
             )
         return body
 
-    def _create_remote_artifact(self, prompt, artifact_request):
-        chat = self._load_remote_chat()
-        chat["model"] = self.settings.model
-        chat["messages"].append({"role": "user", "content": prompt})
-        self.chat_store.save(chat)
-
+    def _render_remote_artifact(self, chat, prompt, artifact_request):
         body = self._artifact_body(prompt, artifact_request)
         path = create_artifact(
             artifact_request.format,
@@ -496,18 +497,39 @@ class DiscordBotBridge(QObject):
             }
         )
         chat["messages"].append(artifact_message)
-        self.chat_store.save(chat)
 
         preset_text = (
             f" ({artifact_request.preset})"
             if artifact_request.preset and artifact_request.format != "summary"
             else ""
         )
-        return (
-            f"Elkészítettem a {label} fájlt{preset_text}.",
-            str(chat.get("id", "")),
-            path,
-        )
+        return f"Elkészítettem a {label} fájlt{preset_text}.", path
+
+    def _create_remote_artifacts(self, original_prompt, artifact_plans):
+        chat = self._load_remote_chat()
+        chat["model"] = self.settings.model
+        chat["messages"].append({"role": "user", "content": original_prompt})
+
+        results = []
+        for plan in artifact_plans:
+            if not isinstance(plan, ArtifactPlanItem):
+                raise TypeError("artifact_plans must contain ArtifactPlanItem values")
+            results.append(
+                self._render_remote_artifact(
+                    chat,
+                    plan.prompt,
+                    plan.request,
+                )
+            )
+
+        self.chat_store.save(chat)
+        return str(chat.get("id", "")), results
+
+    def _create_remote_artifact(self, prompt, artifact_request):
+        plan = ArtifactPlanItem(prompt=prompt, request=artifact_request)
+        chat_id, results = self._create_remote_artifacts(prompt, [plan])
+        answer, path = results[0]
+        return answer, chat_id, path
 
     def _answer_prompt(self, prompt):
         chat = self._load_remote_chat()
