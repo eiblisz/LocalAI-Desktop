@@ -9,6 +9,12 @@ from .language_policy import detect_user_language
 
 
 DEFAULT_API_BASE = "https://query1.finance.yahoo.com/v8/finance/chart"
+FALLBACK_API_BASE = "https://query2.finance.yahoo.com/v8/finance/chart"
+
+REQUEST_HEADERS = {
+    "User-Agent": "Mozilla/5.0 LocalAI-Desktop/1.0",
+    "Accept": "application/json,text/plain,*/*",
+}
 
 ASSET_ALIASES = {
     "tesla": ("TSLA", "Tesla", "stock"),
@@ -175,6 +181,35 @@ def _chart_payload(response):
     return result
 
 
+def _request_chart(requester, url, params, timeout):
+    try:
+        return requester(
+            url,
+            params=params,
+            timeout=timeout,
+            headers=REQUEST_HEADERS,
+        )
+    except TypeError:
+        # Keep the requester contract compatible with bounded tests and custom
+        # injectors that predate the headers argument.
+        return requester(url, params=params, timeout=timeout)
+
+
+def _candidate_api_bases(extension):
+    primary = _api_base_from_extension(extension)
+    candidates = [primary]
+    parsed = urlparse(primary)
+    if parsed.hostname in {"query1.finance.yahoo.com", "query2.finance.yahoo.com"}:
+        alternate = (
+            FALLBACK_API_BASE
+            if parsed.hostname == "query1.finance.yahoo.com"
+            else DEFAULT_API_BASE
+        )
+        if alternate not in candidates:
+            candidates.append(alternate)
+    return candidates
+
+
 def get_multi_asset_quote(extension, prompt, requester=requests.get):
     request = infer_multi_asset_quote_request(prompt)
     if not request:
@@ -182,18 +217,27 @@ def get_multi_asset_quote(extension, prompt, requester=requests.get):
             "The request is not a supported stock, forex or index quote query."
         )
 
-    base_url = _api_base_from_extension(extension)
     timeout = float((extension or {}).get("timeout", 10.0) or 10.0)
     symbol = request["symbol"]
-    url = f"{base_url}/{quote(symbol, safe='')}"
     params = {"interval": "1m", "range": "1d"}
 
-    try:
-        response = requester(url, params=params, timeout=timeout)
-    except requests.RequestException as exc:
-        raise MultiAssetMarketDataError(f"Market quote request failed: {exc}") from exc
+    errors = []
+    result = None
+    for base_url in _candidate_api_bases(extension):
+        url = f"{base_url}/{quote(symbol, safe='')}"
+        try:
+            response = _request_chart(requester, url, params, timeout)
+            result = _chart_payload(response)
+            break
+        except (requests.RequestException, MultiAssetMarketDataError) as exc:
+            errors.append(str(exc))
 
-    result = _chart_payload(response)
+    if result is None:
+        detail = " | ".join(errors[:2]) or "unknown provider error"
+        raise MultiAssetMarketDataError(
+            f"All structured market quote providers failed: {detail}"
+        )
+
     meta = result.get("meta") or {}
 
     price = meta.get("regularMarketPrice")
