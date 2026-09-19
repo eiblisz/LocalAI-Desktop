@@ -782,3 +782,18 @@ def test_open_file_button_uses_internal_resource_viewer():
     assert "self._open_resource(self.last_artifact_path)" in source
     assert "open_file(" not in source
 
+
+
+def test_tradingview_workspace_uses_enabled_extension_config_or_safe_default():
+    from app.main_window import MainWindow
+
+    url_source = inspect.getsource(MainWindow._tradingview_workspace_url)
+    open_source = inspect.getsource(MainWindow._open_market_browser)
+
+    assert '"https://www.tradingview.com/markets/"' in url_source
+    assert 'find_by_preset_id(' in url_source
+    assert '"tradingview-workspace"' in url_source
+    assert 'extension.get("enabled", False)' in url_source
+    assert 'config.get("workspace_url")' in url_source
+    assert 'value.startswith(("https://", "http://"))' in url_source
+    assert "self._open_resource(self._tradingview_workspace_url())" in open_source
