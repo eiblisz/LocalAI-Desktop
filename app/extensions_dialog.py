@@ -16,6 +16,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .discord_webhook import (
+    send_discord_test_message,
+    test_discord_webhook,
+    validate_discord_webhook_url,
+)
 from .extension_catalog import (
     PRESET_CATEGORIES,
     find_preset,
@@ -28,6 +33,7 @@ from .extension_store import (
     ExtensionStore,
     test_extension_connection,
 )
+from .secret_store import SecretStore
 
 
 class ExtensionTestWorker(QObject):
@@ -46,11 +52,41 @@ class ExtensionTestWorker(QObject):
             self.failed.emit(str(exc))
 
 
+class DiscordWebhookWorker(QObject):
+    finished = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, webhook_url, mode="test", timeout=10):
+        super().__init__()
+        self.webhook_url = webhook_url
+        self.mode = mode
+        self.timeout = timeout
+
+    @Slot()
+    def run(self):
+        try:
+            if self.mode == "send":
+                result = send_discord_test_message(
+                    self.webhook_url,
+                    timeout=self.timeout,
+                )
+            else:
+                result = test_discord_webhook(
+                    self.webhook_url,
+                    timeout=self.timeout,
+                )
+            self.finished.emit(result)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
 class ExtensionsDialog(QDialog):
     def __init__(self, store: ExtensionStore, parent=None):
         super().__init__(parent)
         self.store = store
+        self.secret_store = SecretStore()
         self.current_id = ""
+        self.current_credential_ref = ""
         self.current_preset_id = ""
         self.test_thread = None
         self.test_worker = None
@@ -158,12 +194,26 @@ class ExtensionsDialog(QDialog):
         form.addRow("Authentication", self.auth_combo)
 
         auth_note = QLabel(
-            "Credentials are intentionally not stored here. Secret storage and "
-            "credential binding will be added as a separate protected layer."
+            "Secrets are stored in the operating-system credential store, not in registry.json."
         )
         auth_note.setWordWrap(True)
         auth_note.setStyleSheet("color:#7F8995;font-size:12px;")
         form.addRow("", auth_note)
+
+        self.secret_label = QLabel("Discord Webhook URL")
+        self.secret_edit = QLineEdit()
+        self.secret_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.secret_edit.setPlaceholderText("https://discord.com/api/webhooks/...")
+        form.addRow(self.secret_label, self.secret_edit)
+
+        secret_buttons = QHBoxLayout()
+        self.save_secret_button = QPushButton("SAVE SECRET")
+        self.save_secret_button.clicked.connect(self._save_secret)
+        secret_buttons.addWidget(self.save_secret_button)
+        self.clear_secret_button = QPushButton("CLEAR SECRET")
+        self.clear_secret_button.clicked.connect(self._clear_secret)
+        secret_buttons.addWidget(self.clear_secret_button)
+        form.addRow("", secret_buttons)
 
         self.timeout_spin = QSpinBox()
         self.timeout_spin.setRange(1, 120)
@@ -198,6 +248,10 @@ class ExtensionsDialog(QDialog):
         buttons.addWidget(self.delete_button)
 
         right.addLayout(buttons)
+
+        self.send_test_message_button = QPushButton("SEND TEST MESSAGE")
+        self.send_test_message_button.clicked.connect(self._send_discord_test_message)
+        right.addWidget(self.send_test_message_button)
 
         note = QLabel(
             "Foundation slice: registry, enable/disable state, capabilities and "
@@ -364,6 +418,9 @@ class ExtensionsDialog(QDialog):
             "Create an extension entry. The chat cannot use it until a later runtime wiring step."
         )
         self.delete_button.setEnabled(False)
+        self.current_credential_ref = ""
+        self.secret_edit.clear()
+        self._refresh_secret_controls()
 
     def _extension_selected(self, item):
         extension_id = str(item.data(Qt.UserRole) or "")
@@ -386,6 +443,9 @@ class ExtensionsDialog(QDialog):
 
         auth_index = self.auth_combo.findData(extension.get("auth_type", "none"))
         self.auth_combo.setCurrentIndex(max(auth_index, 0))
+        self.current_credential_ref = str(extension.get("credential_ref", "") or "")
+        self.secret_edit.clear()
+        self._refresh_secret_controls(extension)
 
         self.timeout_spin.setValue(
             max(1, min(int(float(extension.get("timeout", 10) or 10)), 120))
@@ -409,6 +469,7 @@ class ExtensionsDialog(QDialog):
             "endpoint": self.endpoint_edit.text(),
             "enabled": self.enabled_button.isChecked(),
             "auth_type": self.auth_combo.currentData(),
+            "credential_ref": self.current_credential_ref,
             "capabilities": self.capabilities_edit.text(),
             "timeout": self.timeout_spin.value(),
         }
@@ -443,13 +504,154 @@ class ExtensionsDialog(QDialog):
             return
 
         try:
+            if self.current_credential_ref:
+                self.secret_store.delete_secret(self.current_credential_ref)
             self.store.delete(self.current_id)
         except Exception as exc:
             QMessageBox.critical(self, "Extension delete error", str(exc))
             return
 
+        self.current_credential_ref = ""
         self._refresh_list()
         self._new_extension()
+
+    @staticmethod
+    def _is_discord_webhook(extension):
+        config = dict((extension or {}).get("config") or {})
+        return config.get("preset_id") == "discord-webhook"
+
+    def _refresh_secret_controls(self, extension=None):
+        if extension is None and self.current_id:
+            try:
+                extension = self.store.get(self.current_id)
+            except Exception:
+                extension = None
+
+        is_discord = self._is_discord_webhook(extension or {})
+        for widget in (
+            self.secret_label,
+            self.secret_edit,
+            self.save_secret_button,
+            self.clear_secret_button,
+            self.send_test_message_button,
+        ):
+            widget.setVisible(is_discord)
+
+        if is_discord:
+            has_secret = bool(self.current_credential_ref)
+            self.clear_secret_button.setEnabled(has_secret)
+            self.send_test_message_button.setEnabled(has_secret)
+            self.secret_edit.setPlaceholderText(
+                "Webhook URL saved securely"
+                if has_secret
+                else "https://discord.com/api/webhooks/..."
+            )
+
+    def _save_secret(self):
+        if not self.current_id:
+            self.status_label.setText("Save the extension before binding a secret.")
+            return
+
+        try:
+            extension = self.store.get(self.current_id)
+        except Exception as exc:
+            self.status_label.setText(f"Extension load failed: {exc}")
+            return
+
+        if not self._is_discord_webhook(extension):
+            self.status_label.setText("Secure URL binding is only enabled for Discord Webhook in this slice.")
+            return
+
+        try:
+            webhook_url = validate_discord_webhook_url(self.secret_edit.text())
+            credential_ref = f"extension:{self.current_id}:discord_webhook_url"
+            self.secret_store.set_secret(credential_ref, webhook_url)
+            extension["credential_ref"] = credential_ref
+            updated = self.store.save(extension)
+        except Exception as exc:
+            self.status_label.setText(f"Secret save failed: {exc}")
+            return
+
+        self.current_credential_ref = updated.get("credential_ref", "")
+        self.secret_edit.clear()
+        self.status_label.setText(
+            "Discord webhook URL saved in the operating-system credential store."
+        )
+        self._refresh_secret_controls(updated)
+
+    def _clear_secret(self):
+        if not self.current_id or not self.current_credential_ref:
+            return
+
+        try:
+            self.secret_store.delete_secret(self.current_credential_ref)
+            extension = self.store.get(self.current_id)
+            extension["credential_ref"] = ""
+            updated = self.store.save(extension)
+        except Exception as exc:
+            self.status_label.setText(f"Secret clear failed: {exc}")
+            return
+
+        self.current_credential_ref = ""
+        self.secret_edit.clear()
+        self.status_label.setText("Discord webhook credential removed.")
+        self._refresh_secret_controls(updated)
+
+    def _discord_secret(self):
+        if not self.current_credential_ref:
+            raise ValueError("Save the Discord webhook URL first.")
+        secret = self.secret_store.get_secret(self.current_credential_ref)
+        if not secret:
+            raise ValueError("Saved Discord webhook credential was not found.")
+        return secret
+
+    def _start_discord_worker(self, mode):
+        if self.test_worker is not None:
+            return
+
+        extension = self._save_extension(silent=True)
+        if extension is None:
+            return
+
+        try:
+            webhook_url = self._discord_secret()
+        except Exception as exc:
+            self.status_label.setText(str(exc))
+            return
+
+        self.test_button.setEnabled(False)
+        self.send_test_message_button.setEnabled(False)
+        self.status_label.setText(
+            "Sending Discord test message..."
+            if mode == "send"
+            else "Testing Discord webhook..."
+        )
+
+        self.test_thread = QThread(self)
+        self.test_worker = DiscordWebhookWorker(
+            webhook_url,
+            mode=mode,
+            timeout=extension.get("timeout", 10),
+        )
+        self.test_worker.moveToThread(self.test_thread)
+        self.test_thread.started.connect(self.test_worker.run)
+        self.test_worker.finished.connect(self._test_finished)
+        self.test_worker.failed.connect(self._test_failed)
+        self.test_worker.finished.connect(self.test_thread.quit)
+        self.test_worker.failed.connect(self.test_thread.quit)
+        self.test_thread.finished.connect(self._cleanup_test_worker)
+        self.test_thread.start()
+
+    def _send_discord_test_message(self):
+        if not self.current_id:
+            return
+        try:
+            extension = self.store.get(self.current_id)
+        except Exception:
+            return
+        if not self._is_discord_webhook(extension):
+            return
+        self._start_discord_worker("send")
 
     def _test_connection(self):
         if self.test_worker is not None:
@@ -457,6 +659,10 @@ class ExtensionsDialog(QDialog):
 
         extension = self._save_extension(silent=True)
         if extension is None:
+            return
+
+        if self._is_discord_webhook(extension):
+            self._start_discord_worker("test")
             return
 
         self.test_button.setEnabled(False)
@@ -514,6 +720,8 @@ class ExtensionsDialog(QDialog):
         self.test_worker = None
         self.test_thread = None
         self.test_button.setEnabled(True)
+        if hasattr(self, "send_test_message_button"):
+            self.send_test_message_button.setEnabled(bool(self.current_credential_ref))
 
     def closeEvent(self, event):
         if self.test_worker is not None:

@@ -81,6 +81,13 @@ The Extensions dialog also includes a searchable preset catalog grouped into Pro
 
 Each conversation can save a list of attached installed extensions. The chat input shows an EXT count button that opens an attach/detach dialog. Attachments are persisted in the chat JSON, are isolated per conversation, and remain metadata-only in this slice: attached extensions are not injected into the model prompt and are not executed automatically.
 
+
+### Discord Webhook
+
+The catalog includes a Discord Webhook preset with `send_message` and `send_embed` capabilities. The webhook URL is treated as a secret: LocalAI Desktop stores it through the operating-system credential backend and keeps only a `credential_ref` in `registry.json`. The Extensions dialog can validate the saved webhook and send a bounded test message without exposing the URL in chat or registry data.
+
+Discord webhook support is outbound-only. Reading Discord messages and remote LocalAI control require the later Discord Bot connector.
+
 ## Private runtime data
 
 Chats, schedules and persistent memory are user data, not repository state. They are stored outside the Git clone so switching branches, worktrees or clones does not make them disappear.
