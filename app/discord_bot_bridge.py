@@ -19,6 +19,10 @@ from .crypto_market_data import (
     is_crypto_quote_request,
     run_crypto_market_request,
 )
+from .multi_asset_market_data import (
+    is_multi_asset_quote_request,
+    run_multi_asset_market_request,
+)
 from .document_tools import (
     build_document_messages,
     build_excel_messages,
@@ -643,11 +647,36 @@ class DiscordBotBridge(QObject):
             return None
         return extension
 
+    def _multi_asset_market_extension(self):
+        if self.extension_store is None:
+            return None
+        extension = self.extension_store.find_by_preset_id(
+            "multi-asset-market-data"
+        )
+        if not extension or not bool(extension.get("enabled", False)):
+            return None
+        if "market_quote" not in set(extension.get("capabilities") or []):
+            return None
+        return extension
+
     def _grounded_external_answer(self, prompt):
-        extension = self._crypto_market_extension()
-        if extension is not None and is_crypto_quote_request(prompt):
+        crypto_extension = self._crypto_market_extension()
+        if crypto_extension is not None and is_crypto_quote_request(prompt):
             try:
-                return run_crypto_market_request(extension, prompt).strip()
+                return run_crypto_market_request(crypto_extension, prompt).strip()
+            except Exception:
+                pass
+
+        multi_asset_extension = self._multi_asset_market_extension()
+        if (
+            multi_asset_extension is not None
+            and is_multi_asset_quote_request(prompt)
+        ):
+            try:
+                return run_multi_asset_market_request(
+                    multi_asset_extension,
+                    prompt,
+                ).strip()
             except Exception:
                 pass
         return self._grounded_web_answer(prompt)
@@ -721,11 +750,32 @@ class DiscordBotBridge(QObject):
         action_plan = plan_user_action(prompt, force_web=force_web)
 
         if action_plan.has(ACTION_WEB_RESEARCH):
-            extension = self._crypto_market_extension()
-            if extension is not None and is_crypto_quote_request(prompt):
+            crypto_extension = self._crypto_market_extension()
+            multi_asset_extension = self._multi_asset_market_extension()
+
+            if (
+                crypto_extension is not None
+                and is_crypto_quote_request(prompt)
+            ):
                 try:
                     answer = run_crypto_market_request(
-                        extension,
+                        crypto_extension,
+                        prompt,
+                    ).strip()
+                except Exception:
+                    answer = run_chat_web_request(
+                        self.ollama_client,
+                        self.settings.model,
+                        messages,
+                        prompt,
+                    ).strip()
+            elif (
+                multi_asset_extension is not None
+                and is_multi_asset_quote_request(prompt)
+            ):
+                try:
+                    answer = run_multi_asset_market_request(
+                        multi_asset_extension,
                         prompt,
                     ).strip()
                 except Exception:
