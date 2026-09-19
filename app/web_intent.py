@@ -33,6 +33,12 @@ class ActionPlan:
         return ()
 
 
+@dataclass(frozen=True)
+class PlannedAction:
+    prompt: str
+    plan: ActionPlan
+
+
 def _fold(text):
     return " ".join(str(text or "").casefold().split())
 
@@ -54,6 +60,8 @@ def looks_like_web_request(text):
         "web-en",
         "online",
         "legfrissebb",
+        "legújabb",
+        "legujabb",
         "friss hírek",
         "friss hirek",
         "aktuális ár",
@@ -319,3 +327,52 @@ def plan_user_action(text, *, force_web=False):
         )
 
     return ActionPlan((ActionStep(ACTION_CHAT),), "stable local chat")
+
+
+_NUMBERED_TASK_START = re.compile(
+    r"(?m)^\s*(?:\d{1,2}[.)]|[-*])\s+"
+)
+
+
+def split_user_action_units(text):
+    """
+    Split explicit multi-task messages without breaking a single compound workflow.
+
+    Numbered/bulleted requests become independent action units. A sentence such as
+    "find the latest release and create an HTML report" remains one unit so its web
+    research can feed the artifact step.
+    """
+    raw = str(text or "").strip()
+    if not raw:
+        return []
+
+    matches = list(_NUMBERED_TASK_START.finditer(raw))
+    if len(matches) <= 1:
+        return [raw]
+
+    units = []
+    for index, match in enumerate(matches):
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(raw)
+        piece = raw[start:end].strip()
+        if piece:
+            units.append(piece)
+
+    return units or [raw]
+
+
+def plan_user_actions(text, *, force_web=False):
+    """
+    Produce independent plans for an explicit numbered/bulleted multi-task request.
+
+    This prevents one artifact request from swallowing neighboring chat/web tasks,
+    while preserving web->artifact workflows inside each individual task.
+    """
+    return tuple(
+        PlannedAction(
+            prompt=unit,
+            plan=plan_user_action(unit, force_web=force_web),
+        )
+        for unit in split_user_action_units(text)
+        if str(unit).strip()
+    )
