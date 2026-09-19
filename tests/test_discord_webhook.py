@@ -11,8 +11,12 @@ VALID = "https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrs
 
 
 class Response:
-    def __init__(self, status_code):
+    def __init__(self, status_code, body=None):
         self.status_code = status_code
+        self._body = body or {}
+
+    def json(self):
+        return dict(self._body)
 
 
 def test_validate_discord_webhook_url_accepts_only_https_discord_webhooks():
@@ -42,19 +46,28 @@ def test_discord_webhook_connection_test_uses_secret_url_without_persisting_it()
     assert calls == [(VALID, 7.0)]
 
 
-def test_discord_webhook_send_test_message_posts_bounded_payload():
+def test_discord_webhook_send_test_message_waits_for_creation_confirmation():
     calls = []
 
-    def sender(url, json, timeout):
-        calls.append((url, json, timeout))
-        return Response(204)
+    def sender(url, params, json, timeout):
+        calls.append((url, params, json, timeout))
+        return Response(
+            200,
+            {
+                "id": "112233445566778899",
+                "channel_id": "998877665544332211",
+            },
+        )
 
     result = send_discord_test_message(VALID, sender=sender, timeout=5)
 
     assert result["status"] == "connected"
     assert result["ok"] is True
+    assert "112233445566778899" in result["message"]
+    assert "998877665544332211" in result["message"]
     assert calls == [(
         VALID,
+        {"wait": "true"},
         {"content": "LocalAI Desktop extension test: Discord webhook connection is working."},
         5.0,
     )]
@@ -68,3 +81,25 @@ def test_discord_webhook_rejection_fails_closed():
 
     assert result["status"] == "error"
     assert result["ok"] is False
+
+
+def test_discord_webhook_send_does_not_treat_204_as_confirmed_success():
+    result = send_discord_test_message(
+        VALID,
+        sender=lambda *_args, **_kwargs: Response(204),
+    )
+
+    assert result["status"] == "error"
+    assert result["ok"] is False
+
+
+def test_discord_webhook_send_requires_message_id_in_wait_response():
+    result = send_discord_test_message(
+        VALID,
+        sender=lambda *_args, **_kwargs: Response(200, {"channel_id": "123"}),
+    )
+
+    assert result["status"] == "error"
+    assert result["ok"] is False
+    assert "did not confirm message creation" in result["message"]
+
