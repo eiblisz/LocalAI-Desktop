@@ -30,6 +30,7 @@ def test_catalog_contains_requested_categories_and_key_presets():
         "Discord Webhook",
         "Prometheusz Discord Bot",
         "Crypto Market Data",
+        "TradingView Workspace",
     }:
         assert expected in names
 
@@ -131,3 +132,24 @@ def test_crypto_market_data_preset_is_public_no_auth_and_preconfigured():
     assert payload["config"]["api_base_url"] == "https://api.exchange.coinbase.com"
     assert payload["config"]["default_quote"] == "USD"
 
+
+
+def test_tradingview_workspace_preset_is_browser_only_and_multi_asset():
+    preset = find_preset("tradingview-workspace")
+    payload = preset_to_registry_entry(preset)
+
+    assert preset["category"] == "Business & Operations"
+    assert preset["type"] == "custom_tool"
+    assert preset["auth_type"] == "none"
+    assert {
+        "market_chart",
+        "stocks",
+        "crypto",
+        "forex",
+        "indices",
+        "market_visualization",
+    }.issubset(set(preset["capabilities"]))
+    assert payload["enabled"] is False
+    assert payload["endpoint"] == ""
+    assert payload["config"]["workspace_url"] == "https://www.tradingview.com/markets/"
+    assert payload["config"]["provider"] == "tradingview_browser_workspace"
