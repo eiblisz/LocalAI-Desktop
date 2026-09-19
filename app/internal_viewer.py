@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import csv
 import html
+import os
 import re
 import shutil
+import subprocess
+import tempfile
 import webbrowser
 from pathlib import Path
 from urllib.parse import urlparse
@@ -156,6 +159,60 @@ def _add_save_as_toolbar(layout, path, parent):
     controls.addWidget(save_button)
     layout.addWidget(toolbar)
     return save_button
+
+
+def find_libreoffice_executable():
+    for name in ("soffice", "libreoffice"):
+        executable = shutil.which(name)
+        if executable:
+            return Path(executable)
+
+    candidates = []
+    for env_name in ("ProgramFiles", "ProgramFiles(x86)"):
+        root = os.environ.get(env_name)
+        if root:
+            candidates.append(Path(root) / "LibreOffice" / "program" / "soffice.exe")
+
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+
+def convert_docx_to_pdf_preview(path, output_dir, executable=None, timeout=45):
+    source = Path(path).resolve()
+    destination_dir = Path(output_dir).resolve()
+    if not source.exists() or not source.is_file():
+        raise FileNotFoundError(str(source))
+
+    executable = Path(executable) if executable else find_libreoffice_executable()
+    if executable is None:
+        return None
+
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    kwargs = {
+        "args": [
+            str(executable),
+            "--headless",
+            "--convert-to",
+            "pdf",
+            "--outdir",
+            str(destination_dir),
+            str(source),
+        ],
+        "capture_output": True,
+        "text": True,
+        "timeout": timeout,
+        "check": False,
+    }
+    if hasattr(subprocess, "CREATE_NO_WINDOW"):
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
+    completed = subprocess.run(**kwargs)
+    preview = destination_dir / f"{source.stem}.pdf"
+    if completed.returncode != 0 or not preview.exists():
+        return None
+    return preview
 
 
 def render_docx_html(path) -> str:
@@ -375,13 +432,14 @@ class BrowserView(QWidget):
 
 
 class PdfViewWidget(QWidget):
-    def __init__(self, path, parent=None):
+    def __init__(self, path, parent=None, show_save_as=True):
         super().__init__(parent)
         path = Path(path).resolve()
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        _add_save_as_toolbar(root, path, self)
+        if show_save_as:
+            _add_save_as_toolbar(root, path, self)
 
         if QPdfDocument is not None and QPdfView is not None:
             self.document = QPdfDocument(self)
@@ -408,9 +466,46 @@ class PdfViewWidget(QWidget):
 class DocumentView(QWidget):
     def __init__(self, path, parent=None):
         super().__init__(parent)
+        path = Path(path).resolve()
+
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         _add_save_as_toolbar(root, path, self)
+
+        self._preview_temp = tempfile.TemporaryDirectory(
+            prefix="localai-docx-preview-"
+        )
+        preview_pdf = None
+        try:
+            preview_pdf = convert_docx_to_pdf_preview(
+                path,
+                self._preview_temp.name,
+            )
+        except Exception:
+            preview_pdf = None
+
+        if preview_pdf is not None:
+            status = QLabel("High-fidelity DOCX preview")
+            status.setObjectName("muted")
+            status.setStyleSheet("padding:4px 10px;color:#8F99A6;")
+            root.addWidget(status)
+            self.preview = PdfViewWidget(
+                preview_pdf,
+                parent=self,
+                show_save_as=False,
+            )
+            root.addWidget(self.preview, 1)
+            return
+
+        self._preview_temp.cleanup()
+        self._preview_temp = None
+
+        status = QLabel(
+            "Basic DOCX preview - LibreOffice rendering is unavailable."
+        )
+        status.setObjectName("muted")
+        status.setStyleSheet("padding:4px 10px;color:#8F99A6;")
+        root.addWidget(status)
 
         view = QTextBrowser()
         view.setOpenExternalLinks(False)
