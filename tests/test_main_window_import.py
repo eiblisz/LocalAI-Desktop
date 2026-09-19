@@ -910,6 +910,8 @@ def test_schedule_style_no_longer_reintroduces_large_button_height():
 
     source = inspect.getsource(MainWindow._apply_schedule_button_style)
 
+    assert '"padding:5px 10px;"' in source
     assert '"min-height:32px;"' in source
     assert '"max-height:34px;"' in source
+    assert "self.schedule_button.setFixedHeight(34)" in source
     assert '"min-height:44px;"' not in source
