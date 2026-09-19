@@ -1,17 +1,22 @@
+import json
 import re
 import asyncio
 import threading
-from pathlib import Path
 from dataclasses import dataclass
 
 import discord
 import requests
 from PySide6.QtCore import QObject, Signal
 
+from .artifact_service import create_artifact, infer_artifact_request
 from .config import DEFAULT_SYSTEM_PROMPT
+from .document_tools import (
+    build_document_messages,
+    build_excel_messages,
+    build_summary_messages,
+)
 from .language_policy import response_language_instruction
 from .memory_answers import direct_user_memory_answer
-from .pdf_tool import create_pdf
 from .web_intent import looks_like_web_request
 from .workers import run_chat_web_request
 
@@ -47,38 +52,6 @@ def split_discord_text(text, limit=1900):
         chunks.append(remaining)
     return chunks
 
-
-def _looks_like_pdf_request(text):
-    normalized = " ".join(str(text or "").strip().casefold().split())
-    if "pdf" not in normalized:
-        return False
-    markers = (
-        "készíts",
-        "keszits",
-        "csinálj",
-        "csinalj",
-        "hozz létre",
-        "hozz letre",
-        "generálj",
-        "generalj",
-        "create",
-        "make",
-        "generate",
-    )
-    return any(marker in normalized for marker in markers)
-
-
-def _pdf_preset_from_request(text):
-    normalized = " ".join(str(text or "").strip().casefold().split())
-    if "red executive" in normalized:
-        return "Red Executive"
-    if "classic executive" in normalized:
-        return "Classic Executive"
-    if "classic professional" in normalized:
-        return "Classic Professional"
-    if "red professional" in normalized:
-        return "Red Professional"
-    return "Red Professional"
 
 
 def validate_bot_token(token):
@@ -258,11 +231,13 @@ class DiscordBotBridge(QObject):
 
             async with request_lock:
                 try:
-                    if _looks_like_pdf_request(content):
+                    artifact_request = infer_artifact_request(content)
+                    if artifact_request is not None:
                         async with message.channel.typing():
                             answer, chat_id, artifact_path = await asyncio.to_thread(
-                                self._create_pdf_artifact,
+                                self._create_remote_artifact,
                                 content,
+                                artifact_request,
                             )
                         await message.reply(
                             answer,
@@ -428,73 +403,107 @@ class DiscordBotBridge(QObject):
 
         return "\n".join(lines)
 
-    def _artifact_document_body(self, prompt):
+    def _artifact_body(self, prompt, artifact_request):
         direct_memory = self._direct_memory_answer(prompt)
         if direct_memory:
+            if artifact_request.format == "xlsx":
+                return json.dumps(
+                    {
+                        "title": "Rövid összefoglaló",
+                        "sheets": [
+                            {
+                                "name": "Összefoglaló",
+                                "headers": ["Téma", "Információ"],
+                                "rows": [["Személyes memória", direct_memory]],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
             return (
                 "# Rövid összefoglaló\n\n"
                 "## Személyes memória\n\n"
                 f"{direct_memory}\n"
             )
 
+        if artifact_request.format == "xlsx":
+            messages = build_excel_messages(prompt)
+        elif artifact_request.format == "summary":
+            messages = build_summary_messages(
+                "Create a concise self-contained summary for this request:\n\n"
+                + str(prompt or "").strip()
+            )
+        else:
+            messages = build_document_messages(prompt)
+
         memory_context = self._build_memory_context(prompt)
-        system = (
-            "Create a concise standalone PDF document in Markdown for the user's request. "
-            "Return document content only, starting with exactly one H1 title. "
-            "Use supplied long-term memory when relevant. Never invent personal facts. "
-            "Do not say that you cannot create a PDF; the host application will render "
-            "the returned Markdown into the PDF file. "
-            + response_language_instruction(prompt)
+        system = str(messages[0]["content"])
+        system += (
+            "\n\nThe host application will render your output into the requested "
+            f"{artifact_request.format.upper()} artifact. Do not say that you cannot "
+            "create or send the file. Return only the artifact content, with no commentary."
         )
         if memory_context:
             system = f"{system}\n\n{memory_context}"
+        messages[0] = {"role": "system", "content": system}
 
         body = self.ollama_client.chat_once(
             model=self.settings.model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": str(prompt or "").strip()},
-            ],
+            messages=messages,
         ).strip()
         if not body:
-            raise RuntimeError("The local model returned empty PDF document content.")
+            raise RuntimeError(
+                f"The local model returned empty {artifact_request.format.upper()} content."
+            )
         return body
 
-    def _create_pdf_artifact(self, prompt):
+    def _create_remote_artifact(self, prompt, artifact_request):
         chat = self._load_remote_chat()
         chat["model"] = self.settings.model
         chat["messages"].append({"role": "user", "content": prompt})
         self.chat_store.save(chat)
 
-        body = self._artifact_document_body(prompt)
-        preset = _pdf_preset_from_request(prompt)
-        path = create_pdf(
-            [{"role": "assistant", "content": body}],
-            title="Prometheusz PDF",
-            preset=preset,
+        body = self._artifact_body(prompt, artifact_request)
+        path = create_artifact(
+            artifact_request.format,
+            content=body,
+            title=f"Prometheusz {artifact_request.format.upper()}",
+            preset=artifact_request.preset,
+            source_text=prompt,
+            model_name=self.settings.model,
         )
-        path = Path(path)
-        if not path.exists() or not path.is_file():
-            raise RuntimeError("PDF creation did not produce a file.")
 
         artifact_message = {
             "role": "artifact",
             "content": str(path),
+            "path": str(path),
             "name": path.name,
         }
+        label = artifact_request.format.upper()
         chat["messages"].append(
             {
                 "role": "assistant",
                 "content": (
-                    f"Elkészítettem a PDF-et ({preset}) és feltöltöm ide: {path.name}"
+                    f"Elkészítettem a {label} fájlt"
+                    + (
+                        f" ({artifact_request.preset})"
+                        if artifact_request.preset and artifact_request.format != "summary"
+                        else ""
+                    )
+                    + f" és feltöltöm ide: {path.name}"
                 ),
             }
         )
         chat["messages"].append(artifact_message)
         self.chat_store.save(chat)
 
+        preset_text = (
+            f" ({artifact_request.preset})"
+            if artifact_request.preset and artifact_request.format != "summary"
+            else ""
+        )
         return (
-            f"Elkészítettem a PDF-et ({preset}).",
+            f"Elkészítettem a {label} fájlt{preset_text}.",
             str(chat.get("id", "")),
             path,
         )
@@ -525,9 +534,10 @@ class DiscordBotBridge(QObject):
             "The Discord user, guild and channel were allowlisted by the LocalAI owner. "
             "This bridge can perform the same read-only grounded web research as the desktop "
             "WEB AUTO path when the user explicitly asks to search or requests current online "
-            "information. The bridge may also create bounded local PDF artifacts when the "
-            "user explicitly requests a PDF; those files are rendered by the host PDF tool and uploaded "
-            "back to the same allowlisted Discord channel. Do not claim to have executed shell commands, "
+            "information. The bridge may also create bounded local PDF, DOCX, XLSX, HTML, "
+            "and Markdown summary artifacts when explicitly requested; those files are rendered "
+            "by the shared LocalAI artifact service and uploaded back to the same allowlisted "
+            "Discord channel. Do not claim to have executed shell commands, "
             "arbitrary filesystem actions, write-capable extensions, or other tools unless their actual "
             "results are explicitly supplied in the conversation."
         )
