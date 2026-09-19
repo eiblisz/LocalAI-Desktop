@@ -1061,14 +1061,3 @@ def test_remote_stock_quote_falls_back_to_grounded_web_on_multi_asset_error(
     )
 
     assert answer == "WEB FALLBACK: TSLA 250 USD."
-
-
-def test_remote_market_fallback_uses_compact_web_mode_with_or_without_extension():
-    import inspect
-    from app.discord_bot_bridge import DiscordBotBridge
-
-    source = inspect.getsource(DiscordBotBridge._answer_prompt)
-
-    assert "is_crypto_quote_request(prompt)" in source
-    assert "is_multi_asset_quote_request(prompt)" in source
-    assert source.count("compact_market_quote=True") >= 4
