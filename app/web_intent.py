@@ -92,6 +92,7 @@ def looks_like_web_request(text):
     return (
         any(marker in normalized for marker in markers)
         or bool(re.search(r"\bkeress\w*\b", normalized, flags=re.IGNORECASE))
+        or is_freshness_sensitive_request(text)
     )
 
 
