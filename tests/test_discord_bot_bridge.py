@@ -144,4 +144,7 @@ def test_remote_prompt_uses_dedicated_persistent_discord_chat(tmp_path: Path):
     ]
     system = ollama.calls[0][1][0]["content"]
     assert "authenticated Discord remote bridge" in system
+    assert "your interface name is Prometheusz" in system
+    assert "Prometheusz is not a separate AI system" in system
+    assert "If the user asks whether you are Prometheusz, answer yes" in system
     assert "conversational access only" in system
