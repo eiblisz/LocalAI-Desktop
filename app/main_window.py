@@ -127,7 +127,9 @@ QPushButton#primary:hover {
     background: #D24A57;
 }
 QPushButton#toolButton {
-    min-height: 44px;
+    min-height: 32px;
+    max-height: 34px;
+    padding: 5px 10px;
     font-weight: 700;
 }
 QPushButton#subtleButton {
@@ -301,7 +303,8 @@ class MainWindow(QMainWindow):
         top = QFrame()
         top.setObjectName("topbar")
         top_layout = QHBoxLayout(top)
-        top_layout.setContentsMargins(18, 10, 18, 10)
+        top_layout.setContentsMargins(18, 6, 18, 6)
+        top_layout.setSpacing(8)
 
         brand_box = QVBoxLayout()
         brand = QLabel(APP_NAME)
@@ -319,37 +322,36 @@ class MainWindow(QMainWindow):
         top_layout.addWidget(self.resource_label, 1)
         top_layout.addStretch()
 
-        model_box = QVBoxLayout()
-        model_header = QHBoxLayout()
         self.model_label = QLabel("LOCAL MODELS")
         self.model_label.setObjectName("muted")
-        model_header.addWidget(self.model_label)
-        model_header.addStretch()
-        self.model_count_label = QLabel("0")
-        self.model_count_label.setObjectName("muted")
-        model_header.addWidget(self.model_count_label)
-        model_box.addLayout(model_header)
+        self.model_label.setAlignment(
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight
+        )
+        self.model_label.setMinimumWidth(108)
+        top_layout.addWidget(self.model_label)
 
-        model_row = QHBoxLayout()
+        self.model_count_label = QLabel("0")
+        self.model_count_label.hide()
+
         self.model_combo = QComboBox()
         self.model_combo.setMinimumWidth(300)
+        self.model_combo.setFixedHeight(34)
         self.model_combo.setMaxVisibleItems(24)
         self.model_combo.setToolTip(
             "All local models currently installed in Ollama. "
             "The selected model is saved per chat."
         )
         self.model_combo.currentTextChanged.connect(self._model_changed)
-        model_row.addWidget(self.model_combo, 1)
+        top_layout.addWidget(self.model_combo)
 
         self.refresh_models_button = QPushButton("REFRESH")
         self.refresh_models_button.setObjectName("subtleButton")
+        self.refresh_models_button.setFixedHeight(34)
         self.refresh_models_button.setToolTip(
             "Refresh the list of locally installed Ollama models."
         )
         self.refresh_models_button.clicked.connect(self._load_models)
-        model_row.addWidget(self.refresh_models_button)
-        model_box.addLayout(model_row)
-        top_layout.addLayout(model_box)
+        top_layout.addWidget(self.refresh_models_button)
 
         self.status = QLabel("Ollama: checking...")
         self.status.setObjectName("muted")
@@ -581,6 +583,7 @@ class MainWindow(QMainWindow):
         for text in ["PDF", "DOCX", "EXCEL", "HTML", "SUMMARY"]:
             button = QPushButton(text)
             button.setObjectName("toolButton")
+            button.setFixedHeight(34)
             button.clicked.connect(
                 lambda _checked=False, name=text: self._select_tool(name)
             )
@@ -989,7 +992,7 @@ class MainWindow(QMainWindow):
                 "background:#315A43;"
                 "border:1px solid #5F9C73;"
                 "border-radius:10px;"
-                "padding:9px 13px;"
+                "padding:5px 10px;"
                 "color:#F4F6F8;"
                 "font-weight:700;"
                 "}"
@@ -1730,7 +1733,8 @@ class MainWindow(QMainWindow):
             "padding:9px 13px;"
             "color:#F4F6F8;"
             "font-weight:700;"
-            "min-height:44px;"
+            "min-height:32px;"
+            "max-height:34px;"
             "}"
             "QPushButton:hover {"
             "background:#29323D;"
