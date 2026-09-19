@@ -1364,3 +1364,138 @@ def test_short_grounded_web_answer_is_left_unchanged():
 
     assert worker._compact_grounded_answer(original) == original
 
+
+
+def test_market_quote_mode_suppresses_search_appendix_and_forces_compact_answer(monkeypatch):
+    class MarketClient(DummyWebClient):
+        def chat_once(self, model, messages, timeout=600.0):
+            self.once_calls.append((model, messages))
+            system = messages[0]["content"]
+            if "Rewrite the supplied grounded market answer" in system:
+                return "A Tesla részvény ára jelenleg **364.27 USD**."
+            return "Tesla stock price"
+
+        def chat_stream(
+            self,
+            model,
+            messages,
+            on_token,
+            should_stop,
+            timeout=600.0,
+        ):
+            self.stream_calls.append((model, messages))
+            if not should_stop():
+                on_token(
+                    "A Tesla részvény ára jelenleg 364.27 USD. "
+                    "A vállalat kilátásai vegyesek, a befektetők több tényezőt figyelnek. "
+                    "További technikai elemzés is készíthető."
+                )
+
+    monkeypatch.setattr(
+        workers.ChatWebWorker,
+        "_generate_search_queries",
+        lambda self: ["Tesla stock price"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "search_web",
+        lambda query, max_results=6, fetch_pages=True: {
+            "provider": "test",
+            "query": query,
+            "results": [{
+                "title": "Tesla quote",
+                "url": "https://example.com/tsla",
+                "snippet": "TSLA 364.27 USD",
+            }],
+        },
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: ["https://example.com/tsla"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_entries",
+        lambda payload, limit=6: [{
+            "title": "Tesla quote",
+            "url": "https://example.com/tsla",
+        }],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: "TSLA 364.27 USD",
+    )
+
+    client = MarketClient()
+    tokens = []
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Mennyi most a Tesla részvény ára?",
+        compact_market_quote=True,
+    )
+    worker.token.connect(tokens.append)
+    worker.run()
+
+    combined = "".join(tokens)
+    assert combined == "A Tesla részvény ára jelenleg **364.27 USD**."
+    assert "Search query:" not in combined
+    assert "Search provider:" not in combined
+    assert "Web results / sources:" not in combined
+
+
+def test_ordinary_web_mode_still_keeps_source_appendix(monkeypatch):
+    monkeypatch.setattr(
+        workers.ChatWebWorker,
+        "_generate_search_queries",
+        lambda self: ["Tesla stock price"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "search_web",
+        lambda query, max_results=6, fetch_pages=True: {
+            "provider": "test",
+            "query": query,
+            "results": [{
+                "title": "Tesla quote",
+                "url": "https://example.com/tsla",
+                "snippet": "TSLA 364.27 USD",
+            }],
+        },
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: ["https://example.com/tsla"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_entries",
+        lambda payload, limit=6: [{
+            "title": "Tesla quote",
+            "url": "https://example.com/tsla",
+        }],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: "TSLA 364.27 USD",
+    )
+
+    client = DummyWebClient()
+    tokens = []
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Keress Tesla híreket",
+    )
+    worker.token.connect(tokens.append)
+    worker.run()
+
+    combined = "".join(tokens)
+    assert "Search query: Tesla stock price" in combined
+    assert "Web results / sources:" in combined
