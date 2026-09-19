@@ -59,6 +59,7 @@ from .language_policy import response_language_instruction
 from .memory_answers import direct_user_memory_answer
 from .memory_extractor import is_explicit_memory_request
 from .memory_store import MemoryStore
+from .multi_asset_market_data import is_multi_asset_quote_request
 from .ollama_client import OllamaClient
 from .resource_monitor import format_resource_summary, get_system_metrics
 from .scheduler_dialog import SchedulerDialog
@@ -77,6 +78,7 @@ from .workers import (
     ChatWorker,
     DocumentWorker,
     MarketDataWorker,
+    MultiAssetMarketDataWorker,
     MemoryWriteWorker,
     ScheduledTaskWorker,
 )
@@ -1025,20 +1027,34 @@ class MainWindow(QMainWindow):
         self.current_chat_uses_web = use_web
         self.thread = QThread()
 
-        market_extension = (
+        crypto_market_extension = (
             self._crypto_market_extension()
             if use_web and is_crypto_quote_request(text_for_model)
             else None
         )
+        multi_asset_market_extension = (
+            self._multi_asset_market_extension()
+            if use_web and is_multi_asset_quote_request(text_for_model)
+            else None
+        )
 
-        if market_extension is not None:
-            self.status.setText("Market data...")
+        if crypto_market_extension is not None:
+            self.status.setText("Crypto market data...")
             self.worker = MarketDataWorker(
                 self.client,
                 model,
                 messages_for_model,
                 text_for_model,
-                market_extension,
+                crypto_market_extension,
+            )
+        elif multi_asset_market_extension is not None:
+            self.status.setText("Multi-asset market data...")
+            self.worker = MultiAssetMarketDataWorker(
+                self.client,
+                model,
+                messages_for_model,
+                text_for_model,
+                multi_asset_market_extension,
             )
         elif use_web:
             self.status.setText("Web research...")
@@ -1422,6 +1438,17 @@ class MainWindow(QMainWindow):
             return None
         capabilities = set(extension.get("capabilities") or [])
         if "crypto_quote" not in capabilities:
+            return None
+        return extension
+
+    def _multi_asset_market_extension(self):
+        extension = self.extension_store.find_by_preset_id(
+            "multi-asset-market-data"
+        )
+        if not extension or not bool(extension.get("enabled", False)):
+            return None
+        capabilities = set(extension.get("capabilities") or [])
+        if "market_quote" not in capabilities:
             return None
         return extension
 
