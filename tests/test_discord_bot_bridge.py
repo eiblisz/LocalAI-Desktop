@@ -237,3 +237,43 @@ def test_remote_prompt_injects_relevant_persistent_memory_for_model(tmp_path: Pa
     assert "LONG-TERM MEMORY CONTEXT:" in system
     assert "[PROJECT] LocalAI Desktop | preferred_remote_name: Prometheusz" in system
 
+
+def test_compound_prometheusz_identity_and_memory_question_is_deterministic(tmp_path: Path):
+    class FailingOllama:
+        def chat_once(self, model, messages):
+            raise AssertionError("model must not be called for deterministic compound answer")
+
+    memory_store = MemoryStore(tmp_path / "memory.sqlite3")
+    memory_store.remember_explicit(
+        category="USER_PROFILE",
+        scope="USER",
+        subject="Lilla",
+        key="relationship_to_user",
+        value="daughter",
+        source_chat_id="seed",
+        source_excerpt="Jegyezd meg, hogy Lilla a lányom.",
+    )
+
+    settings = DiscordBotSettings(
+        extension_id="ext-compound",
+        name="Prometheusz",
+        guild_id=111111111111111111,
+        channel_id=222222222222222222,
+        allowed_user_id=333333333333333333,
+        model="qwen3-coder:30b",
+    )
+    bridge = DiscordBotBridge(
+        ollama_client=FailingOllama(),
+        chat_store=ChatStore(tmp_path / "chats"),
+        settings=settings,
+        token="T" * 40,
+        memory_store=memory_store,
+    )
+
+    answer, _chat_id = bridge._answer_prompt(
+        "Itt vagy Prometheusz? Ki nekem Lilla?"
+    )
+
+    assert "Prometheusz a Discordos nevem" in answer
+    assert "Lilla a lányod." in answer
+
