@@ -29,6 +29,7 @@ def test_catalog_contains_requested_categories_and_key_presets():
         "HubSpot",
         "Discord Webhook",
         "Prometheusz Discord Bot",
+        "Crypto Market Data",
     }:
         assert expected in names
 
@@ -112,4 +113,21 @@ def test_prometheusz_discord_bot_preset_has_remote_chat_allowlist_defaults():
     assert payload["config"]["channel_id"] == ""
     assert payload["config"]["allowed_user_id"] == ""
     assert payload["config"]["model"] == ""
+
+
+def test_crypto_market_data_preset_is_public_no_auth_and_preconfigured():
+    preset = find_preset("crypto-market-data")
+    payload = preset_to_registry_entry(preset)
+
+    assert preset["category"] == "Business & Operations"
+    assert preset["auth_type"] == "none"
+    assert preset["capabilities"] == (
+        "crypto_quote",
+        "crypto_ticker",
+        "crypto_24h",
+    )
+    assert payload["enabled"] is False
+    assert payload["endpoint"] == "https://api.exchange.coinbase.com/time"
+    assert payload["config"]["api_base_url"] == "https://api.exchange.coinbase.com"
+    assert payload["config"]["default_quote"] == "USD"
 
