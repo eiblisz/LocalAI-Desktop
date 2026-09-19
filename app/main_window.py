@@ -85,6 +85,28 @@ from .workers import (
 )
 
 
+SIDE_MENU_BUTTON_INLINE_STYLE = (
+    "QPushButton {"
+    "background:#141A20;"
+    "border:1px solid #2D3742;"
+    "border-radius:10px;"
+    "padding:5px 10px;"
+    "color:#AAB2BD;"
+    "font-weight:600;"
+    "min-height:32px;"
+    "max-height:34px;"
+    "}"
+    "QPushButton:hover {"
+    "background:#1D2630;"
+    "border-color:#35414D;"
+    "color:#FFFFFF;"
+    "}"
+    "QPushButton:pressed {"
+    "background:#27323E;"
+    "color:#FFFFFF;"
+    "}"
+)
+
 STYLE = """
 QMainWindow, QWidget {
     background: #101419;
@@ -634,6 +656,7 @@ class MainWindow(QMainWindow):
             button = QPushButton(text)
             button.setObjectName("sideMenuButton")
             button.setFixedHeight(34)
+            button.setStyleSheet(SIDE_MENU_BUTTON_INLINE_STYLE)
             button.clicked.connect(
                 lambda _checked=False, name=text: self._select_tool(name)
             )
