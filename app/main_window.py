@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSplitter,
+    QTabWidget,
     QTextBrowser,
     QTextEdit,
     QVBoxLayout,
@@ -50,6 +51,11 @@ from .discord_bot_bridge import DiscordBotBridge, DiscordBotSettings
 from .extension_store import ExtensionStore
 from .extensions_dialog import ExtensionsDialog
 from .file_reader import read_attachment
+from .internal_viewer import (
+    BrowserView,
+    create_resource_view,
+    resource_title,
+)
 from .language_policy import response_language_instruction
 from .memory_answers import direct_user_memory_answer
 from .memory_extractor import is_explicit_memory_request
@@ -305,7 +311,7 @@ class MainWindow(QMainWindow):
 
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(self._build_sidebar())
-        splitter.addWidget(self._build_chat_panel())
+        splitter.addWidget(self._build_workspace_panel())
         splitter.addWidget(self._build_tools_panel())
         splitter.setSizes([300, 900, 250])
         splitter.setStretchFactor(1, 1)
@@ -356,6 +362,59 @@ class MainWindow(QMainWindow):
         note.setObjectName("muted")
         layout.addWidget(note)
         return frame
+
+    def _build_workspace_panel(self):
+        self.workspace_tabs = QTabWidget()
+        self.workspace_tabs.setTabsClosable(True)
+        self.workspace_tabs.setMovable(True)
+        self.workspace_tabs.setDocumentMode(True)
+        self.workspace_tabs.tabCloseRequested.connect(
+            self._close_workspace_tab
+        )
+
+        self.chat_workspace = self._build_chat_panel()
+        self.workspace_tabs.addTab(self.chat_workspace, "Chat")
+        return self.workspace_tabs
+
+    def _close_workspace_tab(self, index):
+        if index <= 0:
+            return
+        widget = self.workspace_tabs.widget(index)
+        self.workspace_tabs.removeTab(index)
+        if widget is not None:
+            widget.deleteLater()
+
+    def _open_resource(self, target):
+        try:
+            widget = create_resource_view(
+                target,
+                open_resource=self._open_resource,
+                parent=self.workspace_tabs,
+            )
+            title = resource_title(target)
+            index = self.workspace_tabs.addTab(widget, title)
+            self.workspace_tabs.setCurrentIndex(index)
+
+            if isinstance(widget, BrowserView):
+                widget.title_changed.connect(
+                    lambda browser_title, view=widget: self._update_resource_tab_title(
+                        view,
+                        browser_title,
+                    )
+                )
+            return widget
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Internal viewer error",
+                str(exc),
+            )
+            return None
+
+    def _update_resource_tab_title(self, widget, title):
+        index = self.workspace_tabs.indexOf(widget)
+        if index >= 0 and title:
+            self.workspace_tabs.setTabText(index, str(title)[:48])
 
     def _build_chat_panel(self):
         frame = QFrame()
@@ -1176,8 +1235,15 @@ class MainWindow(QMainWindow):
             if self.current_chat.get("closed", False):
                 title = f"{title} [CLOSED]"
             self.chat_title.setText(title)
+            if hasattr(self, "workspace_tabs"):
+                self.workspace_tabs.setTabText(
+                    0,
+                    ("Chat - " + title)[:48],
+                )
         else:
             self.chat_title.setText("Local AI")
+            if hasattr(self, "workspace_tabs"):
+                self.workspace_tabs.setTabText(0, "Chat")
 
         html_parts = [
             "<div style='font-family: Segoe UI; font-size:16px; color:#EDF0F3;'>"
@@ -1995,11 +2061,11 @@ class MainWindow(QMainWindow):
     def _open_artifact_link(self, url):
         try:
             if url.scheme().lower() in {"http", "https"}:
-                webbrowser.open(url.toString(), new=2)
+                self._open_resource(url.toString())
                 return
 
             target = path_from_artifact_url(url.toString())
-            open_file(target)
+            self._open_resource(target)
         except Exception as exc:
             QMessageBox.critical(
                 self,
@@ -2010,14 +2076,7 @@ class MainWindow(QMainWindow):
     def _open_last_artifact(self):
         if not self.last_artifact_path:
             return
-        try:
-            open_file(self.last_artifact_path)
-        except Exception as exc:
-            QMessageBox.critical(
-                self,
-                "Open file error",
-                str(exc),
-            )
+        self._open_resource(self.last_artifact_path)
 
     def _open_last_artifact_folder(self):
         if not self.last_artifact_path:
