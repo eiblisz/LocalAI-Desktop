@@ -148,3 +148,56 @@ def test_multi_asset_answer_is_concise_hungarian_and_grounded():
     assert "+1.25%" in answer
     assert "Yahoo Finance chart endpoint" in answer
     assert "2026-09-19T18:00:00+00:00" in answer
+
+
+def test_multi_asset_quote_retries_query2_after_query1_failure():
+    calls = []
+
+    class BadResponse:
+        def raise_for_status(self):
+            raise RuntimeError("query1 unavailable")
+
+        def json(self):
+            return {}
+
+    class GoodResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "chart": {
+                    "error": None,
+                    "result": [{
+                        "meta": {
+                            "currency": "USD",
+                            "regularMarketPrice": 364.27,
+                            "previousClose": 366.20,
+                            "exchangeName": "NMS",
+                            "marketState": "REGULAR",
+                        }
+                    }],
+                }
+            }
+
+    def requester(url, params, timeout, headers=None):
+        calls.append((url, headers))
+        return BadResponse() if "query1.finance.yahoo.com" in url else GoodResponse()
+
+    extension = {
+        "config": {
+            "api_base_url": "https://query1.finance.yahoo.com/v8/finance/chart",
+        }
+    }
+
+    quote = get_multi_asset_quote(
+        extension,
+        "Mennyi most a Tesla részvény ára?",
+        requester=requester,
+    )
+
+    assert quote["price"] == "364.27"
+    assert len(calls) == 2
+    assert "query1.finance.yahoo.com" in calls[0][0]
+    assert "query2.finance.yahoo.com" in calls[1][0]
+    assert calls[0][1]["Accept"].startswith("application/json")
