@@ -9,3 +9,4 @@ psutil>=6.0,<8
 beautifulsoup4>=4.12,<5
 playwright>=1.55,<2
 keyring>=25,<26
+discord.py>=2.6,<3

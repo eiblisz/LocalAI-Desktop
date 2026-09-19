@@ -28,6 +28,7 @@ AUTH_TYPES = {
     "basic": "Basic Auth",
     "oauth": "OAuth",
     "secret_url": "Secret URL",
+    "bot_token": "Bot Token",
 }
 
 _SECRET_TOKENS = {

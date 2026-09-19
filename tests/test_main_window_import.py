@@ -525,3 +525,32 @@ def test_chat_render_refreshes_extension_attachment_badge():
 
     assert "self._refresh_chat_extensions_button()" in render_source
 
+
+def test_prometheusz_bridge_starts_only_from_enabled_configured_extension():
+    from app.main_window import MainWindow
+
+    sync = inspect.getsource(MainWindow._sync_discord_bot_bridge)
+    open_source = inspect.getsource(MainWindow._open_extensions)
+    close_source = inspect.getsource(MainWindow.closeEvent)
+
+    assert 'find_by_preset_id("discord-bot")' in inspect.getsource(MainWindow._discord_bot_extension)
+    assert 'not bool(extension.get("enabled", False))' in sync
+    assert "self.secret_store.get_secret" in sync
+    assert "DiscordBotSettings.from_extension" in sync
+    assert "DiscordBotBridge(" in sync
+    assert "memory_store=self.memory_store" in sync
+    assert "self.extensions_dialog.changed.connect(self._sync_discord_bot_bridge)" in open_source
+    assert "self._stop_discord_bot_bridge()" in close_source
+
+
+def test_prometheusz_remote_bridge_does_not_add_shell_execution_to_main_chat():
+    from app.main_window import MainWindow
+
+    sync = inspect.getsource(MainWindow._sync_discord_bot_bridge)
+    send = inspect.getsource(MainWindow._send)
+
+    assert "subprocess" not in sync
+    assert "os.system" not in sync
+    assert "subprocess" not in send
+    assert "os.system" not in send
+

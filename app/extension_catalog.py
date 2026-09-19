@@ -14,6 +14,23 @@ PRESET_CATEGORIES = (
 
 EXTENSION_PRESETS = (
     {
+        "id": "discord-bot",
+        "name": "Prometheusz Discord Bot",
+        "category": "Communication",
+        "description": "Use the Prometheusz Discord bot as a restricted remote chat bridge to LocalAI.",
+        "type": "mcp_connector",
+        "auth_type": "bot_token",
+        "capabilities": ("read_messages", "send_message", "remote_chat"),
+        "provider_url": "https://discord.com/",
+        "docs_url": "https://discord.com/developers/docs/intro",
+        "default_config": {
+            "guild_id": "",
+            "channel_id": "",
+            "allowed_user_id": "",
+            "model": "",
+        },
+    },
+    {
         "id": "discord-webhook",
         "name": "Discord Webhook",
         "category": "Communication",
@@ -303,5 +320,6 @@ def preset_to_registry_entry(preset):
             "description": preset["description"],
             "provider_url": preset.get("provider_url", ""),
             "docs_url": preset.get("docs_url", ""),
+            **dict(preset.get("default_config") or {}),
         },
     }

@@ -44,6 +44,7 @@ from .document_tools import (
 )
 from .artifact_themes import document_preset_labels, workbook_preset_labels
 from .chat_extensions_dialog import ChatExtensionsDialog
+from .discord_bot_bridge import DiscordBotBridge, DiscordBotSettings
 from .docx_tool import create_docx
 from .excel_tool import create_conversation_excel, create_structured_excel
 from .extension_store import ExtensionStore
@@ -59,6 +60,7 @@ from .pdf_tool import create_pdf
 from .resource_monitor import format_resource_summary, get_system_metrics
 from .scheduler_dialog import SchedulerDialog
 from .scheduler_store import ScheduledTaskStore
+from .secret_store import SecretStore
 from .storage import ChatStore
 from .workers import (
     ChatWebWorker,
@@ -220,6 +222,8 @@ class MainWindow(QMainWindow):
         self.scheduler_dialog = None
         self.extension_store = ExtensionStore()
         self.extensions_dialog = None
+        self.secret_store = SecretStore()
+        self.discord_bot_bridge = None
         self.scheduled_thread = None
         self.scheduled_worker = None
         self.pending_scheduled_task_id = ""
@@ -247,6 +251,7 @@ class MainWindow(QMainWindow):
 
         self._refresh_schedule_indicator()
         QTimer.singleShot(3000, self._check_scheduled_tasks)
+        QTimer.singleShot(3500, self._sync_discord_bot_bridge)
 
     def _build_ui(self):
         central = QWidget()
@@ -1327,12 +1332,98 @@ class MainWindow(QMainWindow):
                 self.extension_store,
                 parent=self,
             )
+            self.extensions_dialog.changed.connect(self._sync_discord_bot_bridge)
         else:
             self.extensions_dialog._refresh_list()
 
         self.extensions_dialog.show()
         self.extensions_dialog.raise_()
         self.extensions_dialog.activateWindow()
+
+    def _stop_discord_bot_bridge(self):
+        bridge = self.discord_bot_bridge
+        if bridge is None:
+            return
+        try:
+            bridge.stop()
+        except Exception:
+            pass
+        self.discord_bot_bridge = None
+
+    def _discord_bot_extension(self):
+        return self.extension_store.find_by_preset_id("discord-bot")
+
+    def _sync_discord_bot_bridge(self):
+        extension = self._discord_bot_extension()
+        if not extension or not bool(extension.get("enabled", False)):
+            self._stop_discord_bot_bridge()
+            return
+
+        credential_ref = str(extension.get("credential_ref", "") or "").strip()
+        if not credential_ref:
+            self._stop_discord_bot_bridge()
+            self.status.setText("Discord bot: token is not configured")
+            return
+
+        try:
+            token = self.secret_store.get_secret(credential_ref)
+        except Exception as exc:
+            self._stop_discord_bot_bridge()
+            self.status.setText(f"Discord bot credential error: {exc}")
+            return
+
+        if not token:
+            self._stop_discord_bot_bridge()
+            self.status.setText("Discord bot: saved token was not found")
+            return
+
+        fallback_model = self.model_combo.currentText().strip()
+        try:
+            settings = DiscordBotSettings.from_extension(
+                extension,
+                fallback_model=fallback_model,
+            )
+        except Exception as exc:
+            self._stop_discord_bot_bridge()
+            self.status.setText(f"Discord bot configuration: {exc}")
+            return
+
+        existing = self.discord_bot_bridge
+        if (
+            existing is not None
+            and existing.is_running()
+            and existing.fingerprint == settings.fingerprint
+        ):
+            return
+
+        self._stop_discord_bot_bridge()
+        bridge = DiscordBotBridge(
+            self.client,
+            self.store,
+            settings,
+            token,
+            memory_store=self.memory_store,
+            parent=self,
+        )
+        bridge.status_changed.connect(self._discord_bot_status_changed)
+        bridge.chat_updated.connect(self._discord_bot_chat_updated)
+        self.discord_bot_bridge = bridge
+        bridge.start()
+        self.status.setText("Discord bot connecting...")
+
+    def _discord_bot_status_changed(self, message):
+        self.status.setText(str(message or "Discord bot status"))
+
+    def _discord_bot_chat_updated(self, chat_id):
+        chat_id = str(chat_id or "")
+        self._load_chat_list()
+        current_id = str((self.current_chat or {}).get("id", ""))
+        if chat_id and current_id == chat_id:
+            try:
+                self.current_chat = self.store.load(chat_id)
+            except Exception:
+                return
+            self._render_chat()
 
     def _schedule_health_state(self):
         tasks = self.scheduler_store.list_tasks()
@@ -1978,4 +2069,5 @@ class MainWindow(QMainWindow):
             return
         if self.worker is not None:
             self.worker.stop()
+        self._stop_discord_bot_bridge()
         event.accept()
