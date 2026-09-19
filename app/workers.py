@@ -150,12 +150,11 @@ class MarketDataWorker(QObject):
                 ).strip()
             except Exception:
                 self.used_web_fallback = True
-                answer = run_chat_web_request(
+                answer = run_market_web_request(
                     self.client,
                     self.model,
                     self.messages,
                     self.user_prompt,
-                    compact_market_quote=True,
                 ).strip()
 
             if self._stop_event.is_set():
@@ -210,12 +209,11 @@ class MultiAssetMarketDataWorker(QObject):
                 ).strip()
             except Exception:
                 self.used_web_fallback = True
-                answer = run_chat_web_request(
+                answer = run_market_web_request(
                     self.client,
                     self.model,
                     self.messages,
                     self.user_prompt,
-                    compact_market_quote=True,
                 ).strip()
 
             if self._stop_event.is_set():
@@ -1274,24 +1272,9 @@ class ChatWebWorker(QObject):
         self._stop_event.set()
 
 
-def run_chat_web_request(
-    client,
-    model,
-    messages,
-    user_prompt,
-    *,
-    compact_market_quote=False,
-):
-    """Run the grounded web worker synchronously and collect its answer."""
+def _run_web_worker(worker):
     chunks = []
     errors = []
-    worker = ChatWebWorker(
-        client,
-        model,
-        messages,
-        user_prompt,
-        compact_market_quote=compact_market_quote,
-    )
     worker.token.connect(chunks.append)
     worker.failed.connect(errors.append)
     worker.run()
@@ -1303,6 +1286,31 @@ def run_chat_web_request(
     if not answer:
         raise RuntimeError("Web research returned an empty answer.")
     return answer
+
+
+def run_chat_web_request(client, model, messages, user_prompt):
+    """Run the existing grounded web worker synchronously and collect its answer."""
+    return _run_web_worker(
+        ChatWebWorker(
+            client,
+            model,
+            messages,
+            user_prompt,
+        )
+    )
+
+
+def run_market_web_request(client, model, messages, user_prompt):
+    """Run concise grounded web fallback for live market-value lookups."""
+    return _run_web_worker(
+        ChatWebWorker(
+            client,
+            model,
+            messages,
+            user_prompt,
+            compact_market_quote=True,
+        )
+    )
 
 
 class AdaptiveChatWorker(QObject):
