@@ -660,25 +660,26 @@ class DiscordBotBridge(QObject):
         return extension
 
     def _grounded_external_answer(self, prompt):
-        crypto_extension = self._crypto_market_extension()
-        if crypto_extension is not None and is_crypto_quote_request(prompt):
-            try:
-                return run_crypto_market_request(crypto_extension, prompt).strip()
-            except Exception:
-                pass
-
-        multi_asset_extension = self._multi_asset_market_extension()
-        if (
-            multi_asset_extension is not None
-            and is_multi_asset_quote_request(prompt)
-        ):
-            try:
-                return run_multi_asset_market_request(
-                    multi_asset_extension,
-                    prompt,
-                ).strip()
-            except Exception:
-                pass
+        if is_crypto_quote_request(prompt):
+            crypto_extension = self._crypto_market_extension()
+            if crypto_extension is not None:
+                try:
+                    return run_crypto_market_request(
+                        crypto_extension,
+                        prompt,
+                    ).strip()
+                except Exception:
+                    pass
+        elif is_multi_asset_quote_request(prompt):
+            multi_asset_extension = self._multi_asset_market_extension()
+            if multi_asset_extension is not None:
+                try:
+                    return run_multi_asset_market_request(
+                        multi_asset_extension,
+                        prompt,
+                    ).strip()
+                except Exception:
+                    pass
         return self._grounded_web_answer(prompt)
 
     def _remember_remote(self, prompt):
@@ -750,35 +751,44 @@ class DiscordBotBridge(QObject):
         action_plan = plan_user_action(prompt, force_web=force_web)
 
         if action_plan.has(ACTION_WEB_RESEARCH):
-            crypto_extension = self._crypto_market_extension()
-            multi_asset_extension = self._multi_asset_market_extension()
-
-            if (
-                crypto_extension is not None
-                and is_crypto_quote_request(prompt)
-            ):
-                try:
-                    answer = run_crypto_market_request(
-                        crypto_extension,
-                        prompt,
-                    ).strip()
-                except Exception:
+            if is_crypto_quote_request(prompt):
+                crypto_extension = self._crypto_market_extension()
+                if crypto_extension is not None:
+                    try:
+                        answer = run_crypto_market_request(
+                            crypto_extension,
+                            prompt,
+                        ).strip()
+                    except Exception:
+                        answer = run_chat_web_request(
+                            self.ollama_client,
+                            self.settings.model,
+                            messages,
+                            prompt,
+                        ).strip()
+                else:
                     answer = run_chat_web_request(
                         self.ollama_client,
                         self.settings.model,
                         messages,
                         prompt,
                     ).strip()
-            elif (
-                multi_asset_extension is not None
-                and is_multi_asset_quote_request(prompt)
-            ):
-                try:
-                    answer = run_multi_asset_market_request(
-                        multi_asset_extension,
-                        prompt,
-                    ).strip()
-                except Exception:
+            elif is_multi_asset_quote_request(prompt):
+                multi_asset_extension = self._multi_asset_market_extension()
+                if multi_asset_extension is not None:
+                    try:
+                        answer = run_multi_asset_market_request(
+                            multi_asset_extension,
+                            prompt,
+                        ).strip()
+                    except Exception:
+                        answer = run_chat_web_request(
+                            self.ollama_client,
+                            self.settings.model,
+                            messages,
+                            prompt,
+                        ).strip()
+                else:
                     answer = run_chat_web_request(
                         self.ollama_client,
                         self.settings.model,
