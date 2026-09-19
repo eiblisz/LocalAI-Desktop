@@ -6,6 +6,8 @@ import pytest
 from app.discord_bot_bridge import (
     DiscordBotBridge,
     DiscordBotSettings,
+    _looks_like_pdf_request,
+    _pdf_preset_from_request,
     split_discord_text,
     test_discord_bot_token as run_bot_token_test,
     validate_bot_token,
@@ -356,4 +358,132 @@ def test_remote_non_web_prompt_stays_on_normal_local_model_path(tmp_path: Path, 
     answer, _chat_id = bridge._answer_prompt("Mondj egy rövid viccet.")
 
     assert answer == "Normál helyi válasz."
+
+
+def test_pdf_request_detection_and_theme_mapping():
+    assert _looks_like_pdf_request(
+        "Készíts nekem egy PDF fájlt Red Executive stílusban"
+    )
+    assert _pdf_preset_from_request(
+        "Készíts PDF-et red executive stílusban"
+    ) == "Red Executive"
+    assert _pdf_preset_from_request(
+        "Create a classic executive PDF"
+    ) == "Classic Executive"
+    assert not _looks_like_pdf_request("Mondd el röviden, mi az a PDF.")
+
+
+def test_remote_pdf_uses_memory_and_host_pdf_tool_without_model(tmp_path: Path, monkeypatch):
+    import app.discord_bot_bridge as bridge_module
+
+    class FailingOllama:
+        def chat_once(self, model, messages):
+            raise AssertionError(
+                "model must not be called when durable memory directly answers the PDF topic"
+            )
+
+    memory_store = MemoryStore(tmp_path / "memory.sqlite3")
+    memory_store.remember_explicit(
+        category="USER_PROFILE",
+        scope="USER",
+        subject="Lilla",
+        key="relationship_to_user",
+        value="daughter",
+        source_chat_id="seed",
+        source_excerpt="Jegyezd meg, hogy Lilla a lányom.",
+    )
+
+    created = {}
+
+    def fake_create_pdf(messages, title, preset):
+        created["messages"] = messages
+        created["title"] = title
+        created["preset"] = preset
+        path = tmp_path / "lilla_red_executive.pdf"
+        path.write_bytes(b"%PDF-1.4\n%test\n")
+        return path
+
+    monkeypatch.setattr(bridge_module, "create_pdf", fake_create_pdf)
+
+    settings = DiscordBotSettings(
+        extension_id="ext-pdf",
+        name="Prometheusz",
+        guild_id=111111111111111111,
+        channel_id=222222222222222222,
+        allowed_user_id=333333333333333333,
+        model="qwen3-coder:30b",
+    )
+    bridge = DiscordBotBridge(
+        ollama_client=FailingOllama(),
+        chat_store=ChatStore(tmp_path / "chats"),
+        settings=settings,
+        token="T" * 40,
+        memory_store=memory_store,
+    )
+
+    answer, chat_id, artifact = bridge._create_pdf_artifact(
+        "Készíts nekem egy PDF fájlt Red Executive stílusban, "
+        "amiben röviden összefoglalod, hogy ki nekem Lilla"
+    )
+
+    assert answer == "Elkészítettem a PDF-et (Red Executive)."
+    assert artifact.exists()
+    assert created["preset"] == "Red Executive"
+    body = created["messages"][0]["content"]
+    assert "Lilla a lányod." in body
+
+    chat = bridge.chat_store.load(chat_id)
+    assert chat["messages"][-1]["role"] == "artifact"
+    assert chat["messages"][-1]["content"] == str(artifact)
+
+
+def test_remote_pdf_model_path_includes_memory_context_and_host_render_instruction(
+    tmp_path: Path,
+    monkeypatch,
+):
+    import app.discord_bot_bridge as bridge_module
+
+    class FakeOllama:
+        def __init__(self):
+            self.messages = None
+
+        def chat_once(self, model, messages):
+            self.messages = messages
+            return "# Projekt riport\n\nRövid tartalom."
+
+    ollama = FakeOllama()
+    created = {}
+
+    def fake_create_pdf(messages, title, preset):
+        created["messages"] = messages
+        created["preset"] = preset
+        path = tmp_path / "project.pdf"
+        path.write_bytes(b"%PDF-1.4\n%test\n")
+        return path
+
+    monkeypatch.setattr(bridge_module, "create_pdf", fake_create_pdf)
+
+    settings = DiscordBotSettings(
+        extension_id="ext-pdf-model",
+        name="Prometheusz",
+        guild_id=111111111111111111,
+        channel_id=222222222222222222,
+        allowed_user_id=333333333333333333,
+        model="qwen3-coder:30b",
+    )
+    bridge = DiscordBotBridge(
+        ollama_client=ollama,
+        chat_store=ChatStore(tmp_path / "chats"),
+        settings=settings,
+        token="T" * 40,
+    )
+
+    answer, _chat_id, artifact = bridge._create_pdf_artifact(
+        "Készíts PDF-et a LocalAI Desktop projektről"
+    )
+
+    assert artifact.exists()
+    assert "Elkészítettem a PDF-et" in answer
+    assert "host application will render" in ollama.messages[0]["content"]
+    assert created["messages"][0]["content"].startswith("# Projekt riport")
 
