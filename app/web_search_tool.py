@@ -921,6 +921,15 @@ _VERSION_TOPIC_MARKERS = (
     "kiadás",
     "kiadas",
 )
+_ENTITY_SCOPE_QUALIFIERS = {
+    "api", "app", "apps", "audio", "cli", "client", "code", "coder",
+    "desktop", "docs", "documentation", "driver", "embedding", "examples",
+    "extension", "extensions", "gui", "java", "javascript", "js", "math",
+    "mobile", "plugin", "plugins", "python", "reranker", "rust", "sdk",
+    "server", "studio", "tool", "tools", "ui", "vision", "vl", "web",
+    "agent", "agents", "drive",
+}
+
 _AUTHORITY_STOPWORDS = {
     "latest", "current", "newest", "version", "release",
     "legfrissebb", "legújabb", "legujabb", "jelenlegi",
@@ -965,9 +974,59 @@ def _authority_identity_terms(query):
     return terms[:6]
 
 
+def _split_identity_tokens(value):
+    folded = _fold_authority_text(value)
+    return {
+        token for token in re.findall(r"[a-z0-9]+", folded)
+        if len(token) >= 2
+    }
+
+
+def _authority_scope_mismatch(query, item):
+    """
+    Reject a qualified subproduct/tool as the authority for an unqualified family
+    query. Example pattern: "Nimbus latest version" must not silently resolve to
+    "nimbus-cli" unless the user actually asked for the CLI.
+
+    The rule is generic: qualifiers are product-scope terms, not vendor names.
+    """
+    if not is_current_version_query(query):
+        return False
+
+    query_tokens = _split_identity_tokens(query)
+    identity_terms = set(_authority_identity_terms(query))
+    if not identity_terms:
+        return False
+
+    url = _decode_bing_result_url(str(item.get("url", "")).strip())
+    title = str(item.get("title", ""))
+    candidate_tokens = _split_identity_tokens(title)
+
+    try:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+        path_segments = [part for part in parsed.path.split("/") if part]
+    except Exception:
+        host = ""
+        path_segments = []
+
+    if host == "github.com" and len(path_segments) >= 2:
+        candidate_tokens.update(_split_identity_tokens(path_segments[1]))
+
+    if not any(term in candidate_tokens for term in identity_terms):
+        return False
+
+    candidate_qualifiers = candidate_tokens & _ENTITY_SCOPE_QUALIFIERS
+    query_qualifiers = query_tokens & _ENTITY_SCOPE_QUALIFIERS
+    return bool(candidate_qualifiers - query_qualifiers)
+
+
 def _authority_score(query, item):
     if not is_current_version_query(query):
         return 0
+
+    if _authority_scope_mismatch(query, item):
+        return -500
 
     url = _decode_bing_result_url(str(item.get("url", "")).strip())
     title = _fold_authority_text(item.get("title", ""))
@@ -1264,6 +1323,11 @@ def web_search_context_text(payload):
             f"URL: {item.get('url', '')}",
             f"Snippet: {item.get('snippet', '')}",
         ])
+        if _authority_scope_mismatch(payload.get("query", ""), item):
+            lines.append(
+                "Scope note: this result is a qualified subproduct/tool not named "
+                "in the query; do not use it as the current-version authority."
+            )
         if item.get("published"):
             lines.append(f"Published: {item.get('published', '')}")
         page_text = item.get("page_text", "")
