@@ -39,7 +39,7 @@ from .web_intent import (
     plan_user_action,
     plan_user_actions,
 )
-from .workers import run_chat_web_request
+from .workers import run_chat_web_request, run_market_web_request
 
 
 DISCORD_API_BASE = "https://discord.com/api/v10"
@@ -760,7 +760,7 @@ class DiscordBotBridge(QObject):
                             prompt,
                         ).strip()
                     except Exception:
-                        answer = run_chat_web_request(
+                        answer = run_market_web_request(
                             self.ollama_client,
                             self.settings.model,
                             messages,
@@ -782,7 +782,7 @@ class DiscordBotBridge(QObject):
                             prompt,
                         ).strip()
                     except Exception:
-                        answer = run_chat_web_request(
+                        answer = run_market_web_request(
                             self.ollama_client,
                             self.settings.model,
                             messages,
