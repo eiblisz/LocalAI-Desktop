@@ -331,13 +331,16 @@ def test_explicit_memory_request_uses_dedicated_background_worker():
 
     source = inspect.getsource(MainWindow._send)
 
-    assert "if is_explicit_memory_request(text):" in source
+    assert "plan_user_action(" in source
+    assert "action_plan.has(ACTION_MEMORY_WRITE)" in source
     assert "self.worker = MemoryWriteWorker(" in source
     assert "self.memory_store" in source
     assert "self.generation_chat_id" in source
     assert "self.worker.finished.connect(self._on_memory_finished)" in source
     assert "self.worker.failed.connect(self._on_memory_failed)" in source
-    assert source.index("if is_explicit_memory_request(text):") < source.index("use_web = (")
+    assert source.index("action_plan.has(ACTION_MEMORY_WRITE)") < source.index(
+        "use_web = action_plan.has(ACTION_WEB_RESEARCH)"
+    )
 
 
 def test_memory_write_completion_is_bound_to_originating_chat():
