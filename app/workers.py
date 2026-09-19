@@ -23,6 +23,7 @@ from .generic_shopping_evidence import (
     render_generic_shopping_answer,
 )
 from .memory_runtime import remember_explicit_request
+from .multi_asset_market_data import run_multi_asset_market_request
 from .language_policy import (
     detect_user_language,
     response_language_instruction,
@@ -162,6 +163,65 @@ class MarketDataWorker(QObject):
 
             if not answer:
                 raise RuntimeError("Crypto market data returned an empty answer.")
+
+            self.token.emit(answer)
+            self.finished.emit()
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+    def stop(self):
+        self._stop_event.set()
+
+
+class MultiAssetMarketDataWorker(QObject):
+    token = Signal(str)
+    finished = Signal()
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        client: OllamaClient,
+        model: str,
+        messages: list[dict],
+        user_prompt: str,
+        extension: dict,
+    ):
+        super().__init__()
+        self.client = client
+        self.model = model
+        self.messages = [dict(message) for message in messages]
+        self.user_prompt = str(user_prompt or "").strip()
+        self.extension = dict(extension or {})
+        self._stop_event = threading.Event()
+        self.used_web_fallback = False
+
+    @Slot()
+    def run(self):
+        try:
+            if self._stop_event.is_set():
+                self.finished.emit()
+                return
+
+            try:
+                answer = run_multi_asset_market_request(
+                    self.extension,
+                    self.user_prompt,
+                ).strip()
+            except Exception:
+                self.used_web_fallback = True
+                answer = run_chat_web_request(
+                    self.client,
+                    self.model,
+                    self.messages,
+                    self.user_prompt,
+                ).strip()
+
+            if self._stop_event.is_set():
+                self.finished.emit()
+                return
+
+            if not answer:
+                raise RuntimeError("Multi-asset market data returned an empty answer.")
 
             self.token.emit(answer)
             self.finished.emit()
