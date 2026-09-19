@@ -8,6 +8,7 @@ from .computer_status_tool import (
     computer_status_context_text,
     get_computer_status,
 )
+from .crypto_market_data import run_crypto_market_request
 from .ebay_tool import ebay_context_text, search_ebay
 from .evidence_verifier import (
     evidence_ledger_context_text,
@@ -110,6 +111,65 @@ class MemoryWriteWorker(QObject):
         # interrupted safely once submitted. Keep the worker API compatible
         # with MainWindow's shared stop/cleanup path.
         return None
+
+
+class MarketDataWorker(QObject):
+    token = Signal(str)
+    finished = Signal()
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        client: OllamaClient,
+        model: str,
+        messages: list[dict],
+        user_prompt: str,
+        extension: dict,
+    ):
+        super().__init__()
+        self.client = client
+        self.model = model
+        self.messages = [dict(message) for message in messages]
+        self.user_prompt = str(user_prompt or "").strip()
+        self.extension = dict(extension or {})
+        self._stop_event = threading.Event()
+        self.used_web_fallback = False
+
+    @Slot()
+    def run(self):
+        try:
+            if self._stop_event.is_set():
+                self.finished.emit()
+                return
+
+            try:
+                answer = run_crypto_market_request(
+                    self.extension,
+                    self.user_prompt,
+                ).strip()
+            except Exception:
+                self.used_web_fallback = True
+                answer = run_chat_web_request(
+                    self.client,
+                    self.model,
+                    self.messages,
+                    self.user_prompt,
+                ).strip()
+
+            if self._stop_event.is_set():
+                self.finished.emit()
+                return
+
+            if not answer:
+                raise RuntimeError("Crypto market data returned an empty answer.")
+
+            self.token.emit(answer)
+            self.finished.emit()
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+    def stop(self):
+        self._stop_event.set()
 
 
 class ChatWebWorker(QObject):
