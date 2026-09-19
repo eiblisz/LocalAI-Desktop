@@ -683,7 +683,8 @@ def test_prometheusz_executes_numbered_mixed_actions_in_order(tmp_path: Path, mo
                 return "LOCAL-TCP: a TCP egy kapcsolatorientált protokoll."
             if "VERIFIED WEB RESEARCH SOURCE" in user:
                 assert "verified latest Ollama release is 9.9.9" in user
-                assert "Ignore stale model priors" in messages[0]["content"]
+                assert "use ONLY the VERIFIED WEB RESEARCH SOURCE" in messages[0]["content"]
+                assert "Do not add release notes, features, changes" in messages[0]["content"]
                 return "# Ollama riport\n\nA jelenlegi verzió: 9.9.9"
             raise AssertionError(user)
 
@@ -800,4 +801,11 @@ def test_remote_artifact_with_web_context_does_not_use_stale_memory_shortcut(
     assert len(result["artifacts"]) == 1
     assert "9.9.9" in captured["content"]
     assert "0.1.37" not in captured["content"]
+    assert "use ONLY the VERIFIED WEB RESEARCH SOURCE" in captured.get(
+        "source_text",
+        "",
+    ) or "Verified current Ollama version is 9.9.9" in captured.get(
+        "source_text",
+        "",
+    )
 
