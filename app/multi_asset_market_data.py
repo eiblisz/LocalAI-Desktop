@@ -94,7 +94,10 @@ def infer_multi_asset_quote_request(text):
     has_price_intent = any(marker in normalized for marker in PRICE_MARKERS)
 
     if asset is None and has_price_intent:
-        symbols = re.findall(r"(?<![A-Z0-9])([A-Z]{1,5})(?![A-Z0-9])", original)
+        symbols = re.findall(
+            r"(?<![A-Za-z0-9])([A-Z]{2,5})(?![A-Za-z0-9])",
+            original,
+        )
         ignored = {"USD", "EUR", "GBP", "JPY", "CHF", "BTC", "ETH", "SOL", "XRP"}
         for symbol in symbols:
             if symbol not in ignored:
