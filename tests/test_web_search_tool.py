@@ -727,3 +727,25 @@ def test_web_context_surfaces_authoritative_current_fact_before_results():
     assert "Source URL: https://github.com/ollama/ollama/releases" in context
     assert context.index("AUTHORITATIVE CURRENT FACT") < context.index("SEARCH RESULTS")
 
+
+def test_authoritative_current_fact_prefers_github_latest_over_newer_prerelease():
+    payload = {
+        "query": "Ollama latest version release",
+        "results": [
+            {
+                "title": "Releases · ollama/ollama · GitHub",
+                "url": "https://github.com/ollama/ollama/releases",
+                "snippet": "Official releases",
+                "page_text": (
+                    "Release list v0.34.3 v0.34.2 v0.34.1 "
+                    "v0.34.3 Pre-release "
+                    "v0.34.2 Latest What's Changed"
+                ),
+            }
+        ],
+    }
+
+    fact = web_search_tool.authoritative_current_fact(payload)
+
+    assert fact["value"] == "v0.34.2"
+
