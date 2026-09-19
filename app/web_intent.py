@@ -68,15 +68,6 @@ def looks_like_web_request(text):
         "aktualis ar",
         "most mennyi",
         "mennyi most",
-        "árfolyam",
-        "arfolyam",
-        "árfolyama",
-        "arfolyama",
-        "market price",
-        "spot price",
-        "exchange rate",
-        "wechselkurs",
-        "kurs",
         "look up",
         "search for",
         "search the web",
@@ -155,6 +146,25 @@ def is_freshness_sensitive_request(text):
         "heute",
         "neueste",
     )
+    # A currency-pair quote is intrinsically time-sensitive even when phrased
+    # as "What is ...". Keep this narrow so generic definitions such as
+    # "What is an exchange rate?" remain local.
+    currency_pair_quote = bool(
+        re.search(
+            r"(?<![a-z])(?:[a-z]{3})\s*(?:/|-|\s)\s*(?:[a-z]{3})(?![a-z])",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        and (
+            "exchange rate" in normalized
+            or "wechselkurs" in normalized
+            or "árfolyam" in normalized
+            or "arfolyam" in normalized
+        )
+    )
+    if currency_pair_quote:
+        return True
+
     if any(marker in normalized for marker in explanatory_markers) and not any(
         marker in normalized for marker in explicit_recency_markers
     ):
