@@ -846,6 +846,29 @@ class ChatWebWorker(QObject):
         self._stop_event.set()
 
 
+def run_chat_web_request(client, model, messages, user_prompt):
+    """Run the existing grounded web worker synchronously and collect its answer."""
+    chunks = []
+    errors = []
+    worker = ChatWebWorker(
+        client,
+        model,
+        messages,
+        user_prompt,
+    )
+    worker.token.connect(chunks.append)
+    worker.failed.connect(errors.append)
+    worker.run()
+
+    if errors:
+        raise RuntimeError(errors[0])
+
+    answer = "".join(chunks).strip()
+    if not answer:
+        raise RuntimeError("Web research returned an empty answer.")
+    return answer
+
+
 class DocumentWorker(QObject):
     finished = Signal(str)
     failed = Signal(str)
