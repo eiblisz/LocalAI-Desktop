@@ -1386,6 +1386,23 @@ class MainWindow(QMainWindow):
         self.extensions_dialog.raise_()
         self.extensions_dialog.activateWindow()
 
+    def _tradingview_workspace_url(self):
+        default_url = "https://www.tradingview.com/markets/"
+        extension = self.extension_store.find_by_preset_id(
+            "tradingview-workspace"
+        )
+        if not extension or not bool(extension.get("enabled", False)):
+            return default_url
+
+        config = dict(extension.get("config") or {})
+        value = str(config.get("workspace_url") or default_url).strip()
+        if not value.startswith(("https://", "http://")):
+            return default_url
+        return value
+
+    def _open_market_browser(self):
+        self._open_resource(self._tradingview_workspace_url())
+
     def _stop_discord_bot_bridge(self):
         bridge = self.discord_bot_bridge
         if bridge is None:
