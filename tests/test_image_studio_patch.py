@@ -59,3 +59,9 @@ def test_image_tool_matches_compact_tool_button_height():
     source = inspect.getsource(MainWindow._build_tools_panel)
 
     assert 'button.setFixedHeight(34)' in source
+
+
+def test_image_tool_uses_shared_side_menu_style():
+    source = inspect.getsource(MainWindow._build_tools_panel)
+
+    assert 'button.setObjectName("sideMenuButton")' in source
