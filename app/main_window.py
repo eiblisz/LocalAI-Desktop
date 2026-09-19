@@ -1402,6 +1402,7 @@ class MainWindow(QMainWindow):
             self.store,
             settings,
             token,
+            memory_store=self.memory_store,
             parent=self,
         )
         bridge.status_changed.connect(self._discord_bot_status_changed)
