@@ -92,6 +92,27 @@ EXTENSION_PRESETS = (
         },
     },
     {
+        "id": "multi-asset-market-data",
+        "name": "Multi-Asset Market Data",
+        "category": "Business & Operations",
+        "description": "Fetch structured stock, forex and index quotes with automatic grounded-web fallback when the provider is unavailable.",
+        "type": "http_api",
+        "auth_type": "none",
+        "capabilities": (
+            "market_quote",
+            "stock_quote",
+            "forex_quote",
+            "index_quote",
+        ),
+        "provider_url": "https://finance.yahoo.com/",
+        "docs_url": "",
+        "default_endpoint": "https://query1.finance.yahoo.com/v8/finance/chart/AAPL?interval=1m&range=1d",
+        "default_config": {
+            "api_base_url": "https://query1.finance.yahoo.com/v8/finance/chart",
+            "provider": "yahoo_finance_chart_endpoint",
+        },
+    },
+    {
         "id": "google-calendar",
         "name": "Google Calendar",
         "category": "Productivity",
