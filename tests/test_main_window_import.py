@@ -76,6 +76,7 @@ def test_pending_schedule_runs_after_worker_cleanup():
 
 
 def test_schedule_button_stays_neutral_and_task_rows_carry_health():
+    import app.main_window as main_window_module
     from app.main_window import MainWindow
 
     sidebar_source = inspect.getsource(MainWindow._build_sidebar)
@@ -83,7 +84,9 @@ def test_schedule_button_stays_neutral_and_task_rows_carry_health():
     task_source = inspect.getsource(MainWindow._refresh_schedule_task_labels)
 
     assert 'self.schedule_button = QPushButton("SCHEDULE")' in sidebar_source
-    assert "background:#202730" in button_source
+    assert 'self.schedule_button.setObjectName("sideMenuButton")' in button_source
+    assert 'self.schedule_button.setStyleSheet("")' in button_source
+    assert "QPushButton#sideMenuButton" in main_window_module.STYLE
     assert "#315A43" not in button_source
     assert "#6A3035" not in button_source
     assert "#86C69A" in task_source
