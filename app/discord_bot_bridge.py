@@ -432,8 +432,8 @@ class DiscordBotBridge(QObject):
         direct_memory = self._direct_memory_answer(prompt)
         if direct_memory:
             return (
-                "# Ki nekem Lilla?\n\n"
-                "## Rövid összefoglaló\n\n"
+                "# Rövid összefoglaló\n\n"
+                "## Személyes memória\n\n"
                 f"{direct_memory}\n"
             )
 
