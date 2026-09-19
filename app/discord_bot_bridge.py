@@ -22,7 +22,15 @@ from .document_tools import (
 )
 from .language_policy import response_language_instruction
 from .memory_answers import direct_user_memory_answer
-from .web_intent import looks_like_web_request
+from .memory_runtime import remember_explicit_request
+from .web_intent import (
+    ACTION_ARTIFACT,
+    ACTION_MEMORY_WRITE,
+    ACTION_WEB_RESEARCH,
+    answer_requires_web_fallback,
+    plan_user_action,
+    plan_user_actions,
+)
 from .workers import run_chat_web_request
 
 
@@ -236,29 +244,28 @@ class DiscordBotBridge(QObject):
 
             async with request_lock:
                 try:
-                    artifact_plans = infer_artifact_requests(content)
-                    if artifact_plans:
+                    last_chat_id = ""
+                    for planned in plan_user_actions(content):
                         async with message.channel.typing():
-                            chat_id, artifact_results = await asyncio.to_thread(
-                                self._create_remote_artifacts,
-                                content,
-                                artifact_plans,
+                            result = await asyncio.to_thread(
+                                self._execute_planned_action,
+                                planned.prompt,
+                                planned.plan,
                             )
-                        for answer, artifact_path in artifact_results:
+
+                        last_chat_id = str(result.get("chat_id", "") or last_chat_id)
+                        for reply_text in result.get("messages", []):
+                            for chunk in split_discord_text(reply_text):
+                                await message.reply(chunk, mention_author=False)
+                        for answer, artifact_path in result.get("artifacts", []):
                             await message.reply(
                                 answer,
                                 file=discord.File(str(artifact_path)),
                                 mention_author=False,
                             )
-                    else:
-                        async with message.channel.typing():
-                            answer, chat_id = await asyncio.to_thread(
-                                self._answer_prompt,
-                                content,
-                            )
-                        for chunk in split_discord_text(answer):
-                            await message.reply(chunk, mention_author=False)
-                    self.chat_updated.emit(chat_id)
+
+                    if last_chat_id:
+                        self.chat_updated.emit(last_chat_id)
                 except Exception as exc:
                     compact = " ".join(str(exc).split())[:500]
                     self.status_changed.emit(f"Discord request failed: {compact}")
@@ -409,8 +416,12 @@ class DiscordBotBridge(QObject):
 
         return "\n".join(lines)
 
-    def _artifact_body(self, prompt, artifact_request):
-        direct_memory = self._direct_memory_answer(prompt)
+    def _artifact_body(self, prompt, artifact_request, source_context=""):
+        direct_memory = (
+            ""
+            if source_context
+            else self._direct_memory_answer(prompt)
+        )
         if direct_memory:
             if artifact_request.format == "xlsx":
                 return json.dumps(
@@ -443,8 +454,25 @@ class DiscordBotBridge(QObject):
             messages = build_document_messages(prompt)
 
         memory_context = self._build_memory_context(prompt)
+        if source_context:
+            verified_source = (
+                "\n\nVERIFIED WEB RESEARCH SOURCE:\n"
+                + str(source_context).strip()
+            )
+            messages[-1] = {
+                "role": "user",
+                "content": str(messages[-1]["content"]) + verified_source,
+            }
+
         system = str(messages[0]["content"])
         system += "\n\n" + response_language_instruction(prompt)
+        if source_context:
+            system += (
+                "\n\nFor current or time-sensitive claims, use the VERIFIED WEB RESEARCH "
+                "SOURCE supplied in the user content as the authority. Ignore stale model "
+                "priors when they conflict with that source. Do not invent version numbers, "
+                "prices, dates, or availability."
+            )
         system += (
             "\n\nThe host application will render your output into the requested "
             f"{artifact_request.format.upper()} artifact. Do not say that you cannot "
@@ -464,14 +492,31 @@ class DiscordBotBridge(QObject):
             )
         return body
 
-    def _render_remote_artifact(self, chat, prompt, artifact_request):
-        body = self._artifact_body(prompt, artifact_request)
+    def _render_remote_artifact(
+        self,
+        chat,
+        prompt,
+        artifact_request,
+        source_context="",
+    ):
+        body = self._artifact_body(
+            prompt,
+            artifact_request,
+            source_context=source_context,
+        )
         path = create_artifact(
             artifact_request.format,
             content=body,
             title=f"Prometheusz {artifact_request.format.upper()}",
             preset=artifact_request.preset,
-            source_text=prompt,
+            source_text=(
+                prompt
+                + (
+                    "\n\nVERIFIED WEB RESEARCH SOURCE:\n" + source_context
+                    if source_context
+                    else ""
+                )
+            ),
             model_name=self.settings.model,
         )
 
@@ -505,7 +550,12 @@ class DiscordBotBridge(QObject):
         )
         return f"Elkészítettem a {label} fájlt{preset_text}.", path
 
-    def _create_remote_artifacts(self, original_prompt, artifact_plans):
+    def _create_remote_artifacts(
+        self,
+        original_prompt,
+        artifact_plans,
+        source_context="",
+    ):
         chat = self._load_remote_chat()
         chat["model"] = self.settings.model
         chat["messages"].append({"role": "user", "content": original_prompt})
@@ -519,6 +569,7 @@ class DiscordBotBridge(QObject):
                     chat,
                     plan.prompt,
                     plan.request,
+                    source_context=source_context,
                 )
             )
 
@@ -531,7 +582,96 @@ class DiscordBotBridge(QObject):
         answer, path = results[0]
         return answer, chat_id, path
 
-    def _answer_prompt(self, prompt):
+    def _remote_system_prompt(self, prompt):
+        system_prompt = (
+            f"{DEFAULT_SYSTEM_PROMPT}\n\n"
+            f"{response_language_instruction(prompt)}\n\n"
+            "This request arrived through the authenticated Discord remote bridge. "
+            "In Discord, your interface name is Prometheusz. Prometheusz is the "
+            "Discord-facing identity of this LocalAI assistant. The authenticated "
+            "bridge may use persistent memory, grounded read-only web research, and "
+            "bounded LocalAI artifact creation when the shared action plan requires it. "
+            "Do not claim shell execution, arbitrary filesystem access, or write-capable "
+            "external actions unless actual results are supplied."
+        )
+        memory_context = self._build_memory_context(prompt)
+        if memory_context:
+            system_prompt = f"{system_prompt}\n\n{memory_context}"
+        return system_prompt
+
+    def _messages_for_prompt(self, chat, prompt):
+        messages = [
+            {"role": "system", "content": self._remote_system_prompt(prompt)}
+        ]
+        history = [
+            item for item in chat.get("messages", [])
+            if item.get("role") in {"user", "assistant"}
+        ][-24:]
+        messages.extend(history)
+        return messages
+
+    def _grounded_web_answer(self, prompt):
+        chat = self._load_remote_chat()
+        messages = self._messages_for_prompt(chat, prompt)
+        return run_chat_web_request(
+            self.ollama_client,
+            self.settings.model,
+            messages,
+            prompt,
+        ).strip()
+
+    def _remember_remote(self, prompt):
+        if self.memory_store is None:
+            raise RuntimeError("Persistent memory is not available.")
+
+        chat = self._load_remote_chat()
+        chat["model"] = self.settings.model
+        chat["messages"].append({"role": "user", "content": prompt})
+
+        written = remember_explicit_request(
+            self.ollama_client,
+            self.settings.model,
+            prompt,
+            self.memory_store,
+            source_chat_id=str(chat.get("id", "")) or None,
+        )
+        answer = (
+            f"Memory saved: {len(written)} item(s)."
+            if written
+            else "No memory was saved."
+        )
+        chat["messages"].append({"role": "assistant", "content": answer})
+        self.chat_store.save(chat)
+        return answer, str(chat.get("id", ""))
+
+    def _execute_planned_action(self, prompt, action_plan):
+        if action_plan.has(ACTION_MEMORY_WRITE):
+            answer, chat_id = self._remember_remote(prompt)
+            return {"chat_id": chat_id, "messages": [answer], "artifacts": []}
+
+        if action_plan.has(ACTION_ARTIFACT):
+            source_context = ""
+            if action_plan.has(ACTION_WEB_RESEARCH):
+                source_context = self._grounded_web_answer(prompt)
+
+            chat_id, artifact_results = self._create_remote_artifacts(
+                prompt,
+                action_plan.artifact_plans,
+                source_context=source_context,
+            )
+            return {
+                "chat_id": chat_id,
+                "messages": [],
+                "artifacts": artifact_results,
+            }
+
+        answer, chat_id = self._answer_prompt(
+            prompt,
+            force_web=action_plan.has(ACTION_WEB_RESEARCH),
+        )
+        return {"chat_id": chat_id, "messages": [answer], "artifacts": []}
+
+    def _answer_prompt(self, prompt, force_web=False):
         chat = self._load_remote_chat()
         chat["model"] = self.settings.model
         chat["messages"].append({"role": "user", "content": prompt})
@@ -545,37 +685,10 @@ class DiscordBotBridge(QObject):
             self.chat_store.save(chat)
             return direct_answer, str(chat.get("id", ""))
 
-        system_prompt = (
-            f"{DEFAULT_SYSTEM_PROMPT}\n\n"
-            f"{response_language_instruction(prompt)}\n\n"
-            "This request arrived through the authenticated Discord remote bridge. "
-            "In Discord, your interface name is Prometheusz. Prometheusz is not a separate "
-            "AI system: it is the Discord-facing identity of this LocalAI assistant, powered "
-            "by the configured local Ollama model. If the user asks whether you are "
-            "Prometheusz, answer yes and explain briefly that Prometheusz is your Discord "
-            "interface. Do not describe Prometheusz as another AI used by the LocalAI owner. "
-            "The Discord user, guild and channel were allowlisted by the LocalAI owner. "
-            "This bridge can perform the same read-only grounded web research as the desktop "
-            "WEB AUTO path when the user explicitly asks to search or requests current online "
-            "information. The bridge may also create bounded local PDF, DOCX, XLSX, HTML, "
-            "and Markdown summary artifacts when explicitly requested; those files are rendered "
-            "by the shared LocalAI artifact service and uploaded back to the same allowlisted "
-            "Discord channel. Do not claim to have executed shell commands, "
-            "arbitrary filesystem actions, write-capable extensions, or other tools unless their actual "
-            "results are explicitly supplied in the conversation."
-        )
-        memory_context = self._build_memory_context(prompt)
-        if memory_context:
-            system_prompt = f"{system_prompt}\n\n{memory_context}"
+        messages = self._messages_for_prompt(chat, prompt)
+        action_plan = plan_user_action(prompt, force_web=force_web)
 
-        messages = [{"role": "system", "content": system_prompt}]
-        history = [
-            item for item in chat.get("messages", [])
-            if item.get("role") in {"user", "assistant"}
-        ][-24:]
-        messages.extend(history)
-
-        if looks_like_web_request(prompt):
+        if action_plan.has(ACTION_WEB_RESEARCH):
             answer = run_chat_web_request(
                 self.ollama_client,
                 self.settings.model,
@@ -587,6 +700,14 @@ class DiscordBotBridge(QObject):
                 model=self.settings.model,
                 messages=messages,
             ).strip()
+            if answer_requires_web_fallback(prompt, answer):
+                answer = run_chat_web_request(
+                    self.ollama_client,
+                    self.settings.model,
+                    messages,
+                    prompt,
+                ).strip()
+
         if not answer:
             answer = "A helyi modell ures valaszt adott."
 
