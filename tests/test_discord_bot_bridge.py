@@ -809,3 +809,120 @@ def test_remote_artifact_with_web_context_does_not_use_stale_memory_shortcut(
         "",
     )
 
+
+def test_remote_crypto_quote_prefers_enabled_market_extension(tmp_path: Path, monkeypatch):
+    import app.discord_bot_bridge as bridge_module
+
+    class ExtensionStore:
+        def find_by_preset_id(self, preset_id):
+            assert preset_id == "crypto-market-data"
+            return {
+                "id": "market-ext",
+                "enabled": True,
+                "capabilities": ["crypto_quote", "crypto_ticker", "crypto_24h"],
+                "config": {
+                    "api_base_url": "https://api.exchange.coinbase.com",
+                    "default_quote": "USD",
+                },
+            }
+
+    monkeypatch.setattr(
+        bridge_module,
+        "run_crypto_market_request",
+        lambda extension, prompt: (
+            "A Bitcoin (BTC) aktuális ára: **81 632.88 USD**. "
+            "Forrás: Coinbase Exchange public market data."
+        ),
+    )
+    monkeypatch.setattr(
+        bridge_module,
+        "run_chat_web_request",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("web fallback must not run when market extension succeeds")
+        ),
+    )
+
+    class FailingOllama:
+        def chat_once(self, model, messages):
+            raise AssertionError("local model must not answer live crypto quote")
+
+    settings = DiscordBotSettings(
+        extension_id="ext-market",
+        name="Prometheusz",
+        guild_id=111111111111111111,
+        channel_id=222222222222222222,
+        allowed_user_id=333333333333333333,
+        model="qwen3-coder:30b",
+    )
+    bridge = DiscordBotBridge(
+        ollama_client=FailingOllama(),
+        chat_store=ChatStore(tmp_path / "chats"),
+        settings=settings,
+        token="T" * 40,
+        extension_store=ExtensionStore(),
+    )
+
+    answer, _chat_id = bridge._answer_prompt(
+        "Mennyi most a bitcoin árfolyama?"
+    )
+
+    assert "81 632.88 USD" in answer
+    assert "Coinbase Exchange public market data" in answer
+
+
+def test_remote_crypto_quote_falls_back_to_grounded_web_on_market_error(
+    tmp_path: Path,
+    monkeypatch,
+):
+    import app.discord_bot_bridge as bridge_module
+
+    class ExtensionStore:
+        def find_by_preset_id(self, preset_id):
+            return {
+                "id": "market-ext",
+                "enabled": True,
+                "capabilities": ["crypto_quote"],
+                "config": {},
+            }
+
+    monkeypatch.setattr(
+        bridge_module,
+        "run_crypto_market_request",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("market API unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        bridge_module,
+        "run_chat_web_request",
+        lambda client, model, messages, prompt: (
+            "WEB FALLBACK: BTC/USD 81 600 USD."
+        ),
+    )
+
+    class FailingOllama:
+        def chat_once(self, model, messages):
+            raise AssertionError("local model must not answer live crypto quote")
+
+    settings = DiscordBotSettings(
+        extension_id="ext-market-fallback",
+        name="Prometheusz",
+        guild_id=111111111111111111,
+        channel_id=222222222222222222,
+        allowed_user_id=333333333333333333,
+        model="qwen3-coder:30b",
+    )
+    bridge = DiscordBotBridge(
+        ollama_client=FailingOllama(),
+        chat_store=ChatStore(tmp_path / "chats"),
+        settings=settings,
+        token="T" * 40,
+        extension_store=ExtensionStore(),
+    )
+
+    answer, _chat_id = bridge._answer_prompt(
+        "Mennyi most a bitcoin árfolyama?"
+    )
+
+    assert answer == "WEB FALLBACK: BTC/USD 81 600 USD."
+
