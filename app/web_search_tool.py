@@ -935,8 +935,21 @@ _SEMVER_RE = re.compile(
 )
 
 
+def _fold_authority_text(value):
+    return " ".join(
+        re.sub(
+            r"[^a-z0-9._+-]+",
+            " ",
+            str(value or "").lower().translate(str.maketrans({
+                "á": "a", "é": "e", "í": "i", "ó": "o", "ö": "o",
+                "ő": "o", "ú": "u", "ü": "u", "ű": "u",
+            })),
+        ).split()
+    )
+
+
 def is_current_version_query(query):
-    normalized = _normalized_spec_text(query)
+    normalized = _fold_authority_text(query)
     return (
         any(marker in normalized for marker in _CURRENT_VERSION_MARKERS)
         and any(marker in normalized for marker in _VERSION_TOPIC_MARKERS)
@@ -944,7 +957,7 @@ def is_current_version_query(query):
 
 
 def _authority_identity_terms(query):
-    normalized = _normalized_spec_text(query)
+    normalized = _fold_authority_text(query)
     terms = [
         token for token in re.findall(r"[a-z0-9][a-z0-9._+-]*", normalized)
         if len(token) >= 3 and token not in _AUTHORITY_STOPWORDS
@@ -957,7 +970,7 @@ def _authority_score(query, item):
         return 0
 
     url = _decode_bing_result_url(str(item.get("url", "")).strip())
-    title = _normalized_spec_text(item.get("title", ""))
+    title = _fold_authority_text(item.get("title", ""))
     try:
         parsed = urlparse(url)
         host = (parsed.hostname or "").lower()
