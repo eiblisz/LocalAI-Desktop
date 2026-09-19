@@ -452,6 +452,7 @@ class PdfViewWidget(QWidget):
             error = self.document.load(str(path))
             self.view = QPdfView(self)
             self.view.setDocument(self.document)
+            self._add_pdf_zoom_toolbar(root)
             try:
                 self.view.setPageMode(QPdfView.PageMode.MultiPage)
                 zoom_mode = (
@@ -460,6 +461,7 @@ class PdfViewWidget(QWidget):
                     else QPdfView.ZoomMode.FitToWidth
                 )
                 self.view.setZoomMode(zoom_mode)
+                self._sync_zoom_label()
             except Exception:
                 pass
             root.addWidget(self.view, 1)
@@ -472,6 +474,70 @@ class PdfViewWidget(QWidget):
         fallback = QTextBrowser()
         fallback.setPlainText(pdf_text_fallback(path))
         root.addWidget(fallback, 1)
+
+
+    def _add_pdf_zoom_toolbar(self, layout):
+        toolbar = QFrame(self)
+        controls = QHBoxLayout(toolbar)
+        controls.setContentsMargins(8, 5, 8, 5)
+        controls.addStretch()
+
+        zoom_out = QPushButton("-")
+        zoom_out.setToolTip("Zoom out")
+        zoom_out.clicked.connect(lambda: self._zoom_by(0.9))
+
+        self.zoom_label = QLabel("100%")
+        self.zoom_label.setMinimumWidth(52)
+        self.zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        zoom_in = QPushButton("+")
+        zoom_in.setToolTip("Zoom in")
+        zoom_in.clicked.connect(lambda: self._zoom_by(1.1))
+
+        reset = QPushButton("100%")
+        reset.setToolTip("Reset zoom to 100%")
+        reset.clicked.connect(lambda: self._set_zoom_percent(100))
+
+        fit_width = QPushButton("FIT WIDTH")
+        fit_width.clicked.connect(self._fit_width)
+
+        fit_page = QPushButton("FIT PAGE")
+        fit_page.clicked.connect(self._fit_page)
+
+        for button in (zoom_out, zoom_in, reset, fit_width, fit_page):
+            controls.addWidget(button)
+        controls.insertWidget(controls.count() - 4, self.zoom_label)
+        layout.addWidget(toolbar)
+
+    def _set_zoom_percent(self, percent):
+        percent = max(25, min(int(percent), 400))
+        try:
+            self.view.setZoomMode(QPdfView.ZoomMode.Custom)
+        except Exception:
+            pass
+        self.view.setZoomFactor(percent / 100.0)
+        self._sync_zoom_label()
+
+    def _zoom_by(self, factor):
+        current = max(0.25, min(float(self.view.zoomFactor()), 4.0))
+        self._set_zoom_percent(round(current * factor * 100))
+
+    def _fit_width(self):
+        self.view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
+        self._sync_zoom_label()
+
+    def _fit_page(self):
+        self.view.setZoomMode(QPdfView.ZoomMode.FitInView)
+        self._sync_zoom_label()
+
+    def _sync_zoom_label(self):
+        if not hasattr(self, "zoom_label"):
+            return
+        try:
+            percent = round(float(self.view.zoomFactor()) * 100)
+            self.zoom_label.setText(f"{percent}%")
+        except Exception:
+            self.zoom_label.setText("AUTO")
 
 
 class DocumentView(QWidget):
