@@ -1264,3 +1264,21 @@ def test_current_version_compactor_rejects_new_version_tokens():
     assert "Qwen3.8" in compact
     assert "Qwen9.9" not in compact
 
+
+def test_version_like_token_guard_detects_semver_and_named_model_versions():
+    worker = workers.ChatWebWorker(
+        DummyWebClient(),
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Melyik a jelenlegi legfrissebb Qwen verzió?",
+    )
+
+    tokens = worker._version_like_tokens(
+        "Qwen3.8, Qwen9.9, v0.34.2 és 1.25.0"
+    )
+
+    assert "Qwen3.8" in tokens
+    assert "Qwen9.9" in tokens
+    assert "v0.34.2" in tokens
+    assert "1.25.0" in tokens
+
