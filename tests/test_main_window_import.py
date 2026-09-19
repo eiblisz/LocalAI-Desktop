@@ -910,8 +910,30 @@ def test_schedule_style_no_longer_reintroduces_large_button_height():
 
     source = inspect.getsource(MainWindow._apply_schedule_button_style)
 
-    assert '"padding:5px 10px;"' in source
-    assert '"min-height:32px;"' in source
-    assert '"max-height:34px;"' in source
+    assert 'self.schedule_button.setObjectName("sideMenuButton")' in source
+    assert 'self.schedule_button.setStyleSheet("")' in source
     assert "self.schedule_button.setFixedHeight(34)" in source
     assert '"min-height:44px;"' not in source
+
+
+def test_left_and_right_side_controls_share_one_visual_family():
+    import app.main_window as main_window_module
+    from app.main_window import MainWindow
+
+    tools_source = inspect.getsource(MainWindow._build_tools_panel)
+
+    assert 'button.setObjectName("sideMenuButton")' in tools_source
+    assert "QPushButton#sideMenuButton" in main_window_module.STYLE
+    assert "QPushButton#sideMenuButton:hover" in main_window_module.STYLE
+    assert "color: #AAB2BD;" in main_window_module.STYLE
+    assert "color: #FFFFFF;" in main_window_module.STYLE
+
+
+def test_side_chat_list_matches_menu_width_and_hover_language():
+    import app.main_window as main_window_module
+
+    assert "QListWidget#sideChatList" in main_window_module.STYLE
+    assert "QListWidget#sideChatList::item" in main_window_module.STYLE
+    assert "margin: 2px 1px;" in main_window_module.STYLE
+    assert "border-radius: 10px;" in main_window_module.STYLE
+    assert "QListWidget#sideChatList::item:hover" in main_window_module.STYLE
