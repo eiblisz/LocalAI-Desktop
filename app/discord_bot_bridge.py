@@ -767,7 +767,7 @@ class DiscordBotBridge(QObject):
                             prompt,
                         ).strip()
                 else:
-                    answer = run_chat_web_request(
+                    answer = run_market_web_request(
                         self.ollama_client,
                         self.settings.model,
                         messages,
@@ -789,7 +789,7 @@ class DiscordBotBridge(QObject):
                             prompt,
                         ).strip()
                 else:
-                    answer = run_chat_web_request(
+                    answer = run_market_web_request(
                         self.ollama_client,
                         self.settings.model,
                         messages,
