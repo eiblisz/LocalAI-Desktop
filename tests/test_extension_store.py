@@ -202,3 +202,29 @@ def test_secret_url_auth_stores_reference_not_secret_value(tmp_path):
     assert "discord.com/api/webhooks/" not in raw
     assert "token-value" not in raw
 
+
+def test_bot_token_auth_stores_reference_without_secret_material(tmp_path):
+    store = ExtensionStore(tmp_path)
+    saved = store.save({
+        "name": "Prometheusz Discord Bot",
+        "type": "mcp_connector",
+        "endpoint": "",
+        "enabled": False,
+        "auth_type": "bot_token",
+        "credential_ref": "extension:abc:discord_bot_token",
+        "capabilities": ["read_messages", "send_message", "remote_chat"],
+        "config": {
+            "preset_id": "discord-bot",
+            "guild_id": "123456789012345678",
+            "channel_id": "223456789012345678",
+            "allowed_user_id": "323456789012345678",
+            "model": "qwen3-coder:30b",
+        },
+    })
+
+    assert saved["auth_type"] == "bot_token"
+    assert saved["credential_ref"] == "extension:abc:discord_bot_token"
+    raw = store.path.read_text(encoding="utf-8")
+    assert "Authorization" not in raw
+    assert "Bot " not in raw
+
