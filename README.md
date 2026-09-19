@@ -88,6 +88,15 @@ The catalog includes a Discord Webhook preset with `send_message` and `send_embe
 
 Discord webhook support is outbound-only. Reading Discord messages and remote LocalAI control require the later Discord Bot connector.
 
+
+### Prometheusz Discord Bot
+
+The Communication catalog also includes a restricted Discord Bot preset for the existing Prometheusz bot. Its bot token is stored through the operating-system credential backend. The registry stores only a credential reference plus three explicit allowlist IDs: Discord guild, channel, and allowed user.
+
+When the preset is enabled, LocalAI Desktop starts a background Discord gateway bridge. Only messages from the configured user in the configured channel and guild are accepted. Each accepted message is sent to the selected local Ollama model and the reply is posted back to Discord. Remote Discord history is persisted in a dedicated `[DISCORD] Prometheusz` local chat.
+
+This first bot slice is conversational only: it does not execute shell commands, files, extensions, or system actions. Those capabilities must be added later behind explicit permission checks.
+
 ## Private runtime data
 
 Chats, schedules and persistent memory are user data, not repository state. They are stored outside the Git clone so switching branches, worktrees or clones does not make them disappear.
