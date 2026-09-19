@@ -53,16 +53,22 @@ def infer_artifact_format(text: str) -> str:
 
     if re.search(r"\b(pdf)\b", normalized):
         return "pdf"
-    if re.search(r"\b(docx|word)\b", normalized) or "word dokument" in normalized:
-        return "docx"
     if re.search(r"\b(xlsx|excel)\b", normalized) or "munkafüzet" in normalized:
         return "xlsx"
     if re.search(r"\b(html)\b", normalized) or "weboldal" in normalized:
         return "html"
+    if (
+        re.search(r"\b(doc|docx|word)\b", normalized)
+        or "word dokument" in normalized
+        or "dokumentum" in normalized
+    ):
+        return "docx"
 
     summary_markers = (
         "összefoglaló",
         "osszefoglalo",
+        "összesítő",
+        "osszesito",
         "summary",
         "brief",
     )
@@ -93,6 +99,8 @@ def _document_preset(text: str) -> str:
         return "Red Executive"
     if "red professional" in normalized:
         return "Red Professional"
+    if "classic" in normalized:
+        return "Classic Professional"
     return "Red Professional"
 
 
