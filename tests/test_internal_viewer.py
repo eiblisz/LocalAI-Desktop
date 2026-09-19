@@ -6,6 +6,7 @@ from openpyxl import Workbook
 
 from app.internal_viewer import (
     classify_resource,
+    convert_docx_to_pdf_preview,
     pdf_text_fallback,
     render_docx_html,
     resource_identity,
@@ -169,3 +170,64 @@ def test_save_as_dialog_defaults_to_downloads_and_preserves_extension():
     assert '"Save As"' in source
     assert "source.suffix" in source
     assert "save_resource_copy(source, destination)" in source
+
+
+def test_docx_pdf_preview_uses_headless_libreoffice_contract(tmp_path, monkeypatch):
+    source = tmp_path / "report.docx"
+    source.write_bytes(b"docx")
+    output_dir = tmp_path / "preview"
+    executable = tmp_path / "soffice.exe"
+    executable.write_bytes(b"exe")
+    captured = {}
+
+    class Completed:
+        returncode = 0
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "report.pdf").write_bytes(b"%PDF-preview")
+        return Completed()
+
+    monkeypatch.setattr("app.internal_viewer.subprocess.run", fake_run)
+
+    result = convert_docx_to_pdf_preview(
+        source,
+        output_dir,
+        executable=executable,
+    )
+
+    assert result == (output_dir / "report.pdf").resolve()
+    assert "--headless" in captured["args"]
+    assert "--convert-to" in captured["args"]
+    assert "pdf" in captured["args"]
+    assert "--outdir" in captured["args"]
+    assert str(source.resolve()) in captured["args"]
+    assert captured["timeout"] == 45
+
+
+def test_docx_pdf_preview_returns_none_when_libreoffice_is_unavailable(
+    tmp_path,
+    monkeypatch,
+):
+    source = tmp_path / "report.docx"
+    source.write_bytes(b"docx")
+    monkeypatch.setattr(
+        "app.internal_viewer.find_libreoffice_executable",
+        lambda: None,
+    )
+
+    assert convert_docx_to_pdf_preview(source, tmp_path / "preview") is None
+
+
+def test_docx_view_prefers_rendered_pdf_and_keeps_basic_fallback():
+    from app.internal_viewer import DocumentView
+
+    source = inspect.getsource(DocumentView.__init__)
+
+    assert "convert_docx_to_pdf_preview(" in source
+    assert "High-fidelity DOCX preview" in source
+    assert "PdfViewWidget(" in source
+    assert "show_save_as=False" in source
+    assert "Basic DOCX preview" in source
+    assert "render_docx_html(path)" in source
