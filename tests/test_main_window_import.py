@@ -797,3 +797,31 @@ def test_tradingview_workspace_uses_enabled_extension_config_or_safe_default():
     assert 'config.get("workspace_url")' in url_source
     assert 'value.startswith(("https://", "http://"))' in url_source
     assert "self._open_resource(self._tradingview_workspace_url())" in open_source
+
+
+def test_live_stock_forex_and_index_quotes_prefer_multi_asset_extension():
+    from app.main_window import MainWindow
+
+    send_source = inspect.getsource(MainWindow._send)
+    helper_source = inspect.getsource(MainWindow._multi_asset_market_extension)
+
+    assert 'find_by_preset_id(' in helper_source
+    assert '"multi-asset-market-data"' in helper_source
+    assert '"market_quote"' in helper_source
+    assert "is_multi_asset_quote_request(text_for_model)" in send_source
+    assert "MultiAssetMarketDataWorker(" in send_source
+    assert "ChatWebWorker(" in send_source
+    assert send_source.index("MultiAssetMarketDataWorker(") < send_source.index(
+        "ChatWebWorker("
+    )
+
+
+def test_crypto_and_multi_asset_structured_routing_remain_separate():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._send)
+
+    assert "is_crypto_quote_request(text_for_model)" in source
+    assert "is_multi_asset_quote_request(text_for_model)" in source
+    assert "MarketDataWorker(" in source
+    assert "MultiAssetMarketDataWorker(" in source
