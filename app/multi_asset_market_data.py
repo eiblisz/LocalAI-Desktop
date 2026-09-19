@@ -158,7 +158,7 @@ def _change_percent(last, previous):
 def _chart_payload(response):
     try:
         response.raise_for_status()
-    except requests.RequestException as exc:
+    except Exception as exc:
         raise MultiAssetMarketDataError(f"Market quote request failed: {exc}") from exc
 
     try:
