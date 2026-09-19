@@ -70,6 +70,28 @@ EXTENSION_PRESETS = (
         },
     },
     {
+        "id": "tradingview-workspace",
+        "name": "TradingView Workspace",
+        "category": "Business & Operations",
+        "description": "Open TradingView inside the LocalAI workspace for interactive stock, crypto, forex and index charting.",
+        "type": "custom_tool",
+        "auth_type": "none",
+        "capabilities": (
+            "market_chart",
+            "stocks",
+            "crypto",
+            "forex",
+            "indices",
+            "market_visualization",
+        ),
+        "provider_url": "https://www.tradingview.com/",
+        "docs_url": "https://www.tradingview.com/widget-docs/",
+        "default_config": {
+            "workspace_url": "https://www.tradingview.com/markets/",
+            "provider": "tradingview_browser_workspace",
+        },
+    },
+    {
         "id": "google-calendar",
         "name": "Google Calendar",
         "category": "Productivity",
