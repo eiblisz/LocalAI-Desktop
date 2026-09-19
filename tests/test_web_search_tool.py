@@ -852,3 +852,80 @@ def test_web_context_marks_qualified_tool_scope_mismatch():
     assert "qualified subproduct/tool not named in the query" in context
     assert "AUTHORITATIVE CURRENT FACT" not in context
 
+
+def test_named_model_generation_beats_unrelated_decimal_parameter_count():
+    item = {
+        "title": "Model releases - NimbusCloud",
+        "url": "https://nimbus.example.com/model-releases",
+        "snippet": "Latest Nimbus model releases",
+        "page_text": (
+            "Its latest version, Nimbus3.8, is a 2.4 trillion parameter model "
+            "with a 1.0 million token context window."
+        ),
+    }
+
+    value = web_search_tool._extract_release_value(
+        item,
+        query="Nimbus latest version release",
+    )
+
+    assert value == "Nimbus3.8"
+
+
+def test_bare_decimal_parameter_count_is_not_treated_as_release_version():
+    item = {
+        "title": "Model releases - NimbusCloud",
+        "url": "https://nimbus.example.com/model-releases",
+        "snippet": "Latest Nimbus model information",
+        "page_text": (
+            "The current flagship uses 2.4 trillion parameters and 1.0 million "
+            "tokens of context."
+        ),
+    }
+
+    value = web_search_tool._extract_release_value(
+        item,
+        query="Nimbus latest version release",
+    )
+
+    assert value == ""
+
+
+def test_explicit_version_language_allows_bare_decimal_version():
+    item = {
+        "title": "Nimbus release notes",
+        "url": "https://nimbus.example.com/releases",
+        "snippet": "Current version: 2.4",
+        "page_text": "The current version: 2.4 is now generally available.",
+    }
+
+    value = web_search_tool._extract_release_value(
+        item,
+        query="Nimbus latest version release",
+    )
+
+    assert value == "2.4"
+
+
+def test_qwen_style_family_page_does_not_return_parameter_count_as_version():
+    payload = {
+        "query": "Qwen latest version release",
+        "results": [
+            {
+                "title": "Model releases - QwenCloud",
+                "url": "https://qwen.example.com/model-releases",
+                "snippet": "New launches and updates",
+                "page_text": (
+                    "Its latest version, Qwen3.8, is the 2.4 trillion parameter "
+                    "model in the Qwen family."
+                ),
+            }
+        ],
+    }
+
+    fact = web_search_tool.authoritative_current_fact(payload)
+
+    assert fact is not None
+    assert fact["value"].lower() == "qwen3.8"
+    assert fact["value"] != "2.4"
+
