@@ -660,7 +660,7 @@ class MainWindow(QMainWindow):
         self._select_tool("PDF")
         return frame
 
-    def _load_models(self):
+    def _refresh_local_model_hub(self):
         previous = self.model_combo.currentText().strip()
         saved = ""
         if self.current_chat:
@@ -705,6 +705,9 @@ class MainWindow(QMainWindow):
             self.model_combo.blockSignals(False)
             self.model_count_label.setText("0")
             self.model_label.setText("LOCAL MODELS")
+
+    def _load_models(self):
+        self._refresh_local_model_hub()
 
     def _load_chat_list(self):
         selected_id = self.current_chat.get("id") if self.current_chat else None
