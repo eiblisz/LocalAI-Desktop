@@ -10,6 +10,8 @@ from PySide6.QtCore import QObject, Signal
 from .config import DEFAULT_SYSTEM_PROMPT
 from .language_policy import response_language_instruction
 from .memory_answers import direct_user_memory_answer
+from .web_intent import looks_like_web_request
+from .workers import run_chat_web_request
 
 
 DISCORD_API_BASE = "https://discord.com/api/v10"
@@ -403,9 +405,10 @@ class DiscordBotBridge(QObject):
             "Prometheusz, answer yes and explain briefly that Prometheusz is your Discord "
             "interface. Do not describe Prometheusz as another AI used by the LocalAI owner. "
             "The Discord user, guild and channel were allowlisted by the LocalAI owner. "
-            "This bridge version provides conversational access only. Do not claim to "
-            "have executed shell commands, files, external tools, or extensions unless "
-            "their actual results are explicitly supplied in the conversation."
+            "This bridge can perform the same read-only grounded web research as the desktop "
+            "WEB AUTO path when the user explicitly asks to search or requests current online "
+            "information. Do not claim to have executed shell commands, files, write actions, "
+            "or other extensions unless their actual results are explicitly supplied in the conversation."
         )
         memory_context = self._build_memory_context(prompt)
         if memory_context:
@@ -418,10 +421,18 @@ class DiscordBotBridge(QObject):
         ][-24:]
         messages.extend(history)
 
-        answer = self.ollama_client.chat_once(
-            model=self.settings.model,
-            messages=messages,
-        ).strip()
+        if looks_like_web_request(prompt):
+            answer = run_chat_web_request(
+                self.ollama_client,
+                self.settings.model,
+                messages,
+                prompt,
+            ).strip()
+        else:
+            answer = self.ollama_client.chat_once(
+                model=self.settings.model,
+                messages=messages,
+            ).strip()
         if not answer:
             answer = "A helyi modell ures valaszt adott."
 
