@@ -231,3 +231,14 @@ def test_docx_view_prefers_rendered_pdf_and_keeps_basic_fallback():
     assert "show_save_as=False" in source
     assert "Basic DOCX preview" in source
     assert "render_docx_html(path)" in source
+
+
+def test_docx_high_fidelity_preview_fits_full_page():
+    from app.internal_viewer import DocumentView, PdfViewWidget
+
+    docx_source = inspect.getsource(DocumentView.__init__)
+    pdf_source = inspect.getsource(PdfViewWidget.__init__)
+
+    assert "fit_full_page=True" in docx_source
+    assert "QPdfView.ZoomMode.FitInView" in pdf_source
+    assert "QPdfView.ZoomMode.FitToWidth" in pdf_source
