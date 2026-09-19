@@ -15,6 +15,10 @@ from .artifact_service import (
     infer_artifact_requests,
 )
 from .config import DEFAULT_SYSTEM_PROMPT
+from .crypto_market_data import (
+    is_crypto_quote_request,
+    run_crypto_market_request,
+)
 from .document_tools import (
     build_document_messages,
     build_excel_messages,
@@ -158,12 +162,14 @@ class DiscordBotBridge(QObject):
         settings,
         token,
         memory_store=None,
+        extension_store=None,
         parent=None,
     ):
         super().__init__(parent)
         self.ollama_client = ollama_client
         self.chat_store = chat_store
         self.memory_store = memory_store
+        self.extension_store = extension_store
         self.settings = settings
         self.token = validate_bot_token(token)
         self._thread = None
@@ -627,6 +633,25 @@ class DiscordBotBridge(QObject):
             prompt,
         ).strip()
 
+    def _crypto_market_extension(self):
+        if self.extension_store is None:
+            return None
+        extension = self.extension_store.find_by_preset_id("crypto-market-data")
+        if not extension or not bool(extension.get("enabled", False)):
+            return None
+        if "crypto_quote" not in set(extension.get("capabilities") or []):
+            return None
+        return extension
+
+    def _grounded_external_answer(self, prompt):
+        extension = self._crypto_market_extension()
+        if extension is not None and is_crypto_quote_request(prompt):
+            try:
+                return run_crypto_market_request(extension, prompt).strip()
+            except Exception:
+                pass
+        return self._grounded_web_answer(prompt)
+
     def _remember_remote(self, prompt):
         if self.memory_store is None:
             raise RuntimeError("Persistent memory is not available.")
@@ -659,7 +684,7 @@ class DiscordBotBridge(QObject):
         if action_plan.has(ACTION_ARTIFACT):
             source_context = ""
             if action_plan.has(ACTION_WEB_RESEARCH):
-                source_context = self._grounded_web_answer(prompt)
+                source_context = self._grounded_external_answer(prompt)
 
             chat_id, artifact_results = self._create_remote_artifacts(
                 prompt,
