@@ -21,6 +21,12 @@ class ArtifactRequest:
     preset: str
 
 
+@dataclass(frozen=True)
+class ArtifactPlanItem:
+    prompt: str
+    request: ArtifactRequest
+
+
 def _fold(text: str) -> str:
     return " ".join(str(text or "").strip().casefold().split())
 
@@ -125,6 +131,61 @@ def infer_artifact_request(text: str) -> ArtifactRequest | None:
         preset = _document_preset(text)
 
     return ArtifactRequest(format=artifact_format, preset=preset)
+
+
+_CREATION_START = re.compile(
+    r"(?i)(?:készíts|keszits|csinálj|csinalj|hozz\s+létre|hozz\s+letre|"
+    r"generálj|generalj|mentsd|create|make|generate|export)\b"
+)
+
+
+def _split_artifact_clauses(text: str) -> list[str]:
+    raw = str(text or "").strip()
+    if not raw:
+        return []
+
+    clauses = []
+    for line in re.split(r"[\r\n]+", raw):
+        line = line.strip()
+        if not line:
+            continue
+
+        starts = [match.start() for match in _CREATION_START.finditer(line)]
+        if len(starts) <= 1:
+            clauses.append(line)
+            continue
+
+        starts.append(len(line))
+        for index in range(len(starts) - 1):
+            piece = line[starts[index]:starts[index + 1]].strip(" \t,;.-")
+            if piece:
+                clauses.append(piece)
+
+    return clauses
+
+
+def infer_artifact_requests(text: str) -> list[ArtifactPlanItem]:
+    """
+    Plan every explicit artifact request in one user message.
+
+    Each clause is classified independently so a preset mentioned for one output
+    cannot leak into a different output (for example Classic HTML must not turn
+    an Excel request into a Classic workbook).
+    """
+    plans = []
+    for clause in _split_artifact_clauses(text):
+        request = infer_artifact_request(clause)
+        if request is None:
+            continue
+        plans.append(ArtifactPlanItem(prompt=clause, request=request))
+
+    if plans:
+        return plans
+
+    request = infer_artifact_request(text)
+    if request is None:
+        return []
+    return [ArtifactPlanItem(prompt=str(text or "").strip(), request=request)]
 
 
 def _safe_stem(title: str) -> str:
