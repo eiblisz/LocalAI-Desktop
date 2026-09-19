@@ -554,3 +554,18 @@ def test_prometheusz_remote_bridge_does_not_add_shell_execution_to_main_chat():
     assert "subprocess" not in send
     assert "os.system" not in send
 
+
+def test_desktop_artifact_tools_use_shared_artifact_service():
+    from app.main_window import MainWindow
+
+    creator = inspect.getsource(MainWindow._artifact_creator)
+    create_selected = inspect.getsource(MainWindow._create_selected_tool)
+    ready = inspect.getsource(MainWindow._on_document_ready)
+
+    assert "create_artifact(" in creator
+    assert 'create_artifact(\n                        "xlsx"' in create_selected
+    assert 'create_artifact(\n                    "xlsx"' in ready
+    assert "create_pdf(" not in creator
+    assert "create_docx(" not in creator
+    assert "create_html(" not in creator
+

@@ -100,7 +100,11 @@ def test_prometheusz_discord_bot_preset_has_remote_chat_allowlist_defaults():
         "send_message",
         "remote_chat",
         "web_research",
-        "pdf_create",
+        "artifact_pdf",
+        "artifact_docx",
+        "artifact_xlsx",
+        "artifact_html",
+        "artifact_summary",
         "file_upload",
     )
     assert payload["enabled"] is False

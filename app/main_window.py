@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .artifact_service import create_artifact
 from .artifact_utils import (
     artifact_url,
     open_file,
@@ -45,18 +46,14 @@ from .document_tools import (
 from .artifact_themes import document_preset_labels, workbook_preset_labels
 from .chat_extensions_dialog import ChatExtensionsDialog
 from .discord_bot_bridge import DiscordBotBridge, DiscordBotSettings
-from .docx_tool import create_docx
-from .excel_tool import create_conversation_excel, create_structured_excel
 from .extension_store import ExtensionStore
 from .extensions_dialog import ExtensionsDialog
 from .file_reader import read_attachment
-from .html_tool import create_html
 from .language_policy import response_language_instruction
 from .memory_answers import direct_user_memory_answer
 from .memory_extractor import is_explicit_memory_request
 from .memory_store import MemoryStore
 from .ollama_client import OllamaClient
-from .pdf_tool import create_pdf
 from .resource_monitor import format_resource_summary, get_system_metrics
 from .scheduler_dialog import SchedulerDialog
 from .scheduler_store import ScheduledTaskStore
@@ -1715,31 +1712,22 @@ class MainWindow(QMainWindow):
         self.pdf_topic.setVisible(custom)
 
     def _artifact_creator(self, tool, preset):
-        if tool == "PDF":
-            return lambda messages, title: create_pdf(
-                messages,
-                title=title,
-                preset=preset,
-            )
-        if tool == "DOCX":
-            model_name = (
-                self.pending_model
-                or (self.current_chat or {}).get("model", "")
-                or self.model_combo.currentText().strip()
-            )
-            return lambda messages, title: create_docx(
-                messages,
-                title=title,
-                model_name=model_name,
-                preset=preset,
-            )
-        if tool == "HTML":
-            return lambda messages, title: create_html(
-                messages,
-                title=title,
-                preset=preset,
-            )
-        return None
+        normalized = str(tool or "").strip().casefold()
+        if normalized not in {"pdf", "docx", "html"}:
+            return None
+
+        model_name = (
+            self.pending_model
+            or (self.current_chat or {}).get("model", "")
+            or self.model_combo.currentText().strip()
+        )
+        return lambda messages, title: create_artifact(
+            normalized,
+            messages=messages,
+            title=title,
+            model_name=model_name,
+            preset=preset,
+        )
 
     def _selected_model(self):
         model = self.model_combo.currentText().strip()
@@ -1786,8 +1774,9 @@ class MainWindow(QMainWindow):
 
             try:
                 if tool == "EXCEL":
-                    path = create_conversation_excel(
-                        messages,
+                    path = create_artifact(
+                        "xlsx",
+                        messages=messages,
                         title=title,
                         model_name=(
                             (self.current_chat or {}).get("model", "")
@@ -1896,8 +1885,9 @@ class MainWindow(QMainWindow):
 
         try:
             if tool == "EXCEL":
-                path = create_structured_excel(
-                    content,
+                path = create_artifact(
+                    "xlsx",
+                    content=content,
                     title=title,
                     source_text=self.pending_source_text,
                     model_name=self.pending_model,

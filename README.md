@@ -97,9 +97,11 @@ When the preset is enabled, LocalAI Desktop starts a background Discord gateway 
 
 Prometheusz also reuses the desktop WEB AUTO pipeline for explicit search/current-information requests. Remote web research is read-only and inherits the same grounded search, product-evidence, language, source, and fail-closed behavior as the desktop chat.
 
-Prometheusz can create a bounded local PDF when the allowlisted user explicitly asks for one. PDF content uses the same persistent LocalAI memory context when relevant, the host PDF renderer applies supported themes such as Red Executive, and the finished PDF is uploaded back to the same Discord channel as an attachment.
+Prometheusz can create bounded local artifacts when the allowlisted user explicitly asks for a file. Supported remote artifact formats are PDF, DOCX, XLSX, HTML and Markdown summary files. The same persistent LocalAI memory context is reused when relevant, supported document/workbook themes are preserved, and the finished file is uploaded back to the same Discord channel as an attachment.
 
-The bot still does not execute shell commands, arbitrary filesystem actions, write-capable extensions, or system actions. PDF creation is limited to the LocalAI artifact output path and does not grant general file-system control.
+Desktop quick tools and Prometheusz now render through the same bounded artifact service. The service may create files only inside the configured LocalAI artifact output directory; returned renderer paths are validated before delivery.
+
+The bot still does not execute shell commands, arbitrary filesystem actions, file deletion, write-capable external extensions, or system actions. Artifact creation does not grant general file-system control.
 
 ## Private runtime data
 
