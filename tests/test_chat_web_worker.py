@@ -941,3 +941,80 @@ def test_adaptive_chat_worker_keeps_confident_local_answer_without_web(monkeypat
     assert tokens == ["A TCP egy megbízható, kapcsolatorientált protokoll."]
     assert worker.used_web_fallback is False
 
+
+def test_web_worker_replaces_stale_secondary_release_with_first_party_current_fact(monkeypatch):
+    class WrongReleaseClient(DummyWebClient):
+        def chat_stream(
+            self,
+            model,
+            messages,
+            on_token,
+            should_stop,
+            timeout=600.0,
+        ):
+            self.stream_calls.append((model, messages))
+            if not should_stop():
+                on_token(
+                    "A legújabb elérhető Ollama verzió: v0.33.2. "
+                    "Forrás: egy másodlagos kiadási oldal."
+                )
+
+    monkeypatch.setattr(
+        workers.ChatWebWorker,
+        "_generate_search_queries",
+        lambda self: ["Ollama latest version release"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "search_web",
+        lambda query, max_results=6, fetch_pages=True: {
+            "provider": "Brave Search API",
+            "query": query,
+            "provider_query": query,
+            "retrieved_at": "2026-09-19T12:59:00",
+            "provider_chain_errors": [],
+            "results": [
+                {
+                    "title": "Releasebot - Ollama releases",
+                    "url": "https://releasebot.io/updates/ollama",
+                    "snippet": "Tracked version v0.33.2",
+                    "page_text": "v0.33.2",
+                },
+                {
+                    "title": "Releases · ollama/ollama · GitHub",
+                    "url": "https://github.com/ollama/ollama/releases",
+                    "snippet": "Official releases",
+                    "page_text": (
+                        "Release list v0.34.2 v0.34.1 v0.34.0 v0.33.3 v0.33.2 "
+                        "v0.34.2 Latest What's Changed"
+                    ),
+                },
+            ],
+        },
+    )
+
+    client = WrongReleaseClient()
+    tokens = []
+    failed = []
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Mi a legújabb Ollama verzió?",
+    )
+    worker.token.connect(tokens.append)
+    worker.failed.connect(failed.append)
+    worker.run()
+
+    assert not failed
+    combined = "".join(tokens)
+    assert "**v0.34.2**" in combined
+    assert "github.com/ollama/ollama/releases" in combined
+    assert "legújabb elérhető Ollama verzió: v0.33.2" not in combined
+
+    streamed_messages = client.stream_calls[0][1]
+    grounded = "\n".join(item["content"] for item in streamed_messages)
+    assert "AUTHORITATIVE CURRENT FACT" in grounded
+    assert "Value: v0.34.2" in grounded
+    assert "prefer that first-party authority" in grounded
+
