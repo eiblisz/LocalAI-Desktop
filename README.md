@@ -101,6 +101,14 @@ Prometheusz can create bounded local artifacts when the allowlisted user explici
 
 Desktop quick tools and Prometheusz now render through the same bounded artifact service. The service may create files only inside the configured LocalAI artifact output directory; returned renderer paths are validated before delivery.
 
+### Unified action routing
+
+Normal desktop chat now uses one shared action-planning policy for memory writes, grounded web research, artifact intent and stable local chat. Requests whose answers are likely to expire (for example current versions, prices, availability or latest releases) automatically route to grounded WEB AUTO even when the user did not explicitly say "search the web".
+
+Stable questions stay local. When a stable local-model answer explicitly reports missing or stale knowledge, LocalAI retries that request once through the grounded read-only web runtime and returns the grounded result instead of the stale draft. Creative and transformation requests do not trigger this fallback merely because the model expresses uncertainty.
+
+Web results remain conversation evidence; they are not silently promoted into persistent memory. Durable memory writes still require an explicit memory request.
+
 The bot still does not execute shell commands, arbitrary filesystem actions, file deletion, write-capable external extensions, or system actions. Artifact creation does not grant general file-system control.
 
 ## Private runtime data
