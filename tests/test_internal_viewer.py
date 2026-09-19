@@ -10,6 +10,7 @@ from app.internal_viewer import (
     render_docx_html,
     resource_identity,
     resource_title,
+    save_resource_copy,
     spreadsheet_preview,
 )
 
@@ -132,3 +133,39 @@ def test_docx_view_uses_light_document_surface_in_dark_app_theme():
     assert "background:#FFFFFF" in source
     assert "color:#20242A" in source
     assert "view.setHtml(render_docx_html(path))" in source
+
+
+def test_save_resource_copy_preserves_local_artifact_bytes(tmp_path):
+    source = tmp_path / "source.docx"
+    source.write_bytes(b"local-ai-artifact")
+    destination = tmp_path / "exports" / "saved.docx"
+
+    result = save_resource_copy(source, destination)
+
+    assert result == destination.resolve()
+    assert destination.read_bytes() == b"local-ai-artifact"
+
+
+def test_requested_document_viewers_expose_shared_save_as_action():
+    from app.internal_viewer import (
+        DocumentView,
+        MarkdownTextView,
+        PdfViewWidget,
+        SpreadsheetView,
+    )
+
+    for viewer in (PdfViewWidget, DocumentView, SpreadsheetView, MarkdownTextView):
+        source = inspect.getsource(viewer.__init__)
+        assert "_add_save_as_toolbar(root, path, self)" in source
+
+
+def test_save_as_dialog_defaults_to_downloads_and_preserves_extension():
+    from app import internal_viewer
+
+    source = inspect.getsource(internal_viewer._save_resource_as_dialog)
+    default_source = inspect.getsource(internal_viewer._default_save_path)
+
+    assert 'Path.home() / "Downloads"' in default_source
+    assert '"Save As"' in source
+    assert "source.suffix" in source
+    assert "save_resource_copy(source, destination)" in source
