@@ -495,7 +495,7 @@ def test_extensions_dialog_is_wired_but_not_injected_into_chat_runtime():
     assert "self.extensions_dialog = None" in init_source
     assert "ExtensionsDialog(" in open_source
     assert "self.extension_store" in open_source
-    assert "extension_store" not in send_source
+    assert "_crypto_market_extension" in send_source
     assert "extensions_dialog" not in send_source
 
 
@@ -519,7 +519,6 @@ def test_chat_extension_attachments_are_not_injected_into_model_runtime_yet():
     send_source = inspect.getsource(MainWindow._send)
 
     assert "attached_extensions" not in send_source
-    assert "extension_store" not in send_source
     assert "ChatExtensionsDialog" not in send_source
 
 
@@ -719,4 +718,26 @@ def test_realtime_access_refusal_triggers_grounded_web_fallback():
             "mivel én nem tudok valós időben hozzáférni a kriptovaluta piaci adatokhoz."
         ),
     )
+
+
+def test_live_crypto_quotes_prefer_enabled_market_data_extension():
+    from app.main_window import MainWindow
+
+    send_source = inspect.getsource(MainWindow._send)
+    helper_source = inspect.getsource(MainWindow._crypto_market_extension)
+
+    assert 'find_by_preset_id("crypto-market-data")' in helper_source
+    assert '"crypto_quote"' in helper_source
+    assert "is_crypto_quote_request(text_for_model)" in send_source
+    assert "MarketDataWorker(" in send_source
+    assert "ChatWebWorker(" in send_source
+    assert send_source.index("MarketDataWorker(") < send_source.index("ChatWebWorker(")
+
+
+def test_discord_bridge_receives_shared_extension_store_for_market_runtime():
+    from app.main_window import MainWindow
+
+    sync_source = inspect.getsource(MainWindow._sync_discord_bot_bridge)
+
+    assert "extension_store=self.extension_store" in sync_source
 
