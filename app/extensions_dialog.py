@@ -16,6 +16,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .discord_bot_bridge import (
+    test_discord_bot_token,
+    validate_bot_token,
+)
 from .discord_webhook import (
     send_discord_test_message,
     test_discord_webhook,
@@ -80,7 +84,30 @@ class DiscordWebhookWorker(QObject):
             self.failed.emit(str(exc))
 
 
+class DiscordBotTestWorker(QObject):
+    finished = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, bot_token, timeout=10):
+        super().__init__()
+        self.bot_token = bot_token
+        self.timeout = timeout
+
+    @Slot()
+    def run(self):
+        try:
+            self.finished.emit(
+                test_discord_bot_token(
+                    self.bot_token,
+                    timeout=self.timeout,
+                )
+            )
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
 class ExtensionsDialog(QDialog):
+    changed = Signal()
     def __init__(self, store: ExtensionStore, parent=None):
         super().__init__(parent)
         self.store = store
@@ -214,6 +241,26 @@ class ExtensionsDialog(QDialog):
         self.clear_secret_button.clicked.connect(self._clear_secret)
         secret_buttons.addWidget(self.clear_secret_button)
         form.addRow("", secret_buttons)
+
+        self.bot_guild_label = QLabel("Discord Guild ID")
+        self.bot_guild_edit = QLineEdit()
+        self.bot_guild_edit.setPlaceholderText("Server / Guild numeric ID")
+        form.addRow(self.bot_guild_label, self.bot_guild_edit)
+
+        self.bot_channel_label = QLabel("Discord Channel ID")
+        self.bot_channel_edit = QLineEdit()
+        self.bot_channel_edit.setPlaceholderText("Dedicated #localai channel numeric ID")
+        form.addRow(self.bot_channel_label, self.bot_channel_edit)
+
+        self.bot_user_label = QLabel("Allowed User ID")
+        self.bot_user_edit = QLineEdit()
+        self.bot_user_edit.setPlaceholderText("Only this Discord user may command LocalAI")
+        form.addRow(self.bot_user_label, self.bot_user_edit)
+
+        self.bot_model_label = QLabel("Bot Model")
+        self.bot_model_edit = QLineEdit()
+        self.bot_model_edit.setPlaceholderText("Blank = current LocalAI model when bot starts")
+        form.addRow(self.bot_model_label, self.bot_model_edit)
 
         self.timeout_spin = QSpinBox()
         self.timeout_spin.setRange(1, 120)
@@ -404,6 +451,7 @@ class ExtensionsDialog(QDialog):
             "Preset added. Configure its endpoint/credentials when support is available, "
             "then enable it explicitly."
         )
+        self.changed.emit()
 
     def _new_extension(self):
         self.current_id = ""
@@ -420,6 +468,10 @@ class ExtensionsDialog(QDialog):
         self.delete_button.setEnabled(False)
         self.current_credential_ref = ""
         self.secret_edit.clear()
+        self.bot_guild_edit.clear()
+        self.bot_channel_edit.clear()
+        self.bot_user_edit.clear()
+        self.bot_model_edit.clear()
         self._refresh_secret_controls()
 
     def _extension_selected(self, item):
@@ -445,6 +497,11 @@ class ExtensionsDialog(QDialog):
         self.auth_combo.setCurrentIndex(max(auth_index, 0))
         self.current_credential_ref = str(extension.get("credential_ref", "") or "")
         self.secret_edit.clear()
+        config = dict(extension.get("config") or {})
+        self.bot_guild_edit.setText(str(config.get("guild_id", "") or ""))
+        self.bot_channel_edit.setText(str(config.get("channel_id", "") or ""))
+        self.bot_user_edit.setText(str(config.get("allowed_user_id", "") or ""))
+        self.bot_model_edit.setText(str(config.get("model", "") or ""))
         self._refresh_secret_controls(extension)
 
         self.timeout_spin.setValue(
@@ -462,6 +519,19 @@ class ExtensionsDialog(QDialog):
         self.delete_button.setEnabled(True)
 
     def _form_payload(self):
+        config = {}
+        if self.current_id:
+            try:
+                config = dict(self.store.get(self.current_id).get("config") or {})
+            except Exception:
+                config = {}
+
+        if config.get("preset_id") == "discord-bot":
+            config["guild_id"] = self.bot_guild_edit.text().strip()
+            config["channel_id"] = self.bot_channel_edit.text().strip()
+            config["allowed_user_id"] = self.bot_user_edit.text().strip()
+            config["model"] = self.bot_model_edit.text().strip()
+
         return {
             "id": self.current_id,
             "name": self.name_edit.text(),
@@ -472,6 +542,7 @@ class ExtensionsDialog(QDialog):
             "credential_ref": self.current_credential_ref,
             "capabilities": self.capabilities_edit.text(),
             "timeout": self.timeout_spin.value(),
+            "config": config,
         }
 
     def _save_extension(self, _checked=False, *, silent=False):
@@ -489,6 +560,7 @@ class ExtensionsDialog(QDialog):
         self._refresh_list(selected_id=self.current_id)
         if not silent:
             self.status_label.setText("Extension saved.")
+            self.changed.emit()
         return extension
 
     def _delete_extension(self):
@@ -512,6 +584,7 @@ class ExtensionsDialog(QDialog):
             return
 
         self.current_credential_ref = ""
+        self.changed.emit()
         self._refresh_list()
         self._new_extension()
 
@@ -520,6 +593,11 @@ class ExtensionsDialog(QDialog):
         config = dict((extension or {}).get("config") or {})
         return config.get("preset_id") == "discord-webhook"
 
+    @staticmethod
+    def _is_discord_bot(extension):
+        config = dict((extension or {}).get("config") or {})
+        return config.get("preset_id") == "discord-bot"
+
     def _refresh_secret_controls(self, extension=None):
         if extension is None and self.current_id:
             try:
@@ -527,25 +605,50 @@ class ExtensionsDialog(QDialog):
             except Exception:
                 extension = None
 
-        is_discord = self._is_discord_webhook(extension or {})
+        is_webhook = self._is_discord_webhook(extension or {})
+        is_bot = self._is_discord_bot(extension or {})
+        uses_secret = is_webhook or is_bot
+
         for widget in (
             self.secret_label,
             self.secret_edit,
             self.save_secret_button,
             self.clear_secret_button,
-            self.send_test_message_button,
         ):
-            widget.setVisible(is_discord)
+            widget.setVisible(uses_secret)
 
-        if is_discord:
+        self.send_test_message_button.setVisible(is_webhook)
+
+        for widget in (
+            self.bot_guild_label,
+            self.bot_guild_edit,
+            self.bot_channel_label,
+            self.bot_channel_edit,
+            self.bot_user_label,
+            self.bot_user_edit,
+            self.bot_model_label,
+            self.bot_model_edit,
+        ):
+            widget.setVisible(is_bot)
+
+        if uses_secret:
             has_secret = bool(self.current_credential_ref)
             self.clear_secret_button.setEnabled(has_secret)
-            self.send_test_message_button.setEnabled(has_secret)
-            self.secret_edit.setPlaceholderText(
-                "Webhook URL saved securely"
-                if has_secret
-                else "https://discord.com/api/webhooks/..."
-            )
+            self.send_test_message_button.setEnabled(has_secret and is_webhook)
+            if is_webhook:
+                self.secret_label.setText("Discord Webhook URL")
+                self.secret_edit.setPlaceholderText(
+                    "Webhook URL saved securely"
+                    if has_secret
+                    else "https://discord.com/api/webhooks/..."
+                )
+            else:
+                self.secret_label.setText("Discord Bot Token")
+                self.secret_edit.setPlaceholderText(
+                    "Bot token saved securely"
+                    if has_secret
+                    else "Paste Prometheusz bot token"
+                )
 
     def _save_secret(self):
         if not self.current_id:
@@ -558,14 +661,23 @@ class ExtensionsDialog(QDialog):
             self.status_label.setText(f"Extension load failed: {exc}")
             return
 
-        if not self._is_discord_webhook(extension):
-            self.status_label.setText("Secure URL binding is only enabled for Discord Webhook in this slice.")
+        is_webhook = self._is_discord_webhook(extension)
+        is_bot = self._is_discord_bot(extension)
+        if not (is_webhook or is_bot):
+            self.status_label.setText("Secure secret binding is not enabled for this extension.")
             return
 
         try:
-            webhook_url = validate_discord_webhook_url(self.secret_edit.text())
-            credential_ref = f"extension:{self.current_id}:discord_webhook_url"
-            self.secret_store.set_secret(credential_ref, webhook_url)
+            if is_webhook:
+                secret_value = validate_discord_webhook_url(self.secret_edit.text())
+                credential_ref = f"extension:{self.current_id}:discord_webhook_url"
+                success_text = "Discord webhook URL saved in the operating-system credential store."
+            else:
+                secret_value = validate_bot_token(self.secret_edit.text())
+                credential_ref = f"extension:{self.current_id}:discord_bot_token"
+                success_text = "Discord bot token saved in the operating-system credential store."
+
+            self.secret_store.set_secret(credential_ref, secret_value)
             extension["credential_ref"] = credential_ref
             updated = self.store.save(extension)
         except Exception as exc:
@@ -574,10 +686,9 @@ class ExtensionsDialog(QDialog):
 
         self.current_credential_ref = updated.get("credential_ref", "")
         self.secret_edit.clear()
-        self.status_label.setText(
-            "Discord webhook URL saved in the operating-system credential store."
-        )
+        self.status_label.setText(success_text)
         self._refresh_secret_controls(updated)
+        self.changed.emit()
 
     def _clear_secret(self):
         if not self.current_id or not self.current_credential_ref:
@@ -594,15 +705,16 @@ class ExtensionsDialog(QDialog):
 
         self.current_credential_ref = ""
         self.secret_edit.clear()
-        self.status_label.setText("Discord webhook credential removed.")
+        self.status_label.setText("Secure Discord credential removed.")
         self._refresh_secret_controls(updated)
+        self.changed.emit()
 
     def _discord_secret(self):
         if not self.current_credential_ref:
-            raise ValueError("Save the Discord webhook URL first.")
+            raise ValueError("Save the Discord credential first.")
         secret = self.secret_store.get_secret(self.current_credential_ref)
         if not secret:
-            raise ValueError("Saved Discord webhook credential was not found.")
+            raise ValueError("Saved Discord credential was not found.")
         return secret
 
     def _start_discord_worker(self, mode):
@@ -642,6 +754,33 @@ class ExtensionsDialog(QDialog):
         self.test_thread.finished.connect(self._cleanup_test_worker)
         self.test_thread.start()
 
+    def _start_discord_bot_test(self, extension):
+        if self.test_worker is not None:
+            return
+
+        try:
+            token = self._discord_secret()
+        except Exception as exc:
+            self.status_label.setText(str(exc))
+            return
+
+        self.test_button.setEnabled(False)
+        self.status_label.setText("Testing Prometheusz Discord bot token...")
+
+        self.test_thread = QThread(self)
+        self.test_worker = DiscordBotTestWorker(
+            token,
+            timeout=extension.get("timeout", 10),
+        )
+        self.test_worker.moveToThread(self.test_thread)
+        self.test_thread.started.connect(self.test_worker.run)
+        self.test_worker.finished.connect(self._test_finished)
+        self.test_worker.failed.connect(self._test_failed)
+        self.test_worker.finished.connect(self.test_thread.quit)
+        self.test_worker.failed.connect(self.test_thread.quit)
+        self.test_thread.finished.connect(self._cleanup_test_worker)
+        self.test_thread.start()
+
     def _send_discord_test_message(self):
         if not self.current_id:
             return
@@ -663,6 +802,9 @@ class ExtensionsDialog(QDialog):
 
         if self._is_discord_webhook(extension):
             self._start_discord_worker("test")
+            return
+        if self._is_discord_bot(extension):
+            self._start_discord_bot_test(extension)
             return
 
         self.test_button.setEnabled(False)
