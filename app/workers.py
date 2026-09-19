@@ -29,6 +29,7 @@ from .language_policy import (
 )
 from .ollama_client import OllamaClient
 from .weather_tool import get_weather, weather_context_text
+from .web_intent import answer_requires_web_fallback
 from .web_search_tool import (
     build_search_plan,
     search_web,
@@ -867,6 +868,74 @@ def run_chat_web_request(client, model, messages, user_prompt):
     if not answer:
         raise RuntimeError("Web research returned an empty answer.")
     return answer
+
+
+class AdaptiveChatWorker(QObject):
+    """
+    Normal local chat with one bounded automatic web fallback.
+
+    The first pass stays fully local. If the model explicitly reports missing or
+    stale knowledge, the worker discards that draft and retries once through the
+    existing grounded WEB AUTO runtime.
+    """
+
+    token = Signal(str)
+    finished = Signal()
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        client: OllamaClient,
+        model: str,
+        messages: list[dict],
+        user_prompt: str,
+    ):
+        super().__init__()
+        self.client = client
+        self.model = model
+        self.messages = [dict(message) for message in messages]
+        self.user_prompt = str(user_prompt or "").strip()
+        self._stop_event = threading.Event()
+        self.used_web_fallback = False
+
+    @Slot()
+    def run(self):
+        try:
+            if self._stop_event.is_set():
+                self.finished.emit()
+                return
+
+            draft = self.client.chat_once(
+                model=self.model,
+                messages=self.messages,
+            ).strip()
+
+            if (
+                not self._stop_event.is_set()
+                and answer_requires_web_fallback(self.user_prompt, draft)
+            ):
+                self.used_web_fallback = True
+                final = run_chat_web_request(
+                    self.client,
+                    self.model,
+                    self.messages,
+                    self.user_prompt,
+                ).strip()
+            else:
+                final = draft
+
+            if self._stop_event.is_set():
+                self.finished.emit()
+                return
+
+            if final:
+                self.token.emit(final)
+            self.finished.emit()
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+    def stop(self):
+        self._stop_event.set()
 
 
 class DocumentWorker(QObject):
