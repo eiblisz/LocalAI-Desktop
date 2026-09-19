@@ -1,0 +1,469 @@
+from __future__ import annotations
+
+import csv
+import html
+import re
+import webbrowser
+from pathlib import Path
+from urllib.parse import urlparse
+
+import markdown
+from docx import Document
+from openpyxl import load_workbook
+from pypdf import PdfReader
+from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QPixmap
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QScrollArea,
+    QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
+    QTextBrowser,
+    QVBoxLayout,
+    QWidget,
+)
+
+try:
+    from PySide6.QtWebEngineWidgets import QWebEngineView
+except Exception:  # pragma: no cover - optional runtime fallback
+    QWebEngineView = None
+
+try:
+    from PySide6.QtPdf import QPdfDocument
+    from PySide6.QtPdfWidgets import QPdfView
+except Exception:  # pragma: no cover - optional runtime fallback
+    QPdfDocument = None
+    QPdfView = None
+
+
+RESOURCE_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+RESOURCE_TEXT_SUFFIXES = {
+    ".txt",
+    ".log",
+    ".py",
+    ".json",
+    ".toml",
+    ".yaml",
+    ".yml",
+    ".ini",
+    ".cfg",
+}
+RESOURCE_SHEET_SUFFIXES = {".xlsx", ".xlsm", ".csv"}
+
+
+def classify_resource(target) -> str:
+    value = str(target or "").strip()
+    parsed = urlparse(value)
+    if parsed.scheme.lower() in {"http", "https"}:
+        return "browser"
+
+    path = Path(target)
+    suffix = path.suffix.lower()
+    if suffix in {".html", ".htm"}:
+        return "html"
+    if suffix == ".pdf":
+        return "pdf"
+    if suffix == ".docx":
+        return "docx"
+    if suffix in RESOURCE_SHEET_SUFFIXES:
+        return "spreadsheet"
+    if suffix == ".md":
+        return "markdown"
+    if suffix in RESOURCE_IMAGE_SUFFIXES:
+        return "image"
+    if suffix in RESOURCE_TEXT_SUFFIXES:
+        return "text"
+    return "unknown"
+
+
+def resource_title(target) -> str:
+    value = str(target or "").strip()
+    parsed = urlparse(value)
+    if parsed.scheme.lower() in {"http", "https"}:
+        host = parsed.netloc or "Browser"
+        tail = Path(parsed.path).name
+        return (tail or host)[:64]
+
+    path = Path(target)
+    return (path.name or "Resource")[:64]
+
+
+def render_docx_html(path) -> str:
+    document = Document(str(path))
+    parts = [
+        "<div style='font-family: Segoe UI; font-size:15px; color:#20242A;"
+        "line-height:1.55; padding:28px;'>"
+    ]
+
+    for paragraph in document.paragraphs:
+        text = html.escape(paragraph.text)
+        if not text.strip():
+            parts.append("<div style='height:10px;'></div>")
+            continue
+
+        style_name = str(getattr(paragraph.style, "name", "") or "")
+        match = re.match(r"Heading\s+(\d+)", style_name, flags=re.IGNORECASE)
+        if match:
+            level = min(max(int(match.group(1)), 1), 6)
+            parts.append(f"<h{level}>{text}</h{level}>")
+        else:
+            parts.append(f"<p>{text}</p>")
+
+    for table in document.tables:
+        parts.append(
+            "<table style='border-collapse:collapse;width:100%;margin:16px 0;'>"
+        )
+        for row in table.rows:
+            parts.append("<tr>")
+            for cell in row.cells:
+                value = html.escape(cell.text)
+                parts.append(
+                    "<td style='border:1px solid #B9C0C8;padding:7px;"
+                    f"vertical-align:top;'>{value}</td>"
+                )
+            parts.append("</tr>")
+        parts.append("</table>")
+
+    parts.append("</div>")
+    return "".join(parts)
+
+
+def spreadsheet_preview(path, max_rows=500, max_columns=50):
+    path = Path(path)
+    suffix = path.suffix.lower()
+
+    if suffix == ".csv":
+        rows = []
+        truncated = False
+        with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
+            reader = csv.reader(handle)
+            for index, row in enumerate(reader):
+                if index >= max_rows:
+                    truncated = True
+                    break
+                rows.append([str(value) for value in row[:max_columns]])
+                if len(row) > max_columns:
+                    truncated = True
+        return [
+            {
+                "name": path.stem or "CSV",
+                "rows": rows,
+                "truncated": truncated,
+            }
+        ]
+
+    workbook = load_workbook(
+        filename=str(path),
+        read_only=True,
+        data_only=False,
+    )
+    previews = []
+    try:
+        for worksheet in workbook.worksheets:
+            rows = []
+            truncated = False
+            for row_index, row in enumerate(
+                worksheet.iter_rows(values_only=True),
+                start=1,
+            ):
+                if row_index > max_rows:
+                    truncated = True
+                    break
+                values = list(row)
+                if len(values) > max_columns:
+                    values = values[:max_columns]
+                    truncated = True
+                rows.append([
+                    "" if value is None else str(value)
+                    for value in values
+                ])
+            previews.append(
+                {
+                    "name": worksheet.title,
+                    "rows": rows,
+                    "truncated": truncated,
+                }
+            )
+    finally:
+        workbook.close()
+
+    return previews
+
+
+def pdf_text_fallback(path, max_pages=30):
+    reader = PdfReader(str(path))
+    parts = []
+    for index, page in enumerate(reader.pages[:max_pages], start=1):
+        text = page.extract_text() or ""
+        parts.append(f"--- PAGE {index} ---\n{text}")
+    if len(reader.pages) > max_pages:
+        parts.append("[PDF preview truncated]")
+    return "\n\n".join(parts)
+
+
+class BrowserView(QWidget):
+    title_changed = Signal(str)
+
+    def __init__(self, url, open_resource=None, parent=None):
+        super().__init__(parent)
+        self.open_resource = open_resource
+        self._initial_url = str(url or "").strip()
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        toolbar = QFrame()
+        controls = QHBoxLayout(toolbar)
+        controls.setContentsMargins(8, 7, 8, 7)
+
+        self.back_button = QPushButton("←")
+        self.forward_button = QPushButton("→")
+        self.reload_button = QPushButton("↻")
+        self.address = QLineEdit()
+        self.external_button = QPushButton("External")
+
+        controls.addWidget(self.back_button)
+        controls.addWidget(self.forward_button)
+        controls.addWidget(self.reload_button)
+        controls.addWidget(self.address, 1)
+        controls.addWidget(self.external_button)
+        root.addWidget(toolbar)
+
+        if QWebEngineView is not None:
+            self.view = QWebEngineView()
+            self.back_button.clicked.connect(self.view.back)
+            self.forward_button.clicked.connect(self.view.forward)
+            self.reload_button.clicked.connect(self.view.reload)
+            self.address.returnPressed.connect(self._navigate_address)
+            self.external_button.clicked.connect(self._open_external)
+            self.view.urlChanged.connect(self._url_changed)
+            self.view.titleChanged.connect(self._title_changed)
+
+            page = self.view.page()
+            if hasattr(page, "newWindowRequested"):
+                page.newWindowRequested.connect(self._new_window_requested)
+
+            root.addWidget(self.view, 1)
+            self.load(self._initial_url)
+        else:
+            self.view = QTextBrowser()
+            self.view.setOpenExternalLinks(False)
+            self.view.setOpenLinks(False)
+            self.view.anchorClicked.connect(self._fallback_link_clicked)
+            self.back_button.clicked.connect(self.view.backward)
+            self.forward_button.clicked.connect(self.view.forward)
+            self.reload_button.clicked.connect(lambda: self.load(self.address.text()))
+            self.address.returnPressed.connect(self._navigate_address)
+            self.external_button.clicked.connect(self._open_external)
+            root.addWidget(self.view, 1)
+            self.load(self._initial_url)
+
+    def load(self, value):
+        value = str(value or "").strip()
+        if not value:
+            return
+        self.address.setText(value)
+        qurl = QUrl(value)
+        if not qurl.scheme():
+            qurl = QUrl.fromLocalFile(str(Path(value).resolve()))
+
+        if QWebEngineView is not None and isinstance(self.view, QWebEngineView):
+            self.view.setUrl(qurl)
+        else:
+            self.view.setSource(qurl)
+
+    def _navigate_address(self):
+        value = self.address.text().strip()
+        if value and "://" not in value and not Path(value).exists():
+            value = "https://" + value
+        self.load(value)
+
+    def _url_changed(self, qurl):
+        self.address.setText(qurl.toString())
+
+    def _title_changed(self, title):
+        title = str(title or "").strip()
+        if title:
+            self.title_changed.emit(title[:64])
+
+    def _new_window_requested(self, request):
+        qurl = request.requestedUrl()
+        if qurl.isValid() and callable(self.open_resource):
+            self.open_resource(qurl.toString())
+
+    def _fallback_link_clicked(self, qurl):
+        if callable(self.open_resource):
+            self.open_resource(qurl.toString())
+        else:
+            self.load(qurl.toString())
+
+    def _open_external(self):
+        value = self.address.text().strip()
+        if value:
+            QDesktopServices.openUrl(QUrl(value))
+
+
+class PdfViewWidget(QWidget):
+    def __init__(self, path, parent=None):
+        super().__init__(parent)
+        path = Path(path).resolve()
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+
+        if QPdfDocument is not None and QPdfView is not None:
+            self.document = QPdfDocument(self)
+            error = self.document.load(str(path))
+            self.view = QPdfView(self)
+            self.view.setDocument(self.document)
+            try:
+                self.view.setPageMode(QPdfView.PageMode.MultiPage)
+                self.view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
+            except Exception:
+                pass
+            root.addWidget(self.view, 1)
+
+            # QPdfDocument.Error.None_ is not available in every PySide6 build,
+            # so only fall back when pageCount remains unusable after load.
+            if self.document.pageCount() > 0:
+                return
+
+        fallback = QTextBrowser()
+        fallback.setPlainText(pdf_text_fallback(path))
+        root.addWidget(fallback, 1)
+
+
+class DocumentView(QWidget):
+    def __init__(self, path, parent=None):
+        super().__init__(parent)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+
+        view = QTextBrowser()
+        view.setOpenExternalLinks(False)
+        view.setHtml(render_docx_html(path))
+        root.addWidget(view, 1)
+
+
+class SpreadsheetView(QWidget):
+    def __init__(self, path, parent=None):
+        super().__init__(parent)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+
+        sheets = QTabWidget()
+        previews = spreadsheet_preview(path)
+        for preview in previews:
+            rows = preview["rows"]
+            column_count = max((len(row) for row in rows), default=0)
+            table = QTableWidget(len(rows), column_count)
+            table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+            table.setAlternatingRowColors(True)
+            for row_index, row in enumerate(rows):
+                for column_index, value in enumerate(row):
+                    table.setItem(
+                        row_index,
+                        column_index,
+                        QTableWidgetItem(value),
+                    )
+            table.resizeColumnsToContents()
+
+            page = QWidget()
+            page_layout = QVBoxLayout(page)
+            page_layout.setContentsMargins(0, 0, 0, 0)
+            page_layout.addWidget(table, 1)
+            if preview.get("truncated"):
+                note = QLabel(
+                    "Preview limited to the first 500 rows and 50 columns."
+                )
+                note.setStyleSheet("color:#9099A6;padding:6px;")
+                page_layout.addWidget(note)
+
+            sheets.addTab(page, str(preview["name"])[:40])
+
+        root.addWidget(sheets, 1)
+
+
+class MarkdownTextView(QWidget):
+    def __init__(self, path, markdown_mode=False, parent=None):
+        super().__init__(parent)
+        path = Path(path)
+        text = path.read_text(encoding="utf-8", errors="replace")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+
+        view = QTextBrowser()
+        if markdown_mode:
+            view.setHtml(
+                markdown.markdown(
+                    html.escape(text),
+                    extensions=["fenced_code", "tables", "sane_lists", "nl2br"],
+                )
+            )
+        else:
+            view.setPlainText(text)
+        root.addWidget(view, 1)
+
+
+class ImageView(QWidget):
+    def __init__(self, path, parent=None):
+        super().__init__(parent)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        label = QLabel()
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        pixmap = QPixmap(str(Path(path).resolve()))
+        label.setPixmap(pixmap)
+        label.setScaledContents(False)
+        scroll.setWidget(label)
+        root.addWidget(scroll, 1)
+
+
+class UnsupportedView(QWidget):
+    def __init__(self, target, parent=None):
+        super().__init__(parent)
+        root = QVBoxLayout(self)
+        message = QLabel(
+            "This resource type does not have an internal preview yet.\n\n"
+            f"{target}"
+        )
+        message.setWordWrap(True)
+        message.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        root.addWidget(message, 1)
+
+
+def create_resource_view(target, open_resource=None, parent=None):
+    kind = classify_resource(target)
+
+    if kind == "browser":
+        return BrowserView(target, open_resource=open_resource, parent=parent)
+
+    path = Path(target).resolve()
+    if not path.exists() or not path.is_file():
+        raise FileNotFoundError(str(path))
+
+    if kind == "html":
+        return BrowserView(path.as_uri(), open_resource=open_resource, parent=parent)
+    if kind == "pdf":
+        return PdfViewWidget(path, parent=parent)
+    if kind == "docx":
+        return DocumentView(path, parent=parent)
+    if kind == "spreadsheet":
+        return SpreadsheetView(path, parent=parent)
+    if kind == "markdown":
+        return MarkdownTextView(path, markdown_mode=True, parent=parent)
+    if kind == "text":
+        return MarkdownTextView(path, markdown_mode=False, parent=parent)
+    if kind == "image":
+        return ImageView(path, parent=parent)
+    return UnsupportedView(path, parent=parent)
