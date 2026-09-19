@@ -1057,12 +1057,21 @@ class MainWindow(QMainWindow):
                 multi_asset_market_extension,
             )
         elif use_web:
-            self.status.setText("Web research...")
+            market_fallback = (
+                is_crypto_quote_request(text_for_model)
+                or is_multi_asset_quote_request(text_for_model)
+            )
+            self.status.setText(
+                "Market web fallback..."
+                if market_fallback
+                else "Web research..."
+            )
             self.worker = ChatWebWorker(
                 self.client,
                 model,
                 messages_for_model,
                 text_for_model,
+                compact_market_quote=market_fallback,
             )
         else:
             self.worker = AdaptiveChatWorker(
