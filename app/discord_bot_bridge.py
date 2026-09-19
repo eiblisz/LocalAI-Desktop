@@ -468,10 +468,15 @@ class DiscordBotBridge(QObject):
         system += "\n\n" + response_language_instruction(prompt)
         if source_context:
             system += (
-                "\n\nFor current or time-sensitive claims, use the VERIFIED WEB RESEARCH "
-                "SOURCE supplied in the user content as the authority. Ignore stale model "
-                "priors when they conflict with that source. Do not invent version numbers, "
-                "prices, dates, or availability."
+                "\n\nFor current or time-sensitive claims, use ONLY the VERIFIED WEB RESEARCH "
+                "SOURCE supplied in the user content as factual authority. Prefer explicit "
+                "first-party/official facts over secondary sources and stale model priors. "
+                "Preserve exact version numbers, dates, prices, and source URLs from that "
+                "evidence. Do not add release notes, features, changes, performance claims, "
+                "compatibility claims, or other current facts unless the supplied source "
+                "context explicitly supports them. If the source context only verifies a "
+                "version and URL, keep the artifact concise and report only those verified "
+                "facts instead of filling sections from model knowledge."
             )
         system += (
             "\n\nThe host application will render your output into the requested "
