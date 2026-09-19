@@ -952,3 +952,16 @@ def test_side_menu_uses_explicit_shared_base_background():
     assert "QPushButton#sideMenuButton:hover" in style
     assert "background: #1D2630;" in style
     assert "color: #FFFFFF;" in style
+
+
+def test_right_tool_buttons_force_sidebar_background_inline():
+    import app.main_window as main_window_module
+    from app.main_window import MainWindow
+
+    tools_source = inspect.getsource(MainWindow._build_tools_panel)
+
+    assert "SIDE_MENU_BUTTON_INLINE_STYLE" in tools_source
+    assert "background:#141A20;" in main_window_module.SIDE_MENU_BUTTON_INLINE_STYLE
+    assert "color:#AAB2BD;" in main_window_module.SIDE_MENU_BUTTON_INLINE_STYLE
+    assert "QPushButton:hover" in main_window_module.SIDE_MENU_BUTTON_INLINE_STYLE
+    assert "color:#FFFFFF;" in main_window_module.SIDE_MENU_BUTTON_INLINE_STYLE
