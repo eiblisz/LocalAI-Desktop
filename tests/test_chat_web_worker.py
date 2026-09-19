@@ -878,3 +878,407 @@ def test_run_chat_web_request_collects_grounded_worker_output(monkeypatch):
     assert "Search query: latest Qwen local AI news" in answer
     assert "https://example.com/qwen" in answer
 
+
+def test_adaptive_chat_worker_retries_grounded_web_when_local_answer_is_stale(monkeypatch):
+    class StaleClient:
+        def __init__(self):
+            self.calls = []
+
+        def chat_once(self, model, messages, timeout=600.0):
+            self.calls.append((model, messages))
+            return "Nincs friss információm erről a kiadásról."
+
+    monkeypatch.setattr(
+        workers,
+        "run_chat_web_request",
+        lambda client, model, messages, prompt: "Friss, ellenőrzött webes válasz.",
+    )
+
+    client = StaleClient()
+    tokens = []
+    finished = []
+    failed = []
+    worker = workers.AdaptiveChatWorker(
+        client,
+        "qwen-test",
+        [{"role": "user", "content": "Melyik Qwen verzió a legújabb?"}],
+        "Melyik Qwen verzió a legújabb?",
+    )
+    worker.token.connect(tokens.append)
+    worker.finished.connect(lambda: finished.append(True))
+    worker.failed.connect(failed.append)
+    worker.run()
+
+    assert not failed
+    assert finished == [True]
+    assert tokens == ["Friss, ellenőrzött webes válasz."]
+    assert worker.used_web_fallback is True
+
+
+def test_adaptive_chat_worker_keeps_confident_local_answer_without_web(monkeypatch):
+    class LocalClient:
+        def chat_once(self, model, messages, timeout=600.0):
+            return "A TCP egy megbízható, kapcsolatorientált protokoll."
+
+    monkeypatch.setattr(
+        workers,
+        "run_chat_web_request",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("stable answer must not trigger web fallback")
+        ),
+    )
+
+    tokens = []
+    worker = workers.AdaptiveChatWorker(
+        LocalClient(),
+        "qwen-test",
+        [{"role": "user", "content": "Mi az a TCP?"}],
+        "Mi az a TCP?",
+    )
+    worker.token.connect(tokens.append)
+    worker.run()
+
+    assert tokens == ["A TCP egy megbízható, kapcsolatorientált protokoll."]
+    assert worker.used_web_fallback is False
+
+
+def test_web_worker_replaces_stale_secondary_release_with_first_party_current_fact(monkeypatch):
+    class WrongReleaseClient(DummyWebClient):
+        def chat_stream(
+            self,
+            model,
+            messages,
+            on_token,
+            should_stop,
+            timeout=600.0,
+        ):
+            self.stream_calls.append((model, messages))
+            if not should_stop():
+                on_token(
+                    "A legújabb elérhető Ollama verzió: v0.33.2. "
+                    "Forrás: egy másodlagos kiadási oldal."
+                )
+
+    monkeypatch.setattr(
+        workers.ChatWebWorker,
+        "_generate_search_queries",
+        lambda self: ["Ollama latest version release"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "search_web",
+        lambda query, max_results=6, fetch_pages=True: {
+            "provider": "Brave Search API",
+            "query": query,
+            "provider_query": query,
+            "retrieved_at": "2026-09-19T12:59:00",
+            "provider_chain_errors": [],
+            "results": [
+                {
+                    "title": "Releasebot - Ollama releases",
+                    "url": "https://releasebot.io/updates/ollama",
+                    "snippet": "Tracked version v0.33.2",
+                    "page_text": "v0.33.2",
+                },
+                {
+                    "title": "Releases · ollama/ollama · GitHub",
+                    "url": "https://github.com/ollama/ollama/releases",
+                    "snippet": "Official releases",
+                    "page_text": (
+                        "Release list v0.34.2 v0.34.1 v0.34.0 v0.33.3 v0.33.2 "
+                        "v0.34.2 Latest What's Changed"
+                    ),
+                },
+            ],
+        },
+    )
+
+    client = WrongReleaseClient()
+    tokens = []
+    failed = []
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Mi a legújabb Ollama verzió?",
+    )
+    worker.token.connect(tokens.append)
+    worker.failed.connect(failed.append)
+    worker.run()
+
+    assert not failed
+    combined = "".join(tokens)
+    assert "**v0.34.2**" in combined
+    assert "github.com/ollama/ollama/releases" in combined
+    assert "legújabb elérhető Ollama verzió: v0.33.2" not in combined
+
+    streamed_messages = client.stream_calls[0][1]
+    grounded = "\n".join(item["content"] for item in streamed_messages)
+    assert "AUTHORITATIVE CURRENT FACT" in grounded
+    assert "Value: v0.34.2" in grounded
+    assert "prefer that first-party authority" in grounded
+
+
+def test_web_worker_does_not_replace_family_answer_with_qualified_tool_release(monkeypatch):
+    class FamilyClient(DummyWebClient):
+        def chat_stream(
+            self,
+            model,
+            messages,
+            on_token,
+            should_stop,
+            timeout=600.0,
+        ):
+            self.stream_calls.append((model, messages))
+            if not should_stop():
+                on_token(
+                    "A legfrissebb Qwen modellcsalád a Qwen3.8, "
+                    "a hivatalos Qwen források alapján."
+                )
+
+    monkeypatch.setattr(
+        workers.ChatWebWorker,
+        "_generate_search_queries",
+        lambda self: ["Qwen latest version release"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "search_web",
+        lambda query, max_results=6, fetch_pages=True: {
+            "provider": "Brave Search API",
+            "query": query,
+            "provider_query": query,
+            "retrieved_at": "2026-09-19T13:20:00",
+            "provider_chain_errors": [],
+            "results": [
+                {
+                    "title": "Releases · QwenLM/qwen-code",
+                    "url": "https://github.com/QwenLM/qwen-code/releases",
+                    "snippet": "Qwen Code v0.24.1",
+                    "page_text": "Release list v0.24.1 Latest",
+                },
+                {
+                    "title": "Qwen",
+                    "url": "https://qwen.ai/",
+                    "snippet": "Official Qwen model family",
+                    "page_text": "Qwen3.8 is the latest Qwen model family release.",
+                },
+            ],
+        },
+    )
+
+    client = FamilyClient()
+    tokens = []
+    failed = []
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Melyik a jelenlegi legfrissebb Qwen verzió?",
+    )
+    worker.token.connect(tokens.append)
+    worker.failed.connect(failed.append)
+    worker.run()
+
+    assert not failed
+    combined = "".join(tokens)
+    assert "Qwen3.8" in combined
+    assert "v0.24.1" not in combined
+
+    grounded = "\n".join(
+        item["content"] for item in client.stream_calls[0][1]
+    )
+    assert "qualified subproduct/tool not named in the query" in grounded
+    assert "do not use that result as the current-version authority" in grounded
+
+
+def test_current_version_answer_with_authoritative_fact_is_canonical_and_brief(monkeypatch):
+    class VerboseClient(DummyWebClient):
+        def chat_stream(
+            self,
+            model,
+            messages,
+            on_token,
+            should_stop,
+            timeout=600.0,
+        ):
+            self.stream_calls.append((model, messages))
+            if not should_stop():
+                on_token(
+                    "A legújabb Ollama verzió v0.34.2. "
+                    "Ezután egy nagyon hosszú idővonal és sok további részlet következne. "
+                    "Történeti összefoglaló, API-változások, ökoszisztéma és egyéb adatok."
+                )
+
+    monkeypatch.setattr(
+        workers.ChatWebWorker,
+        "_generate_search_queries",
+        lambda self: ["Ollama latest version release"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "search_web",
+        lambda query, max_results=6, fetch_pages=True: {
+            "provider": "Brave Search API",
+            "query": query,
+            "provider_query": query,
+            "retrieved_at": "2026-09-19T13:30:00",
+            "provider_chain_errors": [],
+            "results": [
+                {
+                    "title": "Releases · ollama/ollama · GitHub",
+                    "url": "https://github.com/ollama/ollama/releases",
+                    "snippet": "Official releases",
+                    "page_text": "Release list v0.34.2 v0.34.1 v0.34.2 Latest",
+                }
+            ],
+        },
+    )
+
+    client = VerboseClient()
+    tokens = []
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Mi a legújabb Ollama verzió?",
+    )
+    worker.token.connect(tokens.append)
+    worker.run()
+
+    assert tokens
+    main_answer = tokens[0]
+    assert "**v0.34.2**" in main_answer
+    assert "github.com/ollama/ollama/releases" in main_answer
+    assert "idővonal" not in main_answer
+    assert len(main_answer) < 400
+
+    combined = "".join(tokens)
+    assert "Search query: Ollama latest version release" in combined
+    assert "Web results / sources:" in combined
+
+
+def test_family_current_version_answer_is_compacted_but_source_appendix_remains(monkeypatch):
+    class FamilyClient(DummyWebClient):
+        def chat_once(self, model, messages, timeout=600.0):
+            self.once_calls.append((model, messages))
+            if messages and "Rewrite the supplied grounded answer" in messages[0]["content"]:
+                return (
+                    "A legfrissebb Qwen modellcsalád a Qwen3.8. "
+                    "A rendelkezésre álló webes források ezt támasztják alá."
+                )
+            return "Qwen latest version release"
+
+        def chat_stream(
+            self,
+            model,
+            messages,
+            on_token,
+            should_stop,
+            timeout=600.0,
+        ):
+            self.stream_calls.append((model, messages))
+            if not should_stop():
+                on_token(
+                    "A legfrissebb Qwen modellcsalád a Qwen3.8. "
+                    "Key Highlights: Qwen3.8-Flash, Qwen3.8-27B és Qwen3.8-Flash-Next. "
+                    "Részletes idővonal: 2026 augusztus, 2026 szeptember. "
+                    "API improvements, Hugging Face organization, broader ecosystem, "
+                    "további hosszú kutatási összefoglaló és háttérinformációk. "
+                    "Ez a rész szándékosan hosszú, hogy a tömörítő útvonal lefusson. "
+                    * 8
+                )
+
+    monkeypatch.setattr(
+        workers.ChatWebWorker,
+        "_generate_search_queries",
+        lambda self: ["Qwen latest version release"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "search_web",
+        lambda query, max_results=6, fetch_pages=True: {
+            "provider": "Brave Search API",
+            "query": query,
+            "provider_query": query,
+            "retrieved_at": "2026-09-19T13:30:00",
+            "provider_chain_errors": [],
+            "results": [
+                {
+                    "title": "Qwen",
+                    "url": "https://qwen.ai/",
+                    "snippet": "Official Qwen model family",
+                    "page_text": "Qwen3.8 is the latest Qwen model family release.",
+                },
+                {
+                    "title": "Releases · QwenLM/qwen-code",
+                    "url": "https://github.com/QwenLM/qwen-code/releases",
+                    "snippet": "Qwen Code v0.24.1",
+                    "page_text": "Release list v0.24.1 Latest",
+                },
+            ],
+        },
+    )
+
+    client = FamilyClient()
+    tokens = []
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Melyik a jelenlegi legfrissebb Qwen verzió?",
+    )
+    worker.token.connect(tokens.append)
+    worker.run()
+
+    assert tokens
+    main_answer = tokens[0]
+    assert "Qwen3.8" in main_answer
+    assert "Key Highlights" not in main_answer
+    assert "API improvements" not in main_answer
+    assert len(main_answer) < 700
+
+    combined = "".join(tokens)
+    assert "Search query: Qwen latest version release" in combined
+    assert "https://qwen.ai/" in combined
+
+
+def test_current_version_compactor_rejects_new_version_tokens():
+    class UnsafeCompactClient(DummyWebClient):
+        def chat_once(self, model, messages, timeout=600.0):
+            return "A legfrissebb verzió a Qwen9.9."
+
+    worker = workers.ChatWebWorker(
+        UnsafeCompactClient(),
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Melyik a jelenlegi legfrissebb Qwen verzió?",
+    )
+    original = (
+        "A legfrissebb Qwen modellcsalád a Qwen3.8. "
+        + "Részletes háttér és kutatási összefoglaló. " * 40
+    )
+
+    compact = worker._compact_current_version_answer(original, [])
+
+    assert "Qwen3.8" in compact
+    assert "Qwen9.9" not in compact
+
+
+def test_version_like_token_guard_detects_semver_and_named_model_versions():
+    worker = workers.ChatWebWorker(
+        DummyWebClient(),
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Melyik a jelenlegi legfrissebb Qwen verzió?",
+    )
+
+    tokens = worker._version_like_tokens(
+        "Qwen3.8, Qwen9.9, v0.34.2 és 1.25.0"
+    )
+
+    assert "Qwen3.8" in tokens
+    assert "Qwen9.9" in tokens
+    assert "v0.34.2" in tokens
+    assert "1.25.0" in tokens
+

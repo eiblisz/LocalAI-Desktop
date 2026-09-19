@@ -643,3 +643,169 @@ def test_remote_multi_artifact_request_creates_every_file_once(tmp_path: Path, m
     assert len(user_messages) == 1
     assert len(artifacts) == 4
 
+
+def test_prometheusz_executes_numbered_mixed_actions_in_order(tmp_path: Path, monkeypatch):
+    import app.discord_bot_bridge as bridge_module
+    from app.web_intent import plan_user_actions
+
+    web_calls = []
+    created = []
+
+    def fake_web(client, model, messages, prompt):
+        web_calls.append(prompt)
+        if "Qwen" in prompt:
+            return "WEB-QWEN: latest verified Qwen release."
+        if "Ollama" in prompt:
+            return (
+                "WEB-OLLAMA: verified latest Ollama release is 9.9.9. "
+                "Source: https://example.com/ollama"
+            )
+        raise AssertionError(prompt)
+
+    monkeypatch.setattr(bridge_module, "run_chat_web_request", fake_web)
+
+    def fake_create_artifact(fmt, **kwargs):
+        created.append((fmt, kwargs))
+        path = tmp_path / "ollama.html"
+        path.write_text(kwargs["content"], encoding="utf-8")
+        return path
+
+    monkeypatch.setattr(bridge_module, "create_artifact", fake_create_artifact)
+
+    class FakeOllama:
+        def __init__(self):
+            self.calls = []
+
+        def chat_once(self, model, messages):
+            self.calls.append(messages)
+            user = messages[-1]["content"]
+            if "TCP" in user:
+                return "LOCAL-TCP: a TCP egy kapcsolatorientált protokoll."
+            if "VERIFIED WEB RESEARCH SOURCE" in user:
+                assert "verified latest Ollama release is 9.9.9" in user
+                assert "use ONLY the VERIFIED WEB RESEARCH SOURCE" in messages[0]["content"]
+                assert "Do not add release notes, features, changes" in messages[0]["content"]
+                return "# Ollama riport\n\nA jelenlegi verzió: 9.9.9"
+            raise AssertionError(user)
+
+    ollama = FakeOllama()
+    settings = DiscordBotSettings(
+        extension_id="ext-mixed-actions",
+        name="Prometheusz",
+        guild_id=111111111111111111,
+        channel_id=222222222222222222,
+        allowed_user_id=333333333333333333,
+        model="qwen3-coder:30b",
+    )
+    bridge = DiscordBotBridge(
+        ollama_client=ollama,
+        chat_store=ChatStore(tmp_path / "chats"),
+        settings=settings,
+        token="T" * 40,
+    )
+
+    prompt = """1. Melyik a jelenlegi legfrissebb Qwen verzió?
+
+2. Magyarázd el röviden, mi az a TCP.
+
+3. Mi a legújabb Ollama verzió, és készíts róla egy rövid HTML riportot."""
+
+    results = [
+        bridge._execute_planned_action(item.prompt, item.plan)
+        for item in plan_user_actions(prompt)
+    ]
+
+    assert results[0]["messages"] == ["WEB-QWEN: latest verified Qwen release."]
+    assert results[0]["artifacts"] == []
+
+    assert results[1]["messages"] == [
+        "LOCAL-TCP: a TCP egy kapcsolatorientált protokoll."
+    ]
+    assert results[1]["artifacts"] == []
+
+    assert results[2]["messages"] == []
+    assert len(results[2]["artifacts"]) == 1
+    assert results[2]["artifacts"][0][1].suffix == ".html"
+
+    assert web_calls == [
+        "Melyik a jelenlegi legfrissebb Qwen verzió?",
+        "Mi a legújabb Ollama verzió, és készíts róla egy rövid HTML riportot.",
+    ]
+    assert created[0][0] == "html"
+    assert "9.9.9" in created[0][1]["content"]
+    assert "WEB-OLLAMA" in created[0][1]["source_text"]
+
+
+def test_remote_artifact_with_web_context_does_not_use_stale_memory_shortcut(
+    tmp_path: Path,
+    monkeypatch,
+):
+    import app.discord_bot_bridge as bridge_module
+    from app.web_intent import plan_user_action
+
+    memory_store = MemoryStore(tmp_path / "memory.sqlite3")
+    memory_store.remember_explicit(
+        category="USER_PROFILE",
+        scope="USER",
+        subject="Ollama",
+        key="current_version",
+        value="0.1.37",
+        source_chat_id="old",
+        source_excerpt="Old version",
+    )
+
+    monkeypatch.setattr(
+        bridge_module,
+        "run_chat_web_request",
+        lambda *args, **kwargs: (
+            "Verified current Ollama version is 9.9.9. "
+            "Source: https://example.com/ollama"
+        ),
+    )
+
+    captured = {}
+
+    def fake_create_artifact(fmt, **kwargs):
+        captured.update(kwargs)
+        path = tmp_path / "verified.html"
+        path.write_text(kwargs["content"], encoding="utf-8")
+        return path
+
+    monkeypatch.setattr(bridge_module, "create_artifact", fake_create_artifact)
+
+    class FakeOllama:
+        def chat_once(self, model, messages):
+            combined = "\n".join(item["content"] for item in messages)
+            assert "Verified current Ollama version is 9.9.9" in combined
+            return "# Verified\n\nOllama: 9.9.9"
+
+    settings = DiscordBotSettings(
+        extension_id="ext-grounded-artifact",
+        name="Prometheusz",
+        guild_id=111111111111111111,
+        channel_id=222222222222222222,
+        allowed_user_id=333333333333333333,
+        model="qwen3-coder:30b",
+    )
+    bridge = DiscordBotBridge(
+        ollama_client=FakeOllama(),
+        chat_store=ChatStore(tmp_path / "chats"),
+        settings=settings,
+        token="T" * 40,
+        memory_store=memory_store,
+    )
+
+    prompt = "Mi a legújabb Ollama verzió, és készíts róla HTML riportot."
+    result = bridge._execute_planned_action(prompt, plan_user_action(prompt))
+
+    assert len(result["artifacts"]) == 1
+    assert "9.9.9" in captured["content"]
+    assert "0.1.37" not in captured["content"]
+    assert "use ONLY the VERIFIED WEB RESEARCH SOURCE" in captured.get(
+        "source_text",
+        "",
+    ) or "Verified current Ollama version is 9.9.9" in captured.get(
+        "source_text",
+        "",
+    )
+

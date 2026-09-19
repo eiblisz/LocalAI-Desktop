@@ -901,6 +901,314 @@ def _filter_relevant_results(
     return relevant
 
 
+
+_CURRENT_VERSION_MARKERS = (
+    "latest",
+    "current",
+    "newest",
+    "legfrissebb",
+    "legújabb",
+    "legujabb",
+    "jelenlegi",
+    "aktuell",
+    "neueste",
+)
+_VERSION_TOPIC_MARKERS = (
+    "version",
+    "release",
+    "verzió",
+    "verzio",
+    "kiadás",
+    "kiadas",
+)
+_ENTITY_SCOPE_QUALIFIERS = {
+    "api", "app", "apps", "audio", "cli", "client", "code", "coder",
+    "desktop", "docs", "documentation", "driver", "embedding", "examples",
+    "extension", "extensions", "gui", "java", "javascript", "js", "math",
+    "mobile", "plugin", "plugins", "python", "reranker", "rust", "sdk",
+    "server", "studio", "tool", "tools", "ui", "vision", "vl", "web",
+    "agent", "agents", "drive",
+}
+
+_AUTHORITY_STOPWORDS = {
+    "latest", "current", "newest", "version", "release",
+    "legfrissebb", "legújabb", "legujabb", "jelenlegi",
+    "verzió", "verzio", "kiadás", "kiadas",
+    "aktuell", "neueste", "was", "what", "which", "melyik",
+    "mi", "az", "a", "the", "is", "ist",
+}
+_SEMVER_RE = re.compile(
+    r"(?<![A-Za-z0-9])v?\d+\.\d+(?:\.\d+){0,2}"
+    r"(?:[-+][0-9A-Za-z.-]+)?(?![A-Za-z0-9])",
+    flags=re.IGNORECASE,
+)
+
+
+def _fold_authority_text(value):
+    return " ".join(
+        re.sub(
+            r"[^a-z0-9._+-]+",
+            " ",
+            str(value or "").lower().translate(str.maketrans({
+                "á": "a", "é": "e", "í": "i", "ó": "o", "ö": "o",
+                "ő": "o", "ú": "u", "ü": "u", "ű": "u",
+            })),
+        ).split()
+    )
+
+
+def is_current_version_query(query):
+    normalized = _fold_authority_text(query)
+    return (
+        any(marker in normalized for marker in _CURRENT_VERSION_MARKERS)
+        and any(marker in normalized for marker in _VERSION_TOPIC_MARKERS)
+    )
+
+
+def _authority_identity_terms(query):
+    normalized = _fold_authority_text(query)
+    terms = [
+        token for token in re.findall(r"[a-z0-9][a-z0-9._+-]*", normalized)
+        if len(token) >= 3 and token not in _AUTHORITY_STOPWORDS
+    ]
+    return terms[:6]
+
+
+def _split_identity_tokens(value):
+    folded = _fold_authority_text(value)
+    return {
+        token for token in re.findall(r"[a-z0-9]+", folded)
+        if len(token) >= 2
+    }
+
+
+def _authority_scope_mismatch(query, item):
+    """
+    Reject a qualified subproduct/tool as the authority for an unqualified family
+    query. Example pattern: "Nimbus latest version" must not silently resolve to
+    "nimbus-cli" unless the user actually asked for the CLI.
+
+    The rule is generic: qualifiers are product-scope terms, not vendor names.
+    """
+    if not is_current_version_query(query):
+        return False
+
+    query_tokens = _split_identity_tokens(query)
+    identity_terms = set(_authority_identity_terms(query))
+    if not identity_terms:
+        return False
+
+    url = _decode_bing_result_url(str(item.get("url", "")).strip())
+    title = str(item.get("title", ""))
+    candidate_tokens = _split_identity_tokens(title)
+
+    try:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+        path_segments = [part for part in parsed.path.split("/") if part]
+    except Exception:
+        host = ""
+        path_segments = []
+
+    if host == "github.com" and len(path_segments) >= 2:
+        candidate_tokens.update(_split_identity_tokens(path_segments[1]))
+
+    if not any(term in candidate_tokens for term in identity_terms):
+        return False
+
+    candidate_qualifiers = candidate_tokens & _ENTITY_SCOPE_QUALIFIERS
+    query_qualifiers = query_tokens & _ENTITY_SCOPE_QUALIFIERS
+    return bool(candidate_qualifiers - query_qualifiers)
+
+
+def _authority_score(query, item):
+    if not is_current_version_query(query):
+        return 0
+
+    if _authority_scope_mismatch(query, item):
+        return -500
+
+    url = _decode_bing_result_url(str(item.get("url", "")).strip())
+    title = _fold_authority_text(item.get("title", ""))
+    try:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+        path = parsed.path.lower()
+    except Exception:
+        host = ""
+        path = ""
+
+    identity_terms = _authority_identity_terms(query)
+    score = 0
+
+    if host == "github.com" and "/releases" in path:
+        segments = [part for part in path.split("/") if part]
+        repo_identity = " ".join(segments[:2])
+        if any(term in repo_identity for term in identity_terms):
+            score += 500
+        else:
+            score += 120
+
+    if any(term in host for term in identity_terms):
+        score += 350
+
+    if any(term in title for term in identity_terms):
+        score += 80
+
+    if "official" in title or "hivatalos" in title:
+        score += 40
+
+    return score
+
+
+def rank_authoritative_results(query, results):
+    indexed = list(enumerate(list(results or [])))
+    indexed.sort(
+        key=lambda pair: (
+            -_authority_score(query, pair[1]),
+            pair[0],
+        )
+    )
+    return [item for _index, item in indexed]
+
+
+def _extract_release_value(item, query=""):
+    url = _decode_bing_result_url(str(item.get("url", "")).strip())
+    text = "\n".join([
+        str(item.get("title", "")),
+        str(item.get("snippet", "")),
+        str(item.get("page_text", "")),
+    ])
+    compact = " ".join(text.split())
+
+    try:
+        parsed = urlparse(url)
+        path = parsed.path
+    except Exception:
+        path = ""
+
+    tag_match = re.search(
+        r"/releases/tag/(v?\d+\.\d+(?:\.\d+){0,2}(?:[-+][0-9A-Za-z.-]+)?)",
+        path,
+        flags=re.IGNORECASE,
+    )
+    if tag_match:
+        return tag_match.group(1)
+
+    version_token = (
+        r"(?<![A-Za-z0-9])"
+        r"(v?\d+\.\d+(?:\.\d+){0,2}(?:[-+][0-9A-Za-z.-]+)?)"
+        r"(?![A-Za-z0-9])"
+    )
+    patterns = [
+        rf"{version_token}\s+Latest\b",
+        rf"\bLatest\b\s*(?:stable\s+)?(?:version|release)?\s*[:=-]?\s*"
+        rf"{version_token}",
+        rf"Release list\s+{version_token}",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, compact, flags=re.IGNORECASE)
+        if match:
+            return match.group(1)
+
+    # Product/model families often encode the generation in the name itself
+    # (for example "Nimbus3.8"). First prefer a generation explicitly tied to
+    # latest/current wording. If the page contains several historical family
+    # generations, fall back to the highest numeric generation instead of the
+    # first textual occurrence.
+    identity_terms = _authority_identity_terms(query)
+    for term in identity_terms:
+        named_token = (
+            rf"({re.escape(term)}\s*[-_]?\s*\d+(?:\.\d+){{1,3}})"
+        )
+        latest_named_patterns = [
+            rf"\b(?:latest|current|newest)\s+"
+            rf"(?:(?:stable|flagship|model|family|generation)\s+)*"
+            rf"(?:version|release|model|generation)?\s*[,;:=-]?\s*"
+            rf"{named_token}\b",
+            rf"\b(?:its\s+)?(?:latest|current|newest)\s+"
+            rf"(?:version|release|model|generation)\s*[,;:=-]?\s*"
+            rf"{named_token}\b",
+            rf"\b{named_token}\b\s+(?:is\s+)?(?:the\s+)?"
+            rf"(?:latest|current|newest)\s+"
+            rf"(?:version|release|model|generation)\b",
+        ]
+        for pattern in latest_named_patterns:
+            match = re.search(pattern, compact, flags=re.IGNORECASE)
+            if match:
+                return re.sub(r"\s+", "", match.group(1))
+
+        named_matches = list(
+            re.finditer(
+                rf"\b{named_token}\b",
+                compact,
+                flags=re.IGNORECASE,
+            )
+        )
+        if named_matches:
+            def generation_key(match):
+                value = re.sub(r"\s+", "", match.group(1))
+                suffix = re.sub(
+                    rf"(?i)^{re.escape(term)}[-_]?",
+                    "",
+                    value,
+                )
+                try:
+                    return tuple(int(part) for part in suffix.split("."))
+                except ValueError:
+                    return ()
+
+            best_match = max(named_matches, key=generation_key)
+            return re.sub(r"\s+", "", best_match.group(1))
+
+    # Bare decimals are accepted only when explicit release/version language
+    # binds them to the requested fact. This prevents values such as
+    # "2.4 trillion parameters" from being misclassified as a version.
+    contextual_patterns = [
+        r"\b(?:latest|current|newest)\s+(?:stable\s+)?(?:version|release)\s*[:=-]?\s*"
+        r"(v?\d+\.\d+(?:\.\d+){0,2}(?:[-+][0-9A-Za-z.-]+)?)",
+        r"\b(?:version|release)\s*[:=-]?\s*"
+        r"(v?\d+\.\d+(?:\.\d+){0,2}(?:[-+][0-9A-Za-z.-]+)?)",
+        r"\b(?:verzió|verzio|kiadás|kiadas)\s*[:=-]?\s*"
+        r"(v?\d+\.\d+(?:\.\d+){0,2}(?:[-+][0-9A-Za-z.-]+)?)",
+        r"\b(v\d+\.\d+(?:\.\d+){0,2}(?:[-+][0-9A-Za-z.-]+)?)\b",
+    ]
+    for pattern in contextual_patterns:
+        match = re.search(pattern, compact, flags=re.IGNORECASE)
+        if match:
+            return match.group(1)
+
+    return ""
+
+
+def authoritative_current_fact(payload):
+    query = str(payload.get("query", "")).strip()
+    if not is_current_version_query(query):
+        return None
+
+    ranked = rank_authoritative_results(query, payload.get("results") or [])
+    for item in ranked:
+        score = _authority_score(query, item)
+        if score < 300:
+            continue
+
+        value = _extract_release_value(item, query=query)
+        if not value:
+            continue
+
+        url = _decode_bing_result_url(str(item.get("url", "")).strip())
+        title = " ".join(str(item.get("title", "")).split()) or url
+        return {
+            "kind": "latest_release",
+            "value": value,
+            "url": url,
+            "title": title,
+            "authority": "first_party",
+        }
+
+    return None
+
+
 def source_urls(payload, limit=10):
     urls = []
     for item in payload.get("results") or []:
@@ -1010,6 +1318,7 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
                 plan=search_plan,
                 require_verified=not fetch_pages,
             )
+            results = rank_authoritative_results(clean, results)
             if not results:
                 errors.append(
                     f"{name}: results failed relevance or hard constraints"
@@ -1024,6 +1333,7 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
                     plan=search_plan,
                     require_verified=False,
                 )
+                results = rank_authoritative_results(clean, results)
                 if not results:
                     errors.append(
                         f"{name}: results contradicted hard constraints after page fetch"
@@ -1058,6 +1368,22 @@ def web_search_context_text(payload):
     provider_query = str(payload.get("provider_query", "")).strip()
     if provider_query and provider_query != str(payload.get("query", "")).strip():
         lines.append(f"Provider query: {provider_query}")
+    fact = authoritative_current_fact(payload)
+    if fact:
+        lines.extend([
+            "",
+            "AUTHORITATIVE CURRENT FACT",
+            f"Kind: {fact['kind']}",
+            f"Value: {fact['value']}",
+            f"Authority: {fact['authority']}",
+            f"Source: {fact['title']}",
+            f"Source URL: {fact['url']}",
+            (
+                "Instruction: preserve this exact current value for the requested "
+                "latest/current fact; do not replace it with an older secondary-source value."
+            ),
+        ])
+
     lines.extend([
         "",
         "SEARCH RESULTS",
@@ -1069,6 +1395,11 @@ def web_search_context_text(payload):
             f"URL: {item.get('url', '')}",
             f"Snippet: {item.get('snippet', '')}",
         ])
+        if _authority_scope_mismatch(payload.get("query", ""), item):
+            lines.append(
+                "Scope note: this result is a qualified subproduct/tool not named "
+                "in the query; do not use it as the current-version authority."
+            )
         if item.get("published"):
             lines.append(f"Published: {item.get('published', '')}")
         page_text = item.get("page_text", "")

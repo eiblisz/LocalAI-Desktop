@@ -645,3 +645,381 @@ def test_brave_http_error_is_compact_and_does_not_echo_request_url(monkeypatch):
     assert "spellcheck must be a boolean" in message
     assert "https://api.search.brave.com" not in message
     assert len(message) < 400
+
+
+def test_current_version_ranking_prefers_matching_first_party_github_releases():
+    results = [
+        {
+            "title": "Releasebot - Ollama releases",
+            "url": "https://releasebot.io/updates/ollama",
+            "snippet": "Ollama v0.33.2",
+            "page_text": "Latest tracked version v0.33.2",
+        },
+        {
+            "title": "Releases · ollama/ollama · GitHub",
+            "url": "https://github.com/ollama/ollama/releases",
+            "snippet": "Official releases",
+            "page_text": "Release list v0.34.2 v0.34.1 v0.34.0 v0.33.3 v0.33.2",
+        },
+    ]
+
+    ranked = web_search_tool.rank_authoritative_results(
+        "Ollama latest version release",
+        results,
+    )
+
+    assert ranked[0]["url"] == "https://github.com/ollama/ollama/releases"
+
+
+def test_authoritative_current_fact_extracts_latest_from_official_release_page():
+    payload = {
+        "query": "Ollama latest version release",
+        "results": [
+            {
+                "title": "Releasebot - Ollama releases",
+                "url": "https://releasebot.io/updates/ollama",
+                "snippet": "Tracked version v0.33.2",
+                "page_text": "v0.33.2",
+            },
+            {
+                "title": "Releases · ollama/ollama · GitHub",
+                "url": "https://github.com/ollama/ollama/releases",
+                "snippet": "Official releases",
+                "page_text": (
+                    "Release list v0.34.2 v0.34.1 v0.34.0 v0.33.3 v0.33.2 "
+                    "v0.34.2 Latest What's Changed"
+                ),
+            },
+        ],
+    }
+
+    fact = web_search_tool.authoritative_current_fact(payload)
+
+    assert fact == {
+        "kind": "latest_release",
+        "value": "v0.34.2",
+        "url": "https://github.com/ollama/ollama/releases",
+        "title": "Releases · ollama/ollama · GitHub",
+        "authority": "first_party",
+    }
+
+
+def test_web_context_surfaces_authoritative_current_fact_before_results():
+    payload = {
+        "provider": "Brave Search API",
+        "query": "Ollama latest version release",
+        "retrieved_at": "2026-09-19T12:59:00",
+        "results": [
+            {
+                "title": "Releases · ollama/ollama · GitHub",
+                "url": "https://github.com/ollama/ollama/releases",
+                "snippet": "Official releases",
+                "page_text": "Release list v0.34.2 v0.34.1 v0.34.0",
+            }
+        ],
+    }
+
+    context = web_search_tool.web_search_context_text(payload)
+
+    assert "AUTHORITATIVE CURRENT FACT" in context
+    assert "Value: v0.34.2" in context
+    assert "Authority: first_party" in context
+    assert "Source URL: https://github.com/ollama/ollama/releases" in context
+    assert context.index("AUTHORITATIVE CURRENT FACT") < context.index("SEARCH RESULTS")
+
+
+def test_authoritative_current_fact_prefers_github_latest_over_newer_prerelease():
+    payload = {
+        "query": "Ollama latest version release",
+        "results": [
+            {
+                "title": "Releases · ollama/ollama · GitHub",
+                "url": "https://github.com/ollama/ollama/releases",
+                "snippet": "Official releases",
+                "page_text": (
+                    "Release list v0.34.3 v0.34.2 v0.34.1 "
+                    "v0.34.3 Pre-release "
+                    "v0.34.2 Latest What's Changed"
+                ),
+            }
+        ],
+    }
+
+    fact = web_search_tool.authoritative_current_fact(payload)
+
+    assert fact["value"] == "v0.34.2"
+
+
+def test_unqualified_family_query_does_not_promote_qualified_tool_repo():
+    results = [
+        {
+            "title": "Releases · QwenLM/qwen-code",
+            "url": "https://github.com/QwenLM/qwen-code/releases",
+            "snippet": "Qwen Code v0.24.1",
+            "page_text": "Release list v0.24.1 Latest",
+        },
+        {
+            "title": "QwenLM/Qwen: official Qwen model repository",
+            "url": "https://github.com/QwenLM/Qwen",
+            "snippet": "Official Qwen model family repository",
+            "page_text": "Qwen model family releases and model cards",
+        },
+    ]
+
+    ranked = web_search_tool.rank_authoritative_results(
+        "Qwen latest version release",
+        results,
+    )
+
+    assert ranked[0]["url"] == "https://github.com/QwenLM/Qwen"
+    assert web_search_tool._authority_score(
+        "Qwen latest version release",
+        results[0],
+    ) < 0
+
+
+def test_unqualified_family_query_does_not_extract_tool_semver_as_family_version():
+    payload = {
+        "query": "Qwen latest version release",
+        "results": [
+            {
+                "title": "Releases · QwenLM/qwen-code",
+                "url": "https://github.com/QwenLM/qwen-code/releases",
+                "snippet": "Qwen Code v0.24.1",
+                "page_text": "Release list v0.24.1 Latest",
+            }
+        ],
+    }
+
+    assert web_search_tool.authoritative_current_fact(payload) is None
+
+
+def test_explicit_tool_query_may_use_matching_tool_repo_release():
+    payload = {
+        "query": "Qwen Code latest version release",
+        "results": [
+            {
+                "title": "Releases · QwenLM/qwen-code",
+                "url": "https://github.com/QwenLM/qwen-code/releases",
+                "snippet": "Qwen Code v0.24.1",
+                "page_text": "Release list v0.24.1 Latest",
+            }
+        ],
+    }
+
+    fact = web_search_tool.authoritative_current_fact(payload)
+
+    assert fact["value"] == "v0.24.1"
+    assert fact["url"] == "https://github.com/QwenLM/qwen-code/releases"
+
+
+def test_generic_entity_scope_rule_is_not_qwen_specific():
+    family_query = "Nimbus latest version release"
+    tool_result = {
+        "title": "Releases · ExampleOrg/nimbus-cli",
+        "url": "https://github.com/ExampleOrg/nimbus-cli/releases",
+        "snippet": "Nimbus CLI v2.4.0",
+        "page_text": "Release list v2.4.0 Latest",
+    }
+
+    assert web_search_tool._authority_scope_mismatch(
+        family_query,
+        tool_result,
+    )
+    assert not web_search_tool._authority_scope_mismatch(
+        "Nimbus CLI latest version release",
+        tool_result,
+    )
+
+
+def test_web_context_marks_qualified_tool_scope_mismatch():
+    payload = {
+        "provider": "Brave Search API",
+        "query": "Qwen latest version release",
+        "retrieved_at": "2026-09-19T13:00:00",
+        "results": [
+            {
+                "title": "Releases · QwenLM/qwen-code",
+                "url": "https://github.com/QwenLM/qwen-code/releases",
+                "snippet": "Qwen Code v0.24.1",
+                "page_text": "Release list v0.24.1 Latest",
+            }
+        ],
+    }
+
+    context = web_search_tool.web_search_context_text(payload)
+
+    assert "qualified subproduct/tool not named in the query" in context
+    assert "AUTHORITATIVE CURRENT FACT" not in context
+
+
+def test_named_model_generation_beats_unrelated_decimal_parameter_count():
+    item = {
+        "title": "Model releases - NimbusCloud",
+        "url": "https://nimbus.example.com/model-releases",
+        "snippet": "Latest Nimbus model releases",
+        "page_text": (
+            "Its latest version, Nimbus3.8, is a 2.4 trillion parameter model "
+            "with a 1.0 million token context window."
+        ),
+    }
+
+    value = web_search_tool._extract_release_value(
+        item,
+        query="Nimbus latest version release",
+    )
+
+    assert value == "Nimbus3.8"
+
+
+def test_bare_decimal_parameter_count_is_not_treated_as_release_version():
+    item = {
+        "title": "Model releases - NimbusCloud",
+        "url": "https://nimbus.example.com/model-releases",
+        "snippet": "Latest Nimbus model information",
+        "page_text": (
+            "The current flagship uses 2.4 trillion parameters and 1.0 million "
+            "tokens of context."
+        ),
+    }
+
+    value = web_search_tool._extract_release_value(
+        item,
+        query="Nimbus latest version release",
+    )
+
+    assert value == ""
+
+
+def test_explicit_version_language_allows_bare_decimal_version():
+    item = {
+        "title": "Nimbus release notes",
+        "url": "https://nimbus.example.com/releases",
+        "snippet": "Current version: 2.4",
+        "page_text": "The current version: 2.4 is now generally available.",
+    }
+
+    value = web_search_tool._extract_release_value(
+        item,
+        query="Nimbus latest version release",
+    )
+
+    assert value == "2.4"
+
+
+def test_qwen_style_family_page_does_not_return_parameter_count_as_version():
+    payload = {
+        "query": "Qwen latest version release",
+        "results": [
+            {
+                "title": "Model releases - QwenCloud",
+                "url": "https://qwen.example.com/model-releases",
+                "snippet": "New launches and updates",
+                "page_text": (
+                    "Its latest version, Qwen3.8, is the 2.4 trillion parameter "
+                    "model in the Qwen family."
+                ),
+            }
+        ],
+    }
+
+    fact = web_search_tool.authoritative_current_fact(payload)
+
+    assert fact is not None
+    assert fact["value"].lower() == "qwen3.8"
+    assert fact["value"] != "2.4"
+
+
+def test_family_latest_wording_beats_older_historical_generation():
+    item = {
+        "title": "Nimbus official model family",
+        "url": "https://nimbus.example.com/models",
+        "snippet": "Nimbus model family",
+        "page_text": (
+            "Nimbus2.5 was a previous generation. "
+            "Its latest version, Nimbus3.8, is the current flagship model."
+        ),
+    }
+
+    value = web_search_tool._extract_release_value(
+        item,
+        query="Nimbus latest version release",
+    )
+
+    assert value == "Nimbus3.8"
+
+
+def test_family_generation_fallback_uses_highest_numeric_generation():
+    item = {
+        "title": "Nimbus official model family",
+        "url": "https://nimbus.example.com/models",
+        "snippet": "Nimbus releases",
+        "page_text": (
+            "Nimbus2.5 remains supported. Nimbus3.7 added multimodal support. "
+            "Nimbus3.8 is now available."
+        ),
+    }
+
+    value = web_search_tool._extract_release_value(
+        item,
+        query="Nimbus latest version release",
+    )
+
+    assert value == "Nimbus3.8"
+
+
+def test_qwen_latest_family_does_not_fall_back_to_older_qwen25():
+    payload = {
+        "query": "Qwen latest version release",
+        "results": [
+            {
+                "title": "Qwen",
+                "url": "https://qwen.ai/",
+                "snippet": "Official Qwen model family",
+                "page_text": (
+                    "Qwen2.5 was an earlier generation. "
+                    "Its latest version, Qwen3.8, is the current flagship family."
+                ),
+            },
+            {
+                "title": "Releases · QwenLM/qwen-code",
+                "url": "https://github.com/QwenLM/qwen-code/releases",
+                "snippet": "Qwen Code v0.24.1",
+                "page_text": "Release list v0.24.1 Latest",
+            },
+        ],
+    }
+
+    fact = web_search_tool.authoritative_current_fact(payload)
+
+    assert fact is not None
+    assert fact["value"].lower() == "qwen3.8"
+    assert fact["value"].lower() != "qwen2.5"
+    assert fact["value"] != "v0.24.1"
+
+
+def test_explicit_qwen_code_query_still_uses_tool_release():
+    payload = {
+        "query": "Qwen Code latest version release",
+        "results": [
+            {
+                "title": "Releases · QwenLM/qwen-code",
+                "url": "https://github.com/QwenLM/qwen-code/releases",
+                "snippet": "Qwen Code v0.24.1",
+                "page_text": "Release list v0.24.1 Latest",
+            },
+            {
+                "title": "Qwen",
+                "url": "https://qwen.ai/",
+                "snippet": "Official Qwen model family",
+                "page_text": "Its latest version, Qwen3.8, is the current flagship family.",
+            },
+        ],
+    }
+
+    fact = web_search_tool.authoritative_current_fact(payload)
+
+    assert fact is not None
+    assert fact["value"] == "v0.24.1"
+    assert "qwen-code" in fact["url"]
+

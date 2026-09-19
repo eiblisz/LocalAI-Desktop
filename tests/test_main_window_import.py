@@ -128,8 +128,10 @@ def test_normal_chat_has_web_auto_and_manual_web_toggle():
     assert 'QPushButton("WEB AUTO")' in build
     assert "setCheckable(True)" in build
     assert "self.web_button.isChecked()" in send
-    assert "_looks_like_web_request(text)" in send
+    assert "plan_user_action(" in send
+    assert "ACTION_WEB_RESEARCH" in send
     assert "ChatWebWorker" in send
+    assert "AdaptiveChatWorker" in send
 
 
 def test_web_auto_detects_explicit_search_intent():
@@ -329,13 +331,16 @@ def test_explicit_memory_request_uses_dedicated_background_worker():
 
     source = inspect.getsource(MainWindow._send)
 
-    assert "if is_explicit_memory_request(text):" in source
+    assert "plan_user_action(" in source
+    assert "action_plan.has(ACTION_MEMORY_WRITE)" in source
     assert "self.worker = MemoryWriteWorker(" in source
     assert "self.memory_store" in source
     assert "self.generation_chat_id" in source
     assert "self.worker.finished.connect(self._on_memory_finished)" in source
     assert "self.worker.failed.connect(self._on_memory_failed)" in source
-    assert source.index("if is_explicit_memory_request(text):") < source.index("use_web = (")
+    assert source.index("action_plan.has(ACTION_MEMORY_WRITE)") < source.index(
+        "use_web = action_plan.has(ACTION_WEB_RESEARCH)"
+    )
 
 
 def test_memory_write_completion_is_bound_to_originating_chat():
@@ -568,4 +573,99 @@ def test_desktop_artifact_tools_use_shared_artifact_service():
     assert "create_pdf(" not in creator
     assert "create_docx(" not in creator
     assert "create_html(" not in creator
+
+
+def test_shared_action_plan_routes_memory_web_artifact_and_stable_chat():
+    from app.web_intent import (
+        ACTION_ARTIFACT,
+        ACTION_CHAT,
+        ACTION_MEMORY_WRITE,
+        ACTION_WEB_RESEARCH,
+        plan_user_action,
+    )
+
+    memory = plan_user_action("Jegyezd meg, hogy Lilla a lányom.")
+    assert memory.has(ACTION_MEMORY_WRITE)
+
+    current = plan_user_action("Melyik a jelenlegi legfrissebb Qwen verzió?")
+    assert current.has(ACTION_WEB_RESEARCH)
+
+    stable = plan_user_action("Magyarázd el röviden, mi az a TCP.")
+    assert stable.has(ACTION_CHAT)
+    assert not stable.has(ACTION_WEB_RESEARCH)
+
+    artifact = plan_user_action(
+        "Keress friss SSD árakat és készíts belőle Excel fájlt."
+    )
+    assert artifact.has(ACTION_WEB_RESEARCH)
+    assert artifact.has(ACTION_ARTIFACT)
+    assert artifact.artifact_plans[0].request.format == "xlsx"
+
+
+def test_auto_web_fallback_policy_is_bounded_to_stale_or_missing_knowledge():
+    from app.web_intent import answer_requires_web_fallback
+
+    assert answer_requires_web_fallback(
+        "Melyik modell a legújabb?",
+        "Nincs friss információm erről a modellről.",
+    )
+    assert not answer_requires_web_fallback(
+        "Mi az a TCP?",
+        "A TCP egy kapcsolatorientált hálózati protokoll.",
+    )
+    assert not answer_requires_web_fallback(
+        "Írj egy rövid verset.",
+        "Nem vagyok biztos benne, milyen stílust szeretnél.",
+    )
+
+
+def test_freshness_sensitive_requests_route_to_web_without_search_verb():
+    from app.web_intent import is_freshness_sensitive_request
+
+    assert is_freshness_sensitive_request("Melyik a jelenlegi Ollama verzió?")
+    assert is_freshness_sensitive_request("Mennyi most egy 4 TB SSD ára?")
+    assert is_freshness_sensitive_request("What is the latest Qwen release?")
+    assert not is_freshness_sensitive_request("Mi az a neurális háló?")
+    assert not is_freshness_sensitive_request("Magyarázd el röviden, mi az a TCP.")
+    assert not is_freshness_sensitive_request("Készíts rövid témaleírást.")
+
+
+def test_numbered_multi_action_message_plans_each_task_independently():
+    from app.web_intent import (
+        ACTION_ARTIFACT,
+        ACTION_CHAT,
+        ACTION_WEB_RESEARCH,
+        plan_user_actions,
+    )
+
+    prompt = """1. Melyik a jelenlegi legfrissebb Qwen verzió?
+
+2. Magyarázd el röviden, mi az a TCP.
+
+3. Mi a legújabb Ollama verzió, és készíts róla egy rövid HTML riportot."""
+
+    planned = plan_user_actions(prompt)
+
+    assert len(planned) == 3
+
+    assert planned[0].plan.has(ACTION_WEB_RESEARCH)
+    assert not planned[0].plan.has(ACTION_ARTIFACT)
+
+    assert planned[1].plan.has(ACTION_CHAT)
+    assert not planned[1].plan.has(ACTION_WEB_RESEARCH)
+
+    assert planned[2].plan.has(ACTION_WEB_RESEARCH)
+    assert planned[2].plan.has(ACTION_ARTIFACT)
+    assert planned[2].plan.artifact_plans[0].request.format == "html"
+
+
+def test_compound_web_to_artifact_workflow_stays_one_action_unit():
+    from app.web_intent import plan_user_actions
+
+    planned = plan_user_actions(
+        "Mi a legújabb Ollama verzió, és készíts róla egy rövid HTML riportot."
+    )
+
+    assert len(planned) == 1
+    assert planned[0].prompt.startswith("Mi a legújabb Ollama")
 

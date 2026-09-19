@@ -29,8 +29,11 @@ from .language_policy import (
 )
 from .ollama_client import OllamaClient
 from .weather_tool import get_weather, weather_context_text
+from .web_intent import answer_requires_web_fallback
 from .web_search_tool import (
+    authoritative_current_fact,
     build_search_plan,
+    is_current_version_query,
     search_web,
     source_entries,
     source_urls,
@@ -424,6 +427,106 @@ class ChatWebWorker(QObject):
             queries = [self._preserve_search_constraints(queries[0])]
         return queries
 
+    def _authoritative_fact_answer(self, fact):
+        value = str(fact.get("value", "")).strip()
+        title = str(fact.get("title", "")).strip() or "Official source"
+        url = str(fact.get("url", "")).strip()
+        source = f"[{title}]({url})" if url else title
+
+        instruction = self._conversation_language_instruction()
+        if "Hungarian" in instruction:
+            return (
+                f"A hivatalos elsődleges forrás alapján a legfrissebb verzió: "
+                f"**{value}**. Forrás: {source}"
+            )
+        if "German" in instruction:
+            return (
+                f"Laut der offiziellen Primärquelle ist die neueste Version "
+                f"**{value}**. Quelle: {source}"
+            )
+        return (
+            f"According to the official first-party source, the latest version is "
+            f"**{value}**. Source: {source}"
+        )
+
+    def _enforce_authoritative_facts(self, answer, facts):
+        final = str(answer or "").strip()
+        for fact in facts or []:
+            if fact.get("kind") != "latest_release":
+                continue
+            value = str(fact.get("value", "")).strip()
+            if value and value not in final:
+                return self._authoritative_fact_answer(fact)
+        return final
+
+
+    @staticmethod
+    def _version_like_tokens(text):
+        return set(
+            re.findall(
+                r"(?i)(?:\bv?\d+(?:\.\d+){1,3}(?:[-+][0-9a-z.-]+)?\b|"
+                r"\b[a-z][a-z0-9_-]*\d+(?:\.\d+){1,3}\b)",
+                str(text or ""),
+            )
+        )
+
+    def _compact_current_version_answer(self, answer, authoritative_facts):
+        """
+        Keep simple latest/current version answers direct.
+
+        The full search/source appendix is emitted separately by the host, so the
+        visible answer should not become a research report unless the user asked
+        for one. Authoritative exact facts remain deterministic. Otherwise a
+        bounded rewrite may shorten the already-grounded answer, but it may not
+        introduce new version-like tokens.
+        """
+        final = str(answer or "").strip()
+        if not is_current_version_query(self.user_prompt):
+            return final
+
+        for fact in authoritative_facts or []:
+            if fact.get("kind") == "latest_release":
+                return self._authoritative_fact_answer(fact)
+
+        if len(final) <= 700:
+            return final
+
+        compact = self.client.chat_once(
+            model=self.model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Rewrite the supplied grounded answer into at most three short "
+                        "sentences. Answer the user's latest/current version question "
+                        "immediately. Preserve product/model/version names and URLs exactly. "
+                        "Do not add, infer, correct, rank, or remove the core answer. "
+                        "Do not include timelines, key-highlights sections, ecosystem "
+                        "summaries, API change lists, or research-process narration. "
+                        + self._conversation_language_instruction()
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"USER QUESTION:\n{self.user_prompt}\n\n"
+                        f"GROUNDED ANSWER TO SHORTEN:\n{final}"
+                    ),
+                },
+            ],
+        ).strip()
+
+        if not compact or len(compact) > 900:
+            return final
+        if not response_language_matches(self.user_prompt, compact):
+            return final
+        if not self._version_like_tokens(compact).issubset(
+            self._version_like_tokens(final)
+        ):
+            return final
+        return compact
+
+
     def _safe_evidence_failure(self, answer_rejected=False):
         if "Hungarian" in self._conversation_language_instruction():
             if answer_rejected:
@@ -503,6 +606,7 @@ class ChatWebWorker(QObject):
             evidence_ledgers = []
             verification_queries = []
             constrained_rejections = []
+            authoritative_facts = []
 
             for query in queries:
                 if self._stop_event.is_set():
@@ -548,6 +652,15 @@ class ChatWebWorker(QObject):
                             f"{query}: no product-specific shopping evidence"
                         )
                     continue
+
+                fact = authoritative_current_fact(payload)
+                if fact and not any(
+                    existing.get("kind") == fact.get("kind")
+                    and existing.get("value") == fact.get("value")
+                    and existing.get("url") == fact.get("url")
+                    for existing in authoritative_facts
+                ):
+                    authoritative_facts.append(fact)
 
                 context_body = web_search_context_text(payload)
                 if isinstance(payload.get("search_plan"), dict):
@@ -715,8 +828,19 @@ class ChatWebWorker(QObject):
                     "EVIDENCE LEDGER data is present, mention only ACCEPT results and "
                     "only fields explicitly marked VERIFIED. When you mention a specific "
                     "product, offer, article, or result, include its provided source URL "
-                    "in the same bullet or sentence using Markdown link syntax. Do not "
-                    "say you cannot browse the web; the authorized web data has already "
+                    "in the same bullet or sentence using Markdown link syntax. "
+                    "When a result has a Scope note saying it is a qualified subproduct/tool "
+                    "not named in the query, do not use that result as the current-version "
+                    "authority for the broader product or model family. "
+                    "When AUTHORITATIVE CURRENT FACT data is present, preserve its exact "
+                    "value for the requested latest/current fact and prefer that first-party "
+                    "authority over conflicting secondary sources or model priors. "
+                    "For a simple latest/current version question, lead with the direct "
+                    "answer in one to three short sentences. Do not produce timelines, key "
+                    "highlights, ecosystem summaries, API change lists, or research-process "
+                    "narration unless the user explicitly asks for detail; the host appends "
+                    "the search/source appendix separately. Do not say you cannot browse "
+                    "the web; the authorized web data has already "
                     "been collected for you. "
                     + self._conversation_language_instruction()
                 ),
@@ -763,6 +887,14 @@ class ChatWebWorker(QObject):
                 raise RuntimeError("The model returned an empty web answer.")
 
             answer = self._repair_response_language(answer)
+            answer = self._enforce_authoritative_facts(
+                answer,
+                authoritative_facts,
+            )
+            answer = self._compact_current_version_answer(
+                answer,
+                authoritative_facts,
+            )
 
             verification_status = ""
             unique_verification_queries = list(dict.fromkeys(verification_queries))
@@ -867,6 +999,74 @@ def run_chat_web_request(client, model, messages, user_prompt):
     if not answer:
         raise RuntimeError("Web research returned an empty answer.")
     return answer
+
+
+class AdaptiveChatWorker(QObject):
+    """
+    Normal local chat with one bounded automatic web fallback.
+
+    The first pass stays fully local. If the model explicitly reports missing or
+    stale knowledge, the worker discards that draft and retries once through the
+    existing grounded WEB AUTO runtime.
+    """
+
+    token = Signal(str)
+    finished = Signal()
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        client: OllamaClient,
+        model: str,
+        messages: list[dict],
+        user_prompt: str,
+    ):
+        super().__init__()
+        self.client = client
+        self.model = model
+        self.messages = [dict(message) for message in messages]
+        self.user_prompt = str(user_prompt or "").strip()
+        self._stop_event = threading.Event()
+        self.used_web_fallback = False
+
+    @Slot()
+    def run(self):
+        try:
+            if self._stop_event.is_set():
+                self.finished.emit()
+                return
+
+            draft = self.client.chat_once(
+                model=self.model,
+                messages=self.messages,
+            ).strip()
+
+            if (
+                not self._stop_event.is_set()
+                and answer_requires_web_fallback(self.user_prompt, draft)
+            ):
+                self.used_web_fallback = True
+                final = run_chat_web_request(
+                    self.client,
+                    self.model,
+                    self.messages,
+                    self.user_prompt,
+                ).strip()
+            else:
+                final = draft
+
+            if self._stop_event.is_set():
+                self.finished.emit()
+                return
+
+            if final:
+                self.token.emit(final)
+            self.finished.emit()
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+    def stop(self):
+        self._stop_event.set()
 
 
 class DocumentWorker(QObject):

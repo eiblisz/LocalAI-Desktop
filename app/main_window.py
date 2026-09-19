@@ -59,8 +59,14 @@ from .scheduler_dialog import SchedulerDialog
 from .scheduler_store import ScheduledTaskStore
 from .secret_store import SecretStore
 from .storage import ChatStore
-from .web_intent import looks_like_web_request
+from .web_intent import (
+    ACTION_MEMORY_WRITE,
+    ACTION_WEB_RESEARCH,
+    looks_like_web_request,
+    plan_user_action,
+)
 from .workers import (
+    AdaptiveChatWorker,
     ChatWebWorker,
     ChatWorker,
     DocumentWorker,
@@ -890,7 +896,12 @@ class MainWindow(QMainWindow):
         self._load_chat_list()
         self._render_chat()
 
-        if is_explicit_memory_request(text):
+        action_plan = plan_user_action(
+            text,
+            force_web=self.web_button.isChecked(),
+        )
+
+        if action_plan.has(ACTION_MEMORY_WRITE):
             self.partial_assistant = ""
             self.current_chat_uses_web = False
             self.thread = QThread()
@@ -937,10 +948,7 @@ class MainWindow(QMainWindow):
                 messages_for_model.append(message)
         messages_for_model.append({"role": "user", "content": text_for_model})
 
-        use_web = (
-            self.web_button.isChecked()
-            or self._looks_like_web_request(text)
-        )
+        use_web = action_plan.has(ACTION_WEB_RESEARCH)
 
         self.partial_assistant = ""
         self.current_chat_uses_web = use_web
@@ -955,10 +963,11 @@ class MainWindow(QMainWindow):
                 text_for_model,
             )
         else:
-            self.worker = ChatWorker(
+            self.worker = AdaptiveChatWorker(
                 self.client,
                 model,
                 messages_for_model,
+                text_for_model,
             )
 
         self.worker.moveToThread(self.thread)
