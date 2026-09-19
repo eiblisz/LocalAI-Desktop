@@ -1282,3 +1282,85 @@ def test_version_like_token_guard_detects_semver_and_named_model_versions():
     assert "v0.34.2" in tokens
     assert "1.25.0" in tokens
 
+
+def test_generic_grounded_web_answer_is_compacted_to_direct_primary_answer():
+    class CompactClient(DummyWebClient):
+        def chat_once(self, model, messages, timeout=600.0):
+            self.once_calls.append((model, messages))
+            if messages and "Rewrite the supplied grounded web answer" in messages[0]["content"]:
+                return (
+                    "A Bitcoin aktuális ára 81 669,66 USD. "
+                    "A forrás késleltetett adatot jelez, ezért az érték változhat."
+                )
+            return "unused"
+
+    worker = workers.ChatWebWorker(
+        CompactClient(),
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Mennyi most a bitcoin árfolyama?",
+    )
+    verbose = (
+        "Ha szeretnéd követni a BTC árfolyamot, használhatsz több oldalt is. "
+        "CoinMarketCap, CoinGecko, Binance és TradingView is elérhető. "
+        "A megadott szöveg szerint a BTC/USD árfolyam 81 669,66 USD. "
+        "A forrás késleltetett adatot jelez. "
+        + "További statisztikák és háttérinformációk. " * 30
+    )
+
+    compact = worker._compact_grounded_answer(verbose)
+
+    assert compact.startswith("A Bitcoin aktuális ára 81 669,66 USD")
+    assert len(compact) < 750
+    assert "CoinMarketCap, CoinGecko" not in compact
+
+
+def test_generic_compactor_rejects_new_numeric_fact():
+    class UnsafeCompactClient(DummyWebClient):
+        def chat_once(self, model, messages, timeout=600.0):
+            return "A Bitcoin aktuális ára 99 999 USD."
+
+    worker = workers.ChatWebWorker(
+        UnsafeCompactClient(),
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Mennyi most a bitcoin árfolyama?",
+    )
+    original = (
+        "A BTC/USD árfolyam 81 669,66 USD. "
+        + "További részletek és háttérinformációk. " * 40
+    )
+
+    compact = worker._compact_grounded_answer(original)
+
+    assert "81 669,66 USD" in compact
+    assert "99 999 USD" not in compact
+
+
+def test_detailed_web_request_opts_out_of_generic_compaction():
+    class NoRewriteClient(DummyWebClient):
+        def chat_once(self, model, messages, timeout=600.0):
+            raise AssertionError("detailed request must not be compacted")
+
+    worker = workers.ChatWebWorker(
+        NoRewriteClient(),
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Készíts részletes elemzést a Bitcoin mai árfolyamáról.",
+    )
+    original = "Részletes válasz. " * 100
+
+    assert worker._compact_grounded_answer(original) == original
+
+
+def test_short_grounded_web_answer_is_left_unchanged():
+    worker = workers.ChatWebWorker(
+        DummyWebClient(),
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Mennyi most a bitcoin árfolyama?",
+    )
+    original = "A BTC/USD árfolyam 81 669,66 USD."
+
+    assert worker._compact_grounded_answer(original) == original
+

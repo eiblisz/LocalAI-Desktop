@@ -67,6 +67,7 @@ def looks_like_web_request(text):
         "aktuális ár",
         "aktualis ar",
         "most mennyi",
+        "mennyi most",
         "look up",
         "search for",
         "search the web",
@@ -110,6 +111,65 @@ def is_freshness_sensitive_request(text):
     if not normalized:
         return False
 
+    explanatory_markers = (
+        "magyarázd el",
+        "magyarazd el",
+        "mi az a ",
+        "mi az az ",
+        "mi a különbség",
+        "mi a kulonbseg",
+        "explain ",
+        "what is ",
+        "what are ",
+        "difference between",
+        "erkläre ",
+        "erklaere ",
+        "was ist ",
+        "was sind ",
+        "unterschied zwischen",
+    )
+    explicit_recency_markers = (
+        "most",
+        "jelenlegi",
+        "aktuális",
+        "aktualis",
+        "mostani",
+        "legfrissebb",
+        "legújabb",
+        "legujabb",
+        "mai ",
+        "latest",
+        "current",
+        "today",
+        "now",
+        "aktuell",
+        "heute",
+        "neueste",
+    )
+    # A currency-pair quote is intrinsically time-sensitive even when phrased
+    # as "What is ...". Keep this narrow so generic definitions such as
+    # "What is an exchange rate?" remain local.
+    currency_pair_quote = bool(
+        re.search(
+            r"(?<![a-z])(?:[a-z]{3})\s*(?:/|-|\s)\s*(?:[a-z]{3})(?![a-z])",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        and (
+            "exchange rate" in normalized
+            or "wechselkurs" in normalized
+            or "árfolyam" in normalized
+            or "arfolyam" in normalized
+        )
+    )
+    if currency_pair_quote:
+        return True
+
+    if any(marker in normalized for marker in explanatory_markers) and not any(
+        marker in normalized for marker in explicit_recency_markers
+    ):
+        return False
+
     markers = (
         "legfrissebb",
         "friss hírek",
@@ -119,6 +179,19 @@ def is_freshness_sensitive_request(text):
         "jelenlegi",
         "mostani",
         "most mennyi",
+        "mennyi most",
+        "árfolyam",
+        "arfolyam",
+        "árfolyama",
+        "arfolyama",
+        "tőzsdei ár",
+        "tozsdei ar",
+        "piaci ár",
+        "piaci ar",
+        "spot price",
+        "market price",
+        "exchange rate",
+        "wechselkurs",
         "mai ",
         "ma ",
         "ezen a héten",
@@ -255,6 +328,10 @@ def answer_requires_web_fallback(user_text, answer):
         "nem rendelkezem naprakész",
         "nem rendelkezem naprakesz",
         "nem tudok interneten keresni",
+        "nem tudok valós időben hozzáférni",
+        "nem tudok valos idoben hozzaferni",
+        "nincs valós idejű hozzáférésem",
+        "nincs valos ideju hozzaferesem",
         "nem férek hozzá az internethez",
         "nem ferek hozza az internethez",
         "tudásom lezárási",

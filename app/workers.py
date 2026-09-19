@@ -527,6 +527,118 @@ class ChatWebWorker(QObject):
         return compact
 
 
+    def _wants_detailed_web_answer(self):
+        normalized = self._fold_text(self.user_prompt)
+        detail_markers = (
+            "részletes",
+            "reszletes",
+            "részletesen",
+            "reszletesen",
+            "magyarázd el",
+            "magyarazd el",
+            "elemezd",
+            "elemzés",
+            "elemzes",
+            "összefoglaló",
+            "osszefoglalo",
+            "riport",
+            "report",
+            "detailed",
+            "in detail",
+            "explain",
+            "analysis",
+            "analyze",
+            "compare",
+            "comparison",
+            "list all",
+            "vollständig",
+            "vollstaendig",
+            "ausführlich",
+            "ausfuhrlich",
+            "erkläre",
+            "erklaere",
+            "analyse",
+            "bericht",
+        )
+        return any(marker in normalized for marker in detail_markers)
+
+    @staticmethod
+    def _numeric_fact_tokens(text):
+        return set(
+            re.findall(
+                r"(?i)(?:[$€£]\s*)?\b\d[\d\s.,]*"
+                r"(?:\s*(?:usd|eur|gbp|huf|btc|eth|%|tb|gb|mb|mhz|mt/s))?\b",
+                str(text or ""),
+            )
+        )
+
+    @staticmethod
+    def _url_tokens(text):
+        return set(
+            re.findall(r"https?://[^\s)\]>]+", str(text or ""))
+        )
+
+    def _compact_grounded_answer(self, answer):
+        """
+        Apply one interface-wide answer-shaping rule to ordinary grounded web
+        answers: answer the user's actual question first, briefly, while leaving
+        the host's search/source appendix available underneath.
+
+        Detailed/report/explanation requests opt out. The rewrite is bounded:
+        it may omit supporting detail, but it may not introduce new numeric facts
+        or URLs that were not already present in the grounded answer.
+        """
+        original = str(answer or "")
+        final = original.strip()
+        if not final:
+            return final
+        if self._wants_detailed_web_answer():
+            return original
+
+        if len(final) <= 650:
+            return final
+
+        compact = self.client.chat_once(
+            model=self.model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Rewrite the supplied grounded web answer into a concise primary "
+                        "answer. Answer the user's exact question immediately in the first "
+                        "sentence, then add at most two short supporting sentences if useful. "
+                        "Prefer the concrete requested value/result over advice about where "
+                        "to look. Do not add new facts, numbers, prices, dates, percentages, "
+                        "versions, URLs, recommendations, or caveats. You may omit secondary "
+                        "details because the host app shows the search/source appendix "
+                        "separately. Preserve uncertainty or delayed-data caveats when they "
+                        "materially qualify the requested value. "
+                        + self._conversation_language_instruction()
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"USER QUESTION:\n{self.user_prompt}\n\n"
+                        f"GROUNDED ANSWER TO SHORTEN:\n{final}"
+                    ),
+                },
+            ],
+        ).strip()
+
+        if not compact or len(compact) > 750:
+            return final
+        if not response_language_matches(self.user_prompt, compact):
+            return final
+        if not self._numeric_fact_tokens(compact).issubset(
+            self._numeric_fact_tokens(final)
+        ):
+            return final
+        if not self._url_tokens(compact).issubset(self._url_tokens(final)):
+            return final
+        return compact
+
+
     def _safe_evidence_failure(self, answer_rejected=False):
         if "Hungarian" in self._conversation_language_instruction():
             if answer_rejected:
@@ -835,11 +947,16 @@ class ChatWebWorker(QObject):
                     "When AUTHORITATIVE CURRENT FACT data is present, preserve its exact "
                     "value for the requested latest/current fact and prefer that first-party "
                     "authority over conflicting secondary sources or model priors. "
-                    "For a simple latest/current version question, lead with the direct "
-                    "answer in one to three short sentences. Do not produce timelines, key "
-                    "highlights, ecosystem summaries, API change lists, or research-process "
-                    "narration unless the user explicitly asks for detail; the host appends "
-                    "the search/source appendix separately. Do not say you cannot browse "
+                    "For ordinary factual web questions, answer the user's exact question "
+                    "immediately and keep the primary answer concise: normally one to three "
+                    "short sentences. Do not replace a requested value with advice about where "
+                    "to look when the authorized evidence already contains that value. "
+                    "Only provide a long explanation, report, analysis, comparison, or list "
+                    "when the user explicitly asks for that level of detail. Do not produce "
+                    "timelines, key-highlights sections, ecosystem summaries, API change lists, "
+                    "or research-process narration by default; the host appends the search/source "
+                    "appendix separately. For a simple latest/current version question, preserve "
+                    "the direct authoritative answer. Do not say you cannot browse "
                     "the web; the authorized web data has already "
                     "been collected for you. "
                     + self._conversation_language_instruction()
@@ -895,6 +1012,7 @@ class ChatWebWorker(QObject):
                 answer,
                 authoritative_facts,
             )
+            answer = self._compact_grounded_answer(answer)
 
             verification_status = ""
             unique_verification_queries = list(dict.fromkeys(verification_queries))
