@@ -749,3 +749,106 @@ def test_authoritative_current_fact_prefers_github_latest_over_newer_prerelease(
 
     assert fact["value"] == "v0.34.2"
 
+
+def test_unqualified_family_query_does_not_promote_qualified_tool_repo():
+    results = [
+        {
+            "title": "Releases · QwenLM/qwen-code",
+            "url": "https://github.com/QwenLM/qwen-code/releases",
+            "snippet": "Qwen Code v0.24.1",
+            "page_text": "Release list v0.24.1 Latest",
+        },
+        {
+            "title": "QwenLM/Qwen: official Qwen model repository",
+            "url": "https://github.com/QwenLM/Qwen",
+            "snippet": "Official Qwen model family repository",
+            "page_text": "Qwen model family releases and model cards",
+        },
+    ]
+
+    ranked = web_search_tool.rank_authoritative_results(
+        "Qwen latest version release",
+        results,
+    )
+
+    assert ranked[0]["url"] == "https://github.com/QwenLM/Qwen"
+    assert web_search_tool._authority_score(
+        "Qwen latest version release",
+        results[0],
+    ) < 0
+
+
+def test_unqualified_family_query_does_not_extract_tool_semver_as_family_version():
+    payload = {
+        "query": "Qwen latest version release",
+        "results": [
+            {
+                "title": "Releases · QwenLM/qwen-code",
+                "url": "https://github.com/QwenLM/qwen-code/releases",
+                "snippet": "Qwen Code v0.24.1",
+                "page_text": "Release list v0.24.1 Latest",
+            }
+        ],
+    }
+
+    assert web_search_tool.authoritative_current_fact(payload) is None
+
+
+def test_explicit_tool_query_may_use_matching_tool_repo_release():
+    payload = {
+        "query": "Qwen Code latest version release",
+        "results": [
+            {
+                "title": "Releases · QwenLM/qwen-code",
+                "url": "https://github.com/QwenLM/qwen-code/releases",
+                "snippet": "Qwen Code v0.24.1",
+                "page_text": "Release list v0.24.1 Latest",
+            }
+        ],
+    }
+
+    fact = web_search_tool.authoritative_current_fact(payload)
+
+    assert fact["value"] == "v0.24.1"
+    assert fact["url"] == "https://github.com/QwenLM/qwen-code/releases"
+
+
+def test_generic_entity_scope_rule_is_not_qwen_specific():
+    family_query = "Nimbus latest version release"
+    tool_result = {
+        "title": "Releases · ExampleOrg/nimbus-cli",
+        "url": "https://github.com/ExampleOrg/nimbus-cli/releases",
+        "snippet": "Nimbus CLI v2.4.0",
+        "page_text": "Release list v2.4.0 Latest",
+    }
+
+    assert web_search_tool._authority_scope_mismatch(
+        family_query,
+        tool_result,
+    )
+    assert not web_search_tool._authority_scope_mismatch(
+        "Nimbus CLI latest version release",
+        tool_result,
+    )
+
+
+def test_web_context_marks_qualified_tool_scope_mismatch():
+    payload = {
+        "provider": "Brave Search API",
+        "query": "Qwen latest version release",
+        "retrieved_at": "2026-09-19T13:00:00",
+        "results": [
+            {
+                "title": "Releases · QwenLM/qwen-code",
+                "url": "https://github.com/QwenLM/qwen-code/releases",
+                "snippet": "Qwen Code v0.24.1",
+                "page_text": "Release list v0.24.1 Latest",
+            }
+        ],
+    }
+
+    context = web_search_tool.web_search_context_text(payload)
+
+    assert "qualified subproduct/tool not named in the query" in context
+    assert "AUTHORITATIVE CURRENT FACT" not in context
+
