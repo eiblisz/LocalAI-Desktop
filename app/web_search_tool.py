@@ -901,6 +901,170 @@ def _filter_relevant_results(
     return relevant
 
 
+
+_CURRENT_VERSION_MARKERS = (
+    "latest",
+    "current",
+    "newest",
+    "legfrissebb",
+    "legújabb",
+    "legujabb",
+    "jelenlegi",
+    "aktuell",
+    "neueste",
+)
+_VERSION_TOPIC_MARKERS = (
+    "version",
+    "release",
+    "verzió",
+    "verzio",
+    "kiadás",
+    "kiadas",
+)
+_AUTHORITY_STOPWORDS = {
+    "latest", "current", "newest", "version", "release",
+    "legfrissebb", "legújabb", "legujabb", "jelenlegi",
+    "verzió", "verzio", "kiadás", "kiadas",
+    "aktuell", "neueste", "was", "what", "which", "melyik",
+    "mi", "az", "a", "the", "is", "ist",
+}
+_SEMVER_RE = re.compile(
+    r"(?<![A-Za-z0-9])v?\d+\.\d+(?:\.\d+){0,2}"
+    r"(?:[-+][0-9A-Za-z.-]+)?(?![A-Za-z0-9])",
+    flags=re.IGNORECASE,
+)
+
+
+def is_current_version_query(query):
+    normalized = _normalized_spec_text(query)
+    return (
+        any(marker in normalized for marker in _CURRENT_VERSION_MARKERS)
+        and any(marker in normalized for marker in _VERSION_TOPIC_MARKERS)
+    )
+
+
+def _authority_identity_terms(query):
+    normalized = _normalized_spec_text(query)
+    terms = [
+        token for token in re.findall(r"[a-z0-9][a-z0-9._+-]*", normalized)
+        if len(token) >= 3 and token not in _AUTHORITY_STOPWORDS
+    ]
+    return terms[:6]
+
+
+def _authority_score(query, item):
+    if not is_current_version_query(query):
+        return 0
+
+    url = _decode_bing_result_url(str(item.get("url", "")).strip())
+    title = _normalized_spec_text(item.get("title", ""))
+    try:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+        path = parsed.path.lower()
+    except Exception:
+        host = ""
+        path = ""
+
+    identity_terms = _authority_identity_terms(query)
+    score = 0
+
+    if host == "github.com" and "/releases" in path:
+        segments = [part for part in path.split("/") if part]
+        repo_identity = " ".join(segments[:2])
+        if any(term in repo_identity for term in identity_terms):
+            score += 500
+        else:
+            score += 120
+
+    if any(term in host for term in identity_terms):
+        score += 350
+
+    if any(term in title for term in identity_terms):
+        score += 80
+
+    if "official" in title or "hivatalos" in title:
+        score += 40
+
+    return score
+
+
+def rank_authoritative_results(query, results):
+    indexed = list(enumerate(list(results or [])))
+    indexed.sort(
+        key=lambda pair: (
+            -_authority_score(query, pair[1]),
+            pair[0],
+        )
+    )
+    return [item for _index, item in indexed]
+
+
+def _extract_release_value(item):
+    url = _decode_bing_result_url(str(item.get("url", "")).strip())
+    text = "\n".join([
+        str(item.get("title", "")),
+        str(item.get("snippet", "")),
+        str(item.get("page_text", "")),
+    ])
+    compact = " ".join(text.split())
+
+    try:
+        parsed = urlparse(url)
+        path = parsed.path
+    except Exception:
+        path = ""
+
+    tag_match = re.search(
+        r"/releases/tag/(v?\d+\.\d+(?:\.\d+){0,2}(?:[-+][0-9A-Za-z.-]+)?)",
+        path,
+        flags=re.IGNORECASE,
+    )
+    if tag_match:
+        return tag_match.group(1)
+
+    patterns = [
+        r"Release list\s+(v?\d+\.\d+(?:\.\d+){0,2}(?:[-+][0-9A-Za-z.-]+)?)",
+        r"(v?\d+\.\d+(?:\.\d+){0,2}(?:[-+][0-9A-Za-z.-]+)?)\s+Latest\b",
+        r"\bLatest\b.{0,100}?(v?\d+\.\d+(?:\.\d+){0,2}(?:[-+][0-9A-Za-z.-]+)?)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, compact, flags=re.IGNORECASE)
+        if match:
+            return match.group(1)
+
+    versions = _SEMVER_RE.findall(compact)
+    return versions[0] if versions else ""
+
+
+def authoritative_current_fact(payload):
+    query = str(payload.get("query", "")).strip()
+    if not is_current_version_query(query):
+        return None
+
+    ranked = rank_authoritative_results(query, payload.get("results") or [])
+    for item in ranked:
+        score = _authority_score(query, item)
+        if score < 300:
+            continue
+
+        value = _extract_release_value(item)
+        if not value:
+            continue
+
+        url = _decode_bing_result_url(str(item.get("url", "")).strip())
+        title = " ".join(str(item.get("title", "")).split()) or url
+        return {
+            "kind": "latest_release",
+            "value": value,
+            "url": url,
+            "title": title,
+            "authority": "first_party",
+        }
+
+    return None
+
+
 def source_urls(payload, limit=10):
     urls = []
     for item in payload.get("results") or []:
@@ -1010,6 +1174,7 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
                 plan=search_plan,
                 require_verified=not fetch_pages,
             )
+            results = rank_authoritative_results(clean, results)
             if not results:
                 errors.append(
                     f"{name}: results failed relevance or hard constraints"
@@ -1024,6 +1189,7 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
                     plan=search_plan,
                     require_verified=False,
                 )
+                results = rank_authoritative_results(clean, results)
                 if not results:
                     errors.append(
                         f"{name}: results contradicted hard constraints after page fetch"
@@ -1058,6 +1224,22 @@ def web_search_context_text(payload):
     provider_query = str(payload.get("provider_query", "")).strip()
     if provider_query and provider_query != str(payload.get("query", "")).strip():
         lines.append(f"Provider query: {provider_query}")
+    fact = authoritative_current_fact(payload)
+    if fact:
+        lines.extend([
+            "",
+            "AUTHORITATIVE CURRENT FACT",
+            f"Kind: {fact['kind']}",
+            f"Value: {fact['value']}",
+            f"Authority: {fact['authority']}",
+            f"Source: {fact['title']}",
+            f"Source URL: {fact['url']}",
+            (
+                "Instruction: preserve this exact current value for the requested "
+                "latest/current fact; do not replace it with an older secondary-source value."
+            ),
+        ])
+
     lines.extend([
         "",
         "SEARCH RESULTS",
