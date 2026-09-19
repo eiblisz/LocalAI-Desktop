@@ -755,7 +755,7 @@ def test_workspace_hosts_chat_and_closeable_internal_resource_tabs():
     assert "setMovable(True)" in build_source
     assert "self._build_chat_panel()" in build_source
     assert 'addTab(self.chat_workspace, "Chat")' in build_source
-    assert "if index <= 0" in close_source
+    assert "widget is self.chat_workspace" in close_source
     assert "removeTab(index)" in close_source
 
 
@@ -764,6 +764,9 @@ def test_open_resource_creates_internal_tab_and_keeps_browser_navigation_interna
 
     open_source = inspect.getsource(MainWindow._open_resource)
 
+    assert "resource_identity(target)" in open_source
+    assert 'existing.property("resource_target") == resource_key' in open_source
+    assert 'widget.setProperty("resource_target", resource_key)' in open_source
     assert "create_resource_view(" in open_source
     assert "open_resource=self._open_resource" in open_source
     assert "self.workspace_tabs.addTab" in open_source
