@@ -57,12 +57,6 @@ def infer_artifact_format(text: str) -> str:
         return "xlsx"
     if re.search(r"\b(html)\b", normalized) or "weboldal" in normalized:
         return "html"
-    if (
-        re.search(r"\b(doc|docx|word)\b", normalized)
-        or "word dokument" in normalized
-        or "dokumentum" in normalized
-    ):
-        return "docx"
 
     summary_markers = (
         "összefoglaló",
@@ -85,6 +79,13 @@ def infer_artifact_format(text: str) -> str:
         and any(marker in normalized for marker in file_markers)
     ):
         return "summary"
+
+    if (
+        re.search(r"\b(doc|docx|word)\b", normalized)
+        or "word dokument" in normalized
+        or "dokumentum" in normalized
+    ):
+        return "docx"
 
     return ""
 
