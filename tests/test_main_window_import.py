@@ -679,6 +679,7 @@ def test_live_market_price_questions_route_to_web():
 
     prompts = [
         "Mennyi most a bitcoin árfolyama?",
+        "Mi a bitcoin árfolyama?",
         "Mennyi most az ETH arfolyama?",
         "Mi a Tesla részvény piaci ára most?",
         "What is the current BTC market price?",
@@ -701,6 +702,7 @@ def test_market_price_routing_does_not_capture_stable_explanations():
         "Mi az a bitcoin?",
         "Magyarázd el, mi az az árfolyam.",
         "Mi a különbség a spot és futures piac között?",
+        "What is an exchange rate?",
     ]
 
     for prompt in stable_prompts:
