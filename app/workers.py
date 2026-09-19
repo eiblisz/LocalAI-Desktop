@@ -33,6 +33,7 @@ from .web_intent import answer_requires_web_fallback
 from .web_search_tool import (
     authoritative_current_fact,
     build_search_plan,
+    is_current_version_query,
     search_web,
     source_entries,
     source_urls,
@@ -459,6 +460,73 @@ class ChatWebWorker(QObject):
         return final
 
 
+    @staticmethod
+    def _version_like_tokens(text):
+        return set(
+            re.findall(
+                r"(?i)(?:\\bv?\\d+(?:\\.\\d+){1,3}(?:[-+][0-9a-z.-]+)?\\b|"
+                r"\\b[a-z][a-z0-9_-]*\\d+(?:\\.\\d+){1,3}\\b)",
+                str(text or ""),
+            )
+        )
+
+    def _compact_current_version_answer(self, answer, authoritative_facts):
+        """
+        Keep simple latest/current version answers direct.
+
+        The full search/source appendix is emitted separately by the host, so the
+        visible answer should not become a research report unless the user asked
+        for one. Authoritative exact facts remain deterministic. Otherwise a
+        bounded rewrite may shorten the already-grounded answer, but it may not
+        introduce new version-like tokens.
+        """
+        final = str(answer or "").strip()
+        if not is_current_version_query(self.user_prompt):
+            return final
+
+        for fact in authoritative_facts or []:
+            if fact.get("kind") == "latest_release":
+                return self._authoritative_fact_answer(fact)
+
+        if len(final) <= 700:
+            return final
+
+        compact = self.client.chat_once(
+            model=self.model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Rewrite the supplied grounded answer into at most three short "
+                        "sentences. Answer the user's latest/current version question "
+                        "immediately. Preserve product/model/version names and URLs exactly. "
+                        "Do not add, infer, correct, rank, or remove the core answer. "
+                        "Do not include timelines, key-highlights sections, ecosystem "
+                        "summaries, API change lists, or research-process narration. "
+                        + self._conversation_language_instruction()
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"USER QUESTION:\n{self.user_prompt}\n\n"
+                        f"GROUNDED ANSWER TO SHORTEN:\n{final}"
+                    ),
+                },
+            ],
+        ).strip()
+
+        if not compact or len(compact) > 900:
+            return final
+        if not response_language_matches(self.user_prompt, compact):
+            return final
+        if not self._version_like_tokens(compact).issubset(
+            self._version_like_tokens(final)
+        ):
+            return final
+        return compact
+
+
     def _safe_evidence_failure(self, answer_rejected=False):
         if "Hungarian" in self._conversation_language_instruction():
             if answer_rejected:
@@ -766,8 +834,13 @@ class ChatWebWorker(QObject):
                     "authority for the broader product or model family. "
                     "When AUTHORITATIVE CURRENT FACT data is present, preserve its exact "
                     "value for the requested latest/current fact and prefer that first-party "
-                    "authority over conflicting secondary sources or model priors. Do not "
-                    "say you cannot browse the web; the authorized web data has already "
+                    "authority over conflicting secondary sources or model priors. "
+                    "For a simple latest/current version question, lead with the direct "
+                    "answer in one to three short sentences. Do not produce timelines, key "
+                    "highlights, ecosystem summaries, API change lists, or research-process "
+                    "narration unless the user explicitly asks for detail; the host appends "
+                    "the search/source appendix separately. Do not say you cannot browse "
+                    "the web; the authorized web data has already "
                     "been collected for you. "
                     + self._conversation_language_instruction()
                 ),
@@ -815,6 +888,10 @@ class ChatWebWorker(QObject):
 
             answer = self._repair_response_language(answer)
             answer = self._enforce_authoritative_facts(
+                answer,
+                authoritative_facts,
+            )
+            answer = self._compact_current_version_answer(
                 answer,
                 authoritative_facts,
             )
