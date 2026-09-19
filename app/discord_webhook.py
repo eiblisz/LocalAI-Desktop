@@ -65,6 +65,7 @@ def send_discord_test_message(webhook_url, sender=requests.post, timeout=10):
     try:
         response = sender(
             url,
+            params={"wait": "true"},
             json=payload,
             timeout=float(timeout),
         )
@@ -76,14 +77,30 @@ def send_discord_test_message(webhook_url, sender=requests.post, timeout=10):
         }
 
     code = int(getattr(response, "status_code", 0) or 0)
-    if code in {200, 204}:
+    if code != 200:
         return {
-            "status": "connected",
-            "ok": True,
-            "message": f"Discord test message sent (HTTP {code}).",
+            "status": "error",
+            "ok": False,
+            "message": f"Discord test message was rejected (HTTP {code or 'unknown'}).",
         }
+
+    try:
+        body = response.json()
+    except Exception:
+        body = {}
+
+    message_id = str(body.get("id", "") or "").strip()
+    channel_id = str(body.get("channel_id", "") or "").strip()
+    if not message_id:
+        return {
+            "status": "error",
+            "ok": False,
+            "message": "Discord returned HTTP 200 but did not confirm message creation.",
+        }
+
+    suffix = f" in channel {channel_id}" if channel_id else ""
     return {
-        "status": "error",
-        "ok": False,
-        "message": f"Discord test message was rejected (HTTP {code or 'unknown'}).",
+        "status": "connected",
+        "ok": True,
+        "message": f"Discord test message confirmed{suffix} (message {message_id}).",
     }
