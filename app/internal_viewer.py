@@ -93,6 +93,14 @@ def resource_title(target) -> str:
     return (path.name or "Resource")[:64]
 
 
+def resource_identity(target) -> str:
+    value = str(target or "").strip()
+    parsed = urlparse(value)
+    if parsed.scheme.lower() in {"http", "https"}:
+        return value
+    return str(Path(value).resolve())
+
+
 def render_docx_html(path) -> str:
     document = Document(str(path))
     parts = [
