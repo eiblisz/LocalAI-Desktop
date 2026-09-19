@@ -242,3 +242,26 @@ def test_docx_high_fidelity_preview_fits_full_page():
     assert "fit_full_page=True" in docx_source
     assert "QPdfView.ZoomMode.FitInView" in pdf_source
     assert "QPdfView.ZoomMode.FitToWidth" in pdf_source
+
+
+def test_pdf_and_docx_viewers_expose_zoom_controls():
+    from app.internal_viewer import DocumentView, PdfViewWidget
+
+    pdf_source = inspect.getsource(PdfViewWidget)
+    docx_source = inspect.getsource(DocumentView.__init__)
+
+    assert '"FIT WIDTH"' in pdf_source
+    assert '"FIT PAGE"' in pdf_source
+    assert 'setZoomFactor' in pdf_source
+    assert 'QPdfView.ZoomMode.Custom' in pdf_source
+    assert 'QPdfView.ZoomMode.FitToWidth' in pdf_source
+    assert 'QPdfView.ZoomMode.FitInView' in pdf_source
+    assert 'fit_full_page=True' in docx_source
+
+
+def test_pdf_zoom_is_bounded_between_25_and_400_percent():
+    from app.internal_viewer import PdfViewWidget
+
+    source = inspect.getsource(PdfViewWidget._set_zoom_percent)
+
+    assert "max(25, min(int(percent), 400))" in source
