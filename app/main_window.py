@@ -126,6 +126,30 @@ QPushButton#primary {
 QPushButton#primary:hover {
     background: #D24A57;
 }
+QPushButton#sideMenuButton {
+    background: transparent;
+    border: 1px solid #2D3742;
+    border-radius: 10px;
+    min-height: 32px;
+    max-height: 34px;
+    padding: 5px 10px;
+    color: #AAB2BD;
+    font-weight: 600;
+}
+QPushButton#sideMenuButton:hover {
+    background: #1D2630;
+    border-color: #35414D;
+    color: #FFFFFF;
+}
+QPushButton#sideMenuButton:pressed {
+    background: #27323E;
+    color: #FFFFFF;
+}
+QPushButton#sideMenuButton:disabled {
+    background: transparent;
+    border-color: #25303A;
+    color: #6F7884;
+}
 QPushButton#toolButton {
     min-height: 32px;
     max-height: 34px;
@@ -136,6 +160,32 @@ QPushButton#subtleButton {
     background: transparent;
     border: 1px solid #2D3742;
     color: #AAB2BD;
+}
+QListWidget#sideChatList {
+    background: transparent;
+    border: none;
+    outline: none;
+    padding: 0px;
+}
+QListWidget#sideChatList::item {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    color: #AAB2BD;
+    padding: 7px 10px;
+    margin: 2px 1px;
+}
+QListWidget#sideChatList::item:hover {
+    background: #1D2630;
+    border-color: #35414D;
+    color: #FFFFFF;
+}
+QListWidget#sideChatList::item:selected,
+QListWidget#sideChatList::item:selected:active,
+QListWidget#sideChatList::item:selected:!active {
+    background: #27323E;
+    border-color: #35414D;
+    color: #FFFFFF;
 }
 QComboBox {
     background: #171D24;
@@ -582,7 +632,7 @@ class MainWindow(QMainWindow):
         self.tool_buttons = {}
         for text in ["PDF", "DOCX", "EXCEL", "HTML", "SUMMARY"]:
             button = QPushButton(text)
-            button.setObjectName("toolButton")
+            button.setObjectName("sideMenuButton")
             button.setFixedHeight(34)
             button.clicked.connect(
                 lambda _checked=False, name=text: self._select_tool(name)
@@ -1722,24 +1772,11 @@ class MainWindow(QMainWindow):
             return
 
         self.schedule_button.setText("SCHEDULE")
+        self.schedule_button.setObjectName("sideMenuButton")
         self.schedule_button.setToolTip(
             "Open the scheduler and manage saved automations."
         )
-        self.schedule_button.setStyleSheet(
-            "QPushButton {"
-            "background:#202730;"
-            "border:1px solid #323C48;"
-            "border-radius:10px;"
-            "padding:5px 10px;"
-            "color:#F4F6F8;"
-            "font-weight:700;"
-            "min-height:32px;"
-            "max-height:34px;"
-            "}"
-            "QPushButton:hover {"
-            "background:#29323D;"
-            "}"
-        )
+        self.schedule_button.setStyleSheet("")
         self.schedule_button.setFixedHeight(34)
 
     def _clear_schedule_task_labels(self):
