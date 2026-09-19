@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlparse
@@ -40,6 +41,8 @@ PRICE_MARKERS = (
     "arfolyam",
     "árfolyama",
     "arfolyama",
+    "ára",
+    "ara",
     "mennyi most",
     "aktuális ár",
     "aktualis ar",
@@ -71,7 +74,11 @@ def infer_crypto_quote_request(text, default_quote="USD"):
 
     asset = None
     for alias in sorted(ASSET_ALIASES, key=len, reverse=True):
-        if alias in normalized.split() or alias in normalized:
+        if re.search(
+            rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])",
+            normalized,
+            flags=re.IGNORECASE,
+        ):
             asset = ASSET_ALIASES[alias]
             break
 
