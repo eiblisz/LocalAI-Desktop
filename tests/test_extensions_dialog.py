@@ -92,3 +92,31 @@ def test_deleting_extension_removes_bound_secret_first():
     assert "self.secret_store.delete_secret(self.current_credential_ref)" in source
     assert source.index("delete_secret") < source.index("self.store.delete")
 
+
+def test_prometheusz_bot_fields_and_secure_token_controls_exist():
+    build = inspect.getsource(ExtensionsDialog._build_ui)
+    secret = inspect.getsource(ExtensionsDialog._save_secret)
+    payload = inspect.getsource(ExtensionsDialog._form_payload)
+    test_source = inspect.getsource(ExtensionsDialog._start_discord_bot_test)
+
+    assert "Discord Guild ID" in build
+    assert "Discord Channel ID" in build
+    assert "Allowed User ID" in build
+    assert "Bot Model" in build
+    assert "validate_bot_token" in secret
+    assert "discord_bot_token" in secret
+    assert 'config["guild_id"]' in payload
+    assert 'config["channel_id"]' in payload
+    assert 'config["allowed_user_id"]' in payload
+    assert "DiscordBotTestWorker" in test_source
+
+
+def test_extension_changes_emit_runtime_resync_signal():
+    save = inspect.getsource(ExtensionsDialog._save_extension)
+    secret = inspect.getsource(ExtensionsDialog._save_secret)
+    delete = inspect.getsource(ExtensionsDialog._delete_extension)
+
+    assert "self.changed.emit()" in save
+    assert "self.changed.emit()" in secret
+    assert "self.changed.emit()" in delete
+
