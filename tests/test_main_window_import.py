@@ -629,3 +629,43 @@ def test_freshness_sensitive_requests_route_to_web_without_search_verb():
     assert not is_freshness_sensitive_request("Magyarázd el röviden, mi az a TCP.")
     assert not is_freshness_sensitive_request("Készíts rövid témaleírást.")
 
+
+def test_numbered_multi_action_message_plans_each_task_independently():
+    from app.web_intent import (
+        ACTION_ARTIFACT,
+        ACTION_CHAT,
+        ACTION_WEB_RESEARCH,
+        plan_user_actions,
+    )
+
+    prompt = """1. Melyik a jelenlegi legfrissebb Qwen verzió?
+
+2. Magyarázd el röviden, mi az a TCP.
+
+3. Mi a legújabb Ollama verzió, és készíts róla egy rövid HTML riportot."""
+
+    planned = plan_user_actions(prompt)
+
+    assert len(planned) == 3
+
+    assert planned[0].plan.has(ACTION_WEB_RESEARCH)
+    assert not planned[0].plan.has(ACTION_ARTIFACT)
+
+    assert planned[1].plan.has(ACTION_CHAT)
+    assert not planned[1].plan.has(ACTION_WEB_RESEARCH)
+
+    assert planned[2].plan.has(ACTION_WEB_RESEARCH)
+    assert planned[2].plan.has(ACTION_ARTIFACT)
+    assert planned[2].plan.artifact_plans[0].request.format == "html"
+
+
+def test_compound_web_to_artifact_workflow_stays_one_action_unit():
+    from app.web_intent import plan_user_actions
+
+    planned = plan_user_actions(
+        "Mi a legújabb Ollama verzió, és készíts róla egy rövid HTML riportot."
+    )
+
+    assert len(planned) == 1
+    assert planned[0].prompt.startswith("Mi a legújabb Ollama")
+
