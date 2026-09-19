@@ -1,3 +1,4 @@
+import inspect
 from pathlib import Path
 
 from docx import Document
@@ -121,3 +122,13 @@ def test_pdf_text_fallback_extracts_text_and_marks_truncation(monkeypatch):
     assert "First page" in rendered
     assert "Second page" not in rendered
     assert "[PDF preview truncated]" in rendered
+
+
+def test_docx_view_uses_light_document_surface_in_dark_app_theme():
+    from app.internal_viewer import DocumentView
+
+    source = inspect.getsource(DocumentView.__init__)
+
+    assert "background:#FFFFFF" in source
+    assert "color:#20242A" in source
+    assert "view.setHtml(render_docx_html(path))" in source
