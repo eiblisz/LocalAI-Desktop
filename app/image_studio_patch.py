@@ -149,6 +149,9 @@ def install_image_studio_patch(main_window_module):
             button = main_window_module.QPushButton("IMAGE")
             button.setObjectName("sideMenuButton")
             button.setFixedHeight(34)
+            button.setStyleSheet(
+                main_window_module.SIDE_MENU_BUTTON_INLINE_STYLE
+            )
             button.setToolTip("Open Image Studio powered by the local ComfyUI service.")
             button.clicked.connect(self._open_image_studio)
             self.tool_buttons["IMAGE"] = button
