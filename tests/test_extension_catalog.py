@@ -95,7 +95,12 @@ def test_prometheusz_discord_bot_preset_has_remote_chat_allowlist_defaults():
 
     assert preset["category"] == "Communication"
     assert preset["auth_type"] == "bot_token"
-    assert preset["capabilities"] == ("read_messages", "send_message", "remote_chat")
+    assert preset["capabilities"] == (
+        "read_messages",
+        "send_message",
+        "remote_chat",
+        "web_research",
+    )
     assert payload["enabled"] is False
     assert payload["config"]["guild_id"] == ""
     assert payload["config"]["channel_id"] == ""
