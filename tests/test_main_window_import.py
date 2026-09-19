@@ -128,8 +128,10 @@ def test_normal_chat_has_web_auto_and_manual_web_toggle():
     assert 'QPushButton("WEB AUTO")' in build
     assert "setCheckable(True)" in build
     assert "self.web_button.isChecked()" in send
-    assert "_looks_like_web_request(text)" in send
+    assert "plan_user_action(" in send
+    assert "ACTION_WEB_RESEARCH" in send
     assert "ChatWebWorker" in send
+    assert "AdaptiveChatWorker" in send
 
 
 def test_web_auto_detects_explicit_search_intent():
@@ -568,4 +570,57 @@ def test_desktop_artifact_tools_use_shared_artifact_service():
     assert "create_pdf(" not in creator
     assert "create_docx(" not in creator
     assert "create_html(" not in creator
+
+
+def test_shared_action_plan_routes_memory_web_artifact_and_stable_chat():
+    from app.web_intent import (
+        ACTION_ARTIFACT,
+        ACTION_CHAT,
+        ACTION_MEMORY_WRITE,
+        ACTION_WEB_RESEARCH,
+        plan_user_action,
+    )
+
+    memory = plan_user_action("Jegyezd meg, hogy Lilla a lányom.")
+    assert memory.has(ACTION_MEMORY_WRITE)
+
+    current = plan_user_action("Melyik a jelenlegi legfrissebb Qwen verzió?")
+    assert current.has(ACTION_WEB_RESEARCH)
+
+    stable = plan_user_action("Magyarázd el röviden, mi az a TCP.")
+    assert stable.has(ACTION_CHAT)
+    assert not stable.has(ACTION_WEB_RESEARCH)
+
+    artifact = plan_user_action(
+        "Keress friss SSD árakat és készíts belőle Excel fájlt."
+    )
+    assert artifact.has(ACTION_WEB_RESEARCH)
+    assert artifact.has(ACTION_ARTIFACT)
+    assert artifact.artifact_plans[0].request.format == "xlsx"
+
+
+def test_auto_web_fallback_policy_is_bounded_to_stale_or_missing_knowledge():
+    from app.web_intent import answer_requires_web_fallback
+
+    assert answer_requires_web_fallback(
+        "Melyik modell a legújabb?",
+        "Nincs friss információm erről a modellről.",
+    )
+    assert not answer_requires_web_fallback(
+        "Mi az a TCP?",
+        "A TCP egy kapcsolatorientált hálózati protokoll.",
+    )
+    assert not answer_requires_web_fallback(
+        "Írj egy rövid verset.",
+        "Nem vagyok biztos benne, milyen stílust szeretnél.",
+    )
+
+
+def test_freshness_sensitive_requests_route_to_web_without_search_verb():
+    from app.web_intent import is_freshness_sensitive_request
+
+    assert is_freshness_sensitive_request("Melyik a jelenlegi Ollama verzió?")
+    assert is_freshness_sensitive_request("Mennyi most egy 4 TB SSD ára?")
+    assert is_freshness_sensitive_request("What is the latest Qwen release?")
+    assert not is_freshness_sensitive_request("Mi az a neurális háló?")
 
