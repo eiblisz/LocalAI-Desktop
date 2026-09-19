@@ -823,3 +823,58 @@ def test_generic_shopping_bypasses_model_query_generation(monkeypatch):
     assert seen_queries
     assert all(max_results == 10 for _, max_results in seen_queries)
 
+
+def test_run_chat_web_request_collects_grounded_worker_output(monkeypatch):
+    monkeypatch.setattr(
+        workers.ChatWebWorker,
+        "_generate_search_queries",
+        lambda self: ["latest Qwen local AI news"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "search_web",
+        lambda query, max_results=6, fetch_pages=True: {
+            "provider": "Brave Search API",
+            "query": query,
+            "provider_chain_errors": [],
+            "results": [{
+                "title": "Qwen update",
+                "url": "https://example.com/qwen",
+                "snippet": "Fresh Qwen local AI news",
+            }],
+        },
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: ["https://example.com/qwen"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_entries",
+        lambda payload, limit=6: [{
+            "title": "Qwen update",
+            "url": "https://example.com/qwen",
+        }],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: "WEB SEARCH TOOL DATA",
+    )
+
+    client = DummyWebClient()
+    answer = workers.run_chat_web_request(
+        client,
+        "qwen-test",
+        [
+            {"role": "system", "content": "Base system"},
+            {"role": "user", "content": "Keress rá a legfrissebb Qwen hírekre"},
+        ],
+        "Keress rá a legfrissebb Qwen hírekre",
+    )
+
+    assert "Grounded web answer." in answer
+    assert "Search query: latest Qwen local AI news" in answer
+    assert "https://example.com/qwen" in answer
+

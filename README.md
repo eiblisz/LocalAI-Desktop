@@ -95,7 +95,9 @@ The Communication catalog also includes a restricted Discord Bot preset for the 
 
 When the preset is enabled, LocalAI Desktop starts a background Discord gateway bridge. Only messages from the configured user in the configured channel and guild are accepted. Each accepted message is sent to the selected local Ollama model and the reply is posted back to Discord. Remote Discord history is persisted in a dedicated `[DISCORD] Prometheusz` local chat.
 
-This first bot slice is conversational only: it does not execute shell commands, files, extensions, or system actions. Those capabilities must be added later behind explicit permission checks.
+Prometheusz also reuses the desktop WEB AUTO pipeline for explicit search/current-information requests. Remote web research is read-only and inherits the same grounded search, product-evidence, language, source, and fail-closed behavior as the desktop chat.
+
+The bot still does not execute shell commands, filesystem actions, write-capable extensions, or system actions. Artifact creation and Discord file upload remain separate later capabilities behind explicit permission checks.
 
 ## Private runtime data
 

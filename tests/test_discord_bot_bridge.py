@@ -148,7 +148,7 @@ def test_remote_prompt_uses_dedicated_persistent_discord_chat(tmp_path: Path):
     assert "your interface name is Prometheusz" in system
     assert "Prometheusz is not a separate AI system" in system
     assert "If the user asks whether you are Prometheusz, answer yes" in system
-    assert "conversational access only" in system
+    assert "same read-only grounded web research as the desktop" in system
 
 
 def test_remote_prompt_answers_direct_user_memory_without_model(tmp_path: Path):
@@ -276,4 +276,84 @@ def test_compound_prometheusz_identity_and_memory_question_is_deterministic(tmp_
 
     assert "Prometheusz a Discordos nevem" in answer
     assert "Lilla a lányod." in answer
+
+
+def test_remote_web_request_uses_grounded_desktop_web_runtime(tmp_path: Path, monkeypatch):
+    import app.discord_bot_bridge as bridge_module
+
+    calls = []
+
+    def fake_web(client, model, messages, prompt):
+        calls.append((client, model, messages, prompt))
+        return (
+            "Ellenőrzött termékszintű találatok:\n"
+            "- Samsung 870 QVO 4TB — https://example.com/ssd\n\n"
+            "Shopping evidence: PASS"
+        )
+
+    monkeypatch.setattr(bridge_module, "run_chat_web_request", fake_web)
+
+    class FailingOllama:
+        def chat_once(self, model, messages):
+            raise AssertionError("normal chat path must not handle explicit web requests")
+
+    settings = DiscordBotSettings(
+        extension_id="ext-web",
+        name="Prometheusz",
+        guild_id=111111111111111111,
+        channel_id=222222222222222222,
+        allowed_user_id=333333333333333333,
+        model="qwen3-coder:30b",
+    )
+    bridge = DiscordBotBridge(
+        ollama_client=FailingOllama(),
+        chat_store=ChatStore(tmp_path / "chats"),
+        settings=settings,
+        token="T" * 40,
+    )
+
+    answer, chat_id = bridge._answer_prompt("Keress nekem 4 TB-os SSD-t")
+
+    assert "Shopping evidence: PASS" in answer
+    assert calls
+    assert calls[0][1] == "qwen3-coder:30b"
+    assert calls[0][3] == "Keress nekem 4 TB-os SSD-t"
+
+    chat = bridge.chat_store.load(chat_id)
+    assert chat["messages"][-1]["content"] == answer
+
+
+def test_remote_non_web_prompt_stays_on_normal_local_model_path(tmp_path: Path, monkeypatch):
+    import app.discord_bot_bridge as bridge_module
+
+    monkeypatch.setattr(
+        bridge_module,
+        "run_chat_web_request",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("web runtime must not run for ordinary chat")
+        ),
+    )
+
+    class FakeOllama:
+        def chat_once(self, model, messages):
+            return "Normál helyi válasz."
+
+    settings = DiscordBotSettings(
+        extension_id="ext-chat",
+        name="Prometheusz",
+        guild_id=111111111111111111,
+        channel_id=222222222222222222,
+        allowed_user_id=333333333333333333,
+        model="qwen3-coder:30b",
+    )
+    bridge = DiscordBotBridge(
+        ollama_client=FakeOllama(),
+        chat_store=ChatStore(tmp_path / "chats"),
+        settings=settings,
+        token="T" * 40,
+    )
+
+    answer, _chat_id = bridge._answer_prompt("Mondj egy rövid viccet.")
+
+    assert answer == "Normál helyi válasz."
 

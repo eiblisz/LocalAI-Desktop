@@ -62,6 +62,7 @@ from .scheduler_dialog import SchedulerDialog
 from .scheduler_store import ScheduledTaskStore
 from .secret_store import SecretStore
 from .storage import ChatStore
+from .web_intent import looks_like_web_request
 from .workers import (
     ChatWebWorker,
     ChatWorker,
@@ -787,61 +788,7 @@ class MainWindow(QMainWindow):
             )
 
     def _looks_like_web_request(self, text):
-        normalized = " ".join(str(text or "").lower().split())
-        markers = [
-            "keress rá",
-            "keress ra",
-            "keresd meg",
-            "keress nekem",
-            "nézd meg online",
-            "nezd meg online",
-            "nézz utána",
-            "nezz utana",
-            "interneten",
-            "az interneten",
-            "weben",
-            "web-en",
-            "online",
-            "legfrissebb",
-            "friss hírek",
-            "friss hirek",
-            "aktuális ár",
-            "aktualis ar",
-            "most mennyi",
-            "look up",
-            "search for",
-            "search the web",
-            "find online",
-            "browse the web",
-            "latest news",
-            "current price",
-            "eur",
-            "€",
-            "ár alatt",
-            "ar alatt",
-            "mennyiért",
-            "mennyiert",
-            "kapható",
-            "kaphato",
-            "elérhető",
-            "elerheto",
-            "ajánlat",
-            "ajanlat",
-            "hol lehet venni",
-            "hol kapok",
-            "vásárlás",
-            "vasarlas",
-            "buy",
-            "price",
-            "under €",
-            "under eur",
-            "in stock",
-            "available now",
-        ]
-        return (
-            any(marker in normalized for marker in markers)
-            or bool(re.search(r"\bkeress\w*\b", normalized, flags=re.IGNORECASE))
-        )
+        return looks_like_web_request(text)
 
     def _direct_user_memory_answer(self, query):
         memories = self.memory_store.list_memories(
