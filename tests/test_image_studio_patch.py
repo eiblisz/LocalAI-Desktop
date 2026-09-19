@@ -53,3 +53,9 @@ def test_this_slice_does_not_implement_image_generation_api():
     source = inspect.getsource(image_studio_patch)
     assert "/prompt" not in source
     assert "Krea" not in source
+
+
+def test_image_tool_matches_compact_tool_button_height():
+    source = inspect.getsource(MainWindow._build_tools_panel)
+
+    assert 'button.setFixedHeight(34)' in source
