@@ -31,6 +31,7 @@ from .ollama_client import OllamaClient
 from .weather_tool import get_weather, weather_context_text
 from .web_intent import answer_requires_web_fallback
 from .web_search_tool import (
+    authoritative_current_fact,
     build_search_plan,
     search_web,
     source_entries,
@@ -425,6 +426,39 @@ class ChatWebWorker(QObject):
             queries = [self._preserve_search_constraints(queries[0])]
         return queries
 
+    def _authoritative_fact_answer(self, fact):
+        value = str(fact.get("value", "")).strip()
+        title = str(fact.get("title", "")).strip() or "Official source"
+        url = str(fact.get("url", "")).strip()
+        source = f"[{title}]({url})" if url else title
+
+        instruction = self._conversation_language_instruction()
+        if "Hungarian" in instruction:
+            return (
+                f"A hivatalos elsődleges forrás alapján a legfrissebb verzió: "
+                f"**{value}**. Forrás: {source}"
+            )
+        if "German" in instruction:
+            return (
+                f"Laut der offiziellen Primärquelle ist die neueste Version "
+                f"**{value}**. Quelle: {source}"
+            )
+        return (
+            f"According to the official first-party source, the latest version is "
+            f"**{value}**. Source: {source}"
+        )
+
+    def _enforce_authoritative_facts(self, answer, facts):
+        final = str(answer or "").strip()
+        for fact in facts or []:
+            if fact.get("kind") != "latest_release":
+                continue
+            value = str(fact.get("value", "")).strip()
+            if value and value not in final:
+                return self._authoritative_fact_answer(fact)
+        return final
+
+
     def _safe_evidence_failure(self, answer_rejected=False):
         if "Hungarian" in self._conversation_language_instruction():
             if answer_rejected:
@@ -504,6 +538,7 @@ class ChatWebWorker(QObject):
             evidence_ledgers = []
             verification_queries = []
             constrained_rejections = []
+            authoritative_facts = []
 
             for query in queries:
                 if self._stop_event.is_set():
@@ -549,6 +584,15 @@ class ChatWebWorker(QObject):
                             f"{query}: no product-specific shopping evidence"
                         )
                     continue
+
+                fact = authoritative_current_fact(payload)
+                if fact and not any(
+                    existing.get("kind") == fact.get("kind")
+                    and existing.get("value") == fact.get("value")
+                    and existing.get("url") == fact.get("url")
+                    for existing in authoritative_facts
+                ):
+                    authoritative_facts.append(fact)
 
                 context_body = web_search_context_text(payload)
                 if isinstance(payload.get("search_plan"), dict):
@@ -717,6 +761,9 @@ class ChatWebWorker(QObject):
                     "only fields explicitly marked VERIFIED. When you mention a specific "
                     "product, offer, article, or result, include its provided source URL "
                     "in the same bullet or sentence using Markdown link syntax. Do not "
+                    "When AUTHORITATIVE CURRENT FACT data is present, preserve its exact "
+                    "value for the requested latest/current fact and prefer that first-party "
+                    "authority over conflicting secondary sources or model priors. "
                     "say you cannot browse the web; the authorized web data has already "
                     "been collected for you. "
                     + self._conversation_language_instruction()
@@ -764,6 +811,10 @@ class ChatWebWorker(QObject):
                 raise RuntimeError("The model returned an empty web answer.")
 
             answer = self._repair_response_language(answer)
+            answer = self._enforce_authoritative_facts(
+                answer,
+                authoritative_facts,
+            )
 
             verification_status = ""
             unique_verification_queries = list(dict.fromkeys(verification_queries))
