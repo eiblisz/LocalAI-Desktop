@@ -765,6 +765,7 @@ class DiscordBotBridge(QObject):
                             self.settings.model,
                             messages,
                             prompt,
+                            compact_market_quote=True,
                         ).strip()
                 else:
                     answer = run_chat_web_request(
@@ -787,6 +788,7 @@ class DiscordBotBridge(QObject):
                             self.settings.model,
                             messages,
                             prompt,
+                            compact_market_quote=True,
                         ).strip()
                 else:
                     answer = run_chat_web_request(
