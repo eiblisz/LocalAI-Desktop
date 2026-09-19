@@ -3,11 +3,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.artifact_service import ArtifactRequest
 from app.discord_bot_bridge import (
     DiscordBotBridge,
     DiscordBotSettings,
-    _looks_like_pdf_request,
-    _pdf_preset_from_request,
     split_discord_text,
     test_discord_bot_token as run_bot_token_test,
     validate_bot_token,
@@ -360,26 +359,30 @@ def test_remote_non_web_prompt_stays_on_normal_local_model_path(tmp_path: Path, 
     assert answer == "Normál helyi válasz."
 
 
-def test_pdf_request_detection_and_theme_mapping():
-    assert _looks_like_pdf_request(
-        "Készíts nekem egy PDF fájlt Red Executive stílusban"
-    )
-    assert _pdf_preset_from_request(
-        "Készíts PDF-et red executive stílusban"
-    ) == "Red Executive"
-    assert _pdf_preset_from_request(
-        "Create a classic executive PDF"
-    ) == "Classic Executive"
-    assert not _looks_like_pdf_request("Mondd el röviden, mi az a PDF.")
 
-
-def test_remote_pdf_uses_memory_and_host_pdf_tool_without_model(tmp_path: Path, monkeypatch):
+@pytest.mark.parametrize(
+    ("artifact_format", "preset", "suffix"),
+    [
+        ("pdf", "Red Executive", ".pdf"),
+        ("docx", "Red Executive", ".docx"),
+        ("xlsx", "Red Executive Workbook", ".xlsx"),
+        ("html", "Red Executive", ".html"),
+        ("summary", "Local Summary", ".md"),
+    ],
+)
+def test_remote_artifact_uses_memory_and_shared_artifact_service(
+    tmp_path: Path,
+    monkeypatch,
+    artifact_format,
+    preset,
+    suffix,
+):
     import app.discord_bot_bridge as bridge_module
 
     class FailingOllama:
         def chat_once(self, model, messages):
             raise AssertionError(
-                "model must not be called when durable memory directly answers the PDF topic"
+                "model must not be called when durable memory directly answers the artifact topic"
             )
 
     memory_store = MemoryStore(tmp_path / "memory.sqlite3")
@@ -395,18 +398,17 @@ def test_remote_pdf_uses_memory_and_host_pdf_tool_without_model(tmp_path: Path, 
 
     created = {}
 
-    def fake_create_pdf(messages, title, preset):
-        created["messages"] = messages
-        created["title"] = title
-        created["preset"] = preset
-        path = tmp_path / "lilla_red_executive.pdf"
-        path.write_bytes(b"%PDF-1.4\n%test\n")
+    def fake_create_artifact(fmt, **kwargs):
+        created["format"] = fmt
+        created["kwargs"] = kwargs
+        path = tmp_path / f"lilla{suffix}"
+        path.write_bytes(b"artifact")
         return path
 
-    monkeypatch.setattr(bridge_module, "create_pdf", fake_create_pdf)
+    monkeypatch.setattr(bridge_module, "create_artifact", fake_create_artifact)
 
     settings = DiscordBotSettings(
-        extension_id="ext-pdf",
+        extension_id="ext-artifact",
         name="Prometheusz",
         guild_id=111111111111111111,
         channel_id=222222222222222222,
@@ -421,26 +423,25 @@ def test_remote_pdf_uses_memory_and_host_pdf_tool_without_model(tmp_path: Path, 
         memory_store=memory_store,
     )
 
-    answer, chat_id, artifact = bridge._create_pdf_artifact(
-        "Készíts nekem egy PDF fájlt Red Executive stílusban, "
-        "amiben röviden összefoglalod, hogy ki nekem Lilla"
+    request = ArtifactRequest(format=artifact_format, preset=preset)
+    answer, chat_id, artifact = bridge._create_remote_artifact(
+        "Készíts fájlt arról, hogy ki nekem Lilla",
+        request,
     )
 
-    assert answer == "Elkészítettem a PDF-et (Red Executive)."
     assert artifact.exists()
-    assert created["preset"] == "Red Executive"
-    body = created["messages"][0]["content"]
-    assert "Lilla a lányod." in body
+    assert created["format"] == artifact_format
+    assert created["kwargs"]["preset"] == preset
+    assert "Lilla a lányod." in created["kwargs"]["content"]
+    assert artifact_format.upper() in answer
 
     chat = bridge.chat_store.load(chat_id)
     assert chat["messages"][-1]["role"] == "artifact"
     assert chat["messages"][-1]["content"] == str(artifact)
+    assert chat["messages"][-1]["path"] == str(artifact)
 
 
-def test_remote_pdf_model_path_includes_memory_context_and_host_render_instruction(
-    tmp_path: Path,
-    monkeypatch,
-):
+def test_remote_xlsx_model_path_uses_excel_generation_contract(tmp_path: Path, monkeypatch):
     import app.discord_bot_bridge as bridge_module
 
     class FakeOllama:
@@ -449,22 +450,25 @@ def test_remote_pdf_model_path_includes_memory_context_and_host_render_instructi
 
         def chat_once(self, model, messages):
             self.messages = messages
-            return "# Projekt riport\n\nRövid tartalom."
+            return (
+                '{"title":"SSD","sheets":[{"name":"Data",'
+                '"headers":["Name"],"rows":[["Example"]]}]}'
+            )
 
     ollama = FakeOllama()
     created = {}
 
-    def fake_create_pdf(messages, title, preset):
-        created["messages"] = messages
-        created["preset"] = preset
-        path = tmp_path / "project.pdf"
-        path.write_bytes(b"%PDF-1.4\n%test\n")
+    def fake_create_artifact(fmt, **kwargs):
+        created["format"] = fmt
+        created["kwargs"] = kwargs
+        path = tmp_path / "result.xlsx"
+        path.write_bytes(b"xlsx")
         return path
 
-    monkeypatch.setattr(bridge_module, "create_pdf", fake_create_pdf)
+    monkeypatch.setattr(bridge_module, "create_artifact", fake_create_artifact)
 
     settings = DiscordBotSettings(
-        extension_id="ext-pdf-model",
+        extension_id="ext-artifact-model",
         name="Prometheusz",
         guild_id=111111111111111111,
         channel_id=222222222222222222,
@@ -478,12 +482,61 @@ def test_remote_pdf_model_path_includes_memory_context_and_host_render_instructi
         token="T" * 40,
     )
 
-    answer, _chat_id, artifact = bridge._create_pdf_artifact(
-        "Készíts PDF-et a LocalAI Desktop projektről"
+    request = ArtifactRequest(format="xlsx", preset="Red Executive Workbook")
+    answer, _chat_id, artifact = bridge._create_remote_artifact(
+        "Készíts Excel fájlt az SSD példákról",
+        request,
     )
 
     assert artifact.exists()
-    assert "Elkészítettem a PDF-et" in answer
+    assert "XLSX" in answer
+    assert created["format"] == "xlsx"
+    assert created["kwargs"]["source_text"].startswith("Készíts Excel")
+    assert "Return ONLY valid JSON" in ollama.messages[0]["content"]
     assert "host application will render" in ollama.messages[0]["content"]
-    assert created["messages"][0]["content"].startswith("# Projekt riport")
 
+
+def test_remote_document_model_path_uses_shared_render_instruction(tmp_path: Path, monkeypatch):
+    import app.discord_bot_bridge as bridge_module
+
+    class FakeOllama:
+        def __init__(self):
+            self.messages = None
+
+        def chat_once(self, model, messages):
+            self.messages = messages
+            return "# Projekt riport\n\nRövid tartalom."
+
+    ollama = FakeOllama()
+
+    def fake_create_artifact(fmt, **kwargs):
+        path = tmp_path / "project.docx"
+        path.write_bytes(b"docx")
+        return path
+
+    monkeypatch.setattr(bridge_module, "create_artifact", fake_create_artifact)
+
+    settings = DiscordBotSettings(
+        extension_id="ext-docx-model",
+        name="Prometheusz",
+        guild_id=111111111111111111,
+        channel_id=222222222222222222,
+        allowed_user_id=333333333333333333,
+        model="qwen3-coder:30b",
+    )
+    bridge = DiscordBotBridge(
+        ollama_client=ollama,
+        chat_store=ChatStore(tmp_path / "chats"),
+        settings=settings,
+        token="T" * 40,
+    )
+
+    request = ArtifactRequest(format="docx", preset="Classic Executive")
+    answer, _chat_id, artifact = bridge._create_remote_artifact(
+        "Készíts Word dokumentumot a LocalAI Desktop projektről",
+        request,
+    )
+
+    assert artifact.exists()
+    assert "DOCX" in answer
+    assert "host application will render" in ollama.messages[0]["content"]
