@@ -36,6 +36,7 @@ from .artifact_utils import (
     path_from_artifact_url,
 )
 from .config import APP_NAME, DEFAULT_SYSTEM_PROMPT
+from .crypto_market_data import is_crypto_quote_request
 from .document_tools import (
     build_document_messages,
     build_excel_messages,
@@ -70,6 +71,7 @@ from .workers import (
     ChatWebWorker,
     ChatWorker,
     DocumentWorker,
+    MarketDataWorker,
     MemoryWriteWorker,
     ScheduledTaskWorker,
 )
@@ -954,7 +956,22 @@ class MainWindow(QMainWindow):
         self.current_chat_uses_web = use_web
         self.thread = QThread()
 
-        if use_web:
+        market_extension = (
+            self._crypto_market_extension()
+            if use_web and is_crypto_quote_request(text_for_model)
+            else None
+        )
+
+        if market_extension is not None:
+            self.status.setText("Market data...")
+            self.worker = MarketDataWorker(
+                self.client,
+                model,
+                messages_for_model,
+                text_for_model,
+                market_extension,
+            )
+        elif use_web:
             self.status.setText("Web research...")
             self.worker = ChatWebWorker(
                 self.client,
@@ -1306,6 +1323,15 @@ class MainWindow(QMainWindow):
     def _discord_bot_extension(self):
         return self.extension_store.find_by_preset_id("discord-bot")
 
+    def _crypto_market_extension(self):
+        extension = self.extension_store.find_by_preset_id("crypto-market-data")
+        if not extension or not bool(extension.get("enabled", False)):
+            return None
+        capabilities = set(extension.get("capabilities") or [])
+        if "crypto_quote" not in capabilities:
+            return None
+        return extension
+
     def _sync_discord_bot_bridge(self):
         extension = self._discord_bot_extension()
         if not extension or not bool(extension.get("enabled", False)):
@@ -1356,6 +1382,7 @@ class MainWindow(QMainWindow):
             settings,
             token,
             memory_store=self.memory_store,
+            extension_store=self.extension_store,
             parent=self,
         )
         bridge.status_changed.connect(self._discord_bot_status_changed)
