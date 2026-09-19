@@ -464,8 +464,8 @@ class ChatWebWorker(QObject):
     def _version_like_tokens(text):
         return set(
             re.findall(
-                r"(?i)(?:\\bv?\\d+(?:\\.\\d+){1,3}(?:[-+][0-9a-z.-]+)?\\b|"
-                r"\\b[a-z][a-z0-9_-]*\\d+(?:\\.\\d+){1,3}\\b)",
+                r"(?i)(?:\bv?\d+(?:\.\d+){1,3}(?:[-+][0-9a-z.-]+)?\b|"
+                r"\b[a-z][a-z0-9_-]*\d+(?:\.\d+){1,3}\b)",
                 str(text or ""),
             )
         )
