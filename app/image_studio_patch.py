@@ -148,6 +148,7 @@ def install_image_studio_patch(main_window_module):
         if layout is not None and "IMAGE" not in self.tool_buttons:
             button = main_window_module.QPushButton("IMAGE")
             button.setObjectName("toolButton")
+            button.setFixedHeight(34)
             button.setToolTip("Open Image Studio powered by the local ComfyUI service.")
             button.clicked.connect(self._open_image_studio)
             self.tool_buttons["IMAGE"] = button
