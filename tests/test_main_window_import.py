@@ -853,3 +853,38 @@ def test_attach_file_supports_common_image_formats():
         assert suffix in source
     assert "base64.b64encode" in source
     assert "self._add_image_attachment" in source
+
+
+def test_local_model_hub_lists_all_ollama_models_and_supports_refresh():
+    from app.main_window import MainWindow
+
+    build_source = inspect.getsource(MainWindow._build_ui)
+    load_source = inspect.getsource(MainWindow._load_models)
+    changed_source = inspect.getsource(MainWindow._model_changed)
+
+    assert 'QLabel("LOCAL MODELS")' in build_source
+    assert "self.model_combo.setMinimumWidth(300)" in build_source
+    assert "self.model_combo.setMaxVisibleItems(24)" in build_source
+    assert 'QPushButton("REFRESH")' in build_source
+    assert "self.refresh_models_button.clicked.connect(self._load_models)" in build_source
+
+    assert "self.client.list_models()" in load_source
+    assert "self.model_combo.addItems(models)" in load_source
+    assert 'self.model_label.setText(' in load_source
+    assert "LOCAL MODELS (" in load_source
+    assert "self.model_count_label.setText(str(len(models)))" in load_source
+    assert "sorted(" in load_source
+
+    assert 'self.current_chat["model"] = model' in changed_source
+    assert 'self.status.setText(f"Model: {model}")' in changed_source
+
+
+def test_model_refresh_preserves_saved_or_current_chat_model():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._load_models)
+
+    assert 'saved = str(self.current_chat.get("model") or "").strip()' in source
+    assert "preferred = saved or previous" in source
+    assert "self.model_combo.findText(preferred)" in source
+    assert "self.model_combo.setCurrentIndex(index)" in source
