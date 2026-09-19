@@ -211,7 +211,18 @@ def _looks_non_factual(text):
         "übersetz",
         "ubersetz",
     )
-    return any(marker in normalized for marker in markers)
+    for marker in markers:
+        if " " in marker:
+            if marker in normalized:
+                return True
+            continue
+        if re.search(
+            rf"(?<!\\w){re.escape(marker)}(?!\\w)",
+            normalized,
+            flags=re.IGNORECASE,
+        ):
+            return True
+    return False
 
 
 def answer_requires_web_fallback(user_text, answer):
