@@ -28,6 +28,7 @@ def test_catalog_contains_requested_categories_and_key_presets():
         "Supabase",
         "HubSpot",
         "Discord Webhook",
+        "Prometheusz Discord Bot",
     }:
         assert expected in names
 
@@ -86,4 +87,18 @@ def test_discord_webhook_preset_is_secret_url_metadata_only():
     assert payload["enabled"] is False
     assert payload["config"]["preset_id"] == "discord-webhook"
     assert "webhook" not in payload.get("credential_ref", "").lower()
+
+
+def test_prometheusz_discord_bot_preset_has_remote_chat_allowlist_defaults():
+    preset = find_preset("discord-bot")
+    payload = preset_to_registry_entry(preset)
+
+    assert preset["category"] == "Communication"
+    assert preset["auth_type"] == "bot_token"
+    assert preset["capabilities"] == ("read_messages", "send_message", "remote_chat")
+    assert payload["enabled"] is False
+    assert payload["config"]["guild_id"] == ""
+    assert payload["config"]["channel_id"] == ""
+    assert payload["config"]["allowed_user_id"] == ""
+    assert payload["config"]["model"] == ""
 
