@@ -72,7 +72,13 @@ def install_sidebar_navigation_patch(main_window_module):
         for text in ["PROJECTS", "BROWSER", "MEMORY", "EXTENSIONS", "SETTINGS"]:
             button = QPushButton(text)
             button.setObjectName("subtleButton")
-            if text == "EXTENSIONS":
+            if text == "BROWSER":
+                button.setEnabled(True)
+                button.setToolTip(
+                    "Open the TradingView market workspace inside LocalAI Desktop."
+                )
+                button.clicked.connect(self._open_market_browser)
+            elif text == "EXTENSIONS":
                 button.setEnabled(True)
                 button.setToolTip(
                     "Manage saved extension endpoints, capabilities and connection state."

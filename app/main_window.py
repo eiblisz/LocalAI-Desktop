@@ -1,10 +1,11 @@
+import base64
 import html
 import re
 from datetime import datetime
 from pathlib import Path
 
 import markdown
-from PySide6.QtCore import QThread, QTimer, Qt
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QThread, QTimer, Qt, Signal
 from PySide6.QtGui import QTextOption
 from PySide6.QtWidgets import (
     QComboBox,
@@ -59,6 +60,7 @@ from .language_policy import response_language_instruction
 from .memory_answers import direct_user_memory_answer
 from .memory_extractor import is_explicit_memory_request
 from .memory_store import MemoryStore
+from .multi_asset_market_data import is_multi_asset_quote_request
 from .ollama_client import OllamaClient
 from .resource_monitor import format_resource_summary, get_system_metrics
 from .scheduler_dialog import SchedulerDialog
@@ -77,6 +79,7 @@ from .workers import (
     ChatWorker,
     DocumentWorker,
     MarketDataWorker,
+    MultiAssetMarketDataWorker,
     MemoryWriteWorker,
     ScheduledTaskWorker,
 )
@@ -198,6 +201,31 @@ QMenu::item:selected {
 """
 
 
+class PasteAwareTextEdit(QTextEdit):
+    imagePasted = Signal(object)
+
+    def insertFromMimeData(self, source):
+        if source is not None and source.hasImage():
+            image = source.imageData()
+            if image is not None:
+                self.imagePasted.emit(image)
+                return
+        super().insertFromMimeData(source)
+
+
+def _qimage_to_png_base64(image):
+    byte_array = QByteArray()
+    buffer = QBuffer(byte_array)
+    if not buffer.open(QIODevice.OpenModeFlag.WriteOnly):
+        raise RuntimeError("Could not open clipboard image buffer.")
+    try:
+        if not image.save(buffer, "PNG"):
+            raise RuntimeError("Could not encode clipboard image as PNG.")
+    finally:
+        buffer.close()
+    return base64.b64encode(bytes(byte_array)).decode("ascii")
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -291,9 +319,37 @@ class MainWindow(QMainWindow):
         top_layout.addWidget(self.resource_label, 1)
         top_layout.addStretch()
 
+        model_box = QVBoxLayout()
+        model_header = QHBoxLayout()
+        self.model_label = QLabel("LOCAL MODELS")
+        self.model_label.setObjectName("muted")
+        model_header.addWidget(self.model_label)
+        model_header.addStretch()
+        self.model_count_label = QLabel("0")
+        self.model_count_label.setObjectName("muted")
+        model_header.addWidget(self.model_count_label)
+        model_box.addLayout(model_header)
+
+        model_row = QHBoxLayout()
         self.model_combo = QComboBox()
+        self.model_combo.setMinimumWidth(300)
+        self.model_combo.setMaxVisibleItems(24)
+        self.model_combo.setToolTip(
+            "All local models currently installed in Ollama. "
+            "The selected model is saved per chat."
+        )
         self.model_combo.currentTextChanged.connect(self._model_changed)
-        top_layout.addWidget(self.model_combo)
+        model_row.addWidget(self.model_combo, 1)
+
+        self.refresh_models_button = QPushButton("REFRESH")
+        self.refresh_models_button.setObjectName("subtleButton")
+        self.refresh_models_button.setToolTip(
+            "Refresh the list of locally installed Ollama models."
+        )
+        self.refresh_models_button.clicked.connect(self._load_models)
+        model_row.addWidget(self.refresh_models_button)
+        model_box.addLayout(model_row)
+        top_layout.addLayout(model_box)
 
         self.status = QLabel("Ollama: checking...")
         self.status.setObjectName("muted")
@@ -490,9 +546,12 @@ class MainWindow(QMainWindow):
         self.web_button.toggled.connect(self._web_button_toggled)
         input_row.addWidget(self.web_button)
 
-        self.input = QTextEdit()
-        self.input.setPlaceholderText("Write a message...")
+        self.input = PasteAwareTextEdit()
+        self.input.setPlaceholderText(
+            "Write a message... (Ctrl+V also accepts clipboard images)"
+        )
         self.input.setFixedHeight(82)
+        self.input.imagePasted.connect(self._attach_clipboard_image)
         input_row.addWidget(self.input, 1)
 
         self.stop_button = QPushButton("Stop")
@@ -601,18 +660,54 @@ class MainWindow(QMainWindow):
         self._select_tool("PDF")
         return frame
 
-    def _load_models(self):
+    def _refresh_local_model_hub(self):
+        previous = self.model_combo.currentText().strip()
+        saved = ""
+        if self.current_chat:
+            saved = str(self.current_chat.get("model") or "").strip()
+
         try:
-            models = self.client.list_models()
+            models = sorted(
+                {
+                    str(model).strip()
+                    for model in self.client.list_models()
+                    if str(model).strip()
+                },
+                key=str.casefold,
+            )
             self.model_combo.blockSignals(True)
             self.model_combo.clear()
             self.model_combo.addItems(models)
+
+            preferred = saved or previous
+            if preferred:
+                index = self.model_combo.findText(preferred)
+                if index >= 0:
+                    self.model_combo.setCurrentIndex(index)
+
             self.model_combo.blockSignals(False)
-            self.status.setText("Ollama connected" if models else "Ollama connected - no models")
+            self.model_count_label.setText(str(len(models)))
+            self.model_label.setText(
+                f"LOCAL MODELS ({len(models)})"
+                if models
+                else "LOCAL MODELS"
+            )
+            self.status.setText(
+                "Ollama connected"
+                if models
+                else "Ollama connected - no models"
+            )
         except Exception:
             self.status.setText("Ollama offline")
+            self.model_combo.blockSignals(True)
             self.model_combo.clear()
             self.model_combo.addItem("No Ollama model found")
+            self.model_combo.blockSignals(False)
+            self.model_count_label.setText("0")
+            self.model_label.setText("LOCAL MODELS")
+
+    def _load_models(self):
+        self._refresh_local_model_hub()
 
     def _load_chat_list(self):
         selected_id = self.current_chat.get("id") if self.current_chat else None
@@ -752,9 +847,11 @@ class MainWindow(QMainWindow):
         self._render_chat()
 
     def _model_changed(self, model):
+        model = str(model or "").strip()
         if self.current_chat and model and not model.startswith("No Ollama"):
             self.current_chat["model"] = model
             self.store.save(self.current_chat)
+            self.status.setText(f"Model: {model}")
 
     def _refresh_chat_extensions_button(self):
         button = getattr(self, "chat_extensions_button", None)
@@ -825,18 +922,64 @@ class MainWindow(QMainWindow):
             self,
             "Attach file",
             "",
-            "Supported (*.txt *.md *.csv *.json *.log *.py *.toml *.yaml *.yml *.pdf *.docx);;All files (*.*)",
+            (
+                "Supported (*.txt *.md *.csv *.json *.log *.py *.toml *.yaml *.yml "
+                "*.pdf *.docx *.png *.jpg *.jpeg *.webp *.bmp);;All files (*.*)"
+            ),
         )
         if not path:
             return
+
+        suffix = Path(path).suffix.lower()
+        if suffix in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}:
+            try:
+                encoded = base64.b64encode(Path(path).read_bytes()).decode("ascii")
+            except Exception as exc:
+                QMessageBox.critical(self, "Attachment error", str(exc))
+                return
+            self._add_image_attachment(Path(path).name, encoded)
+            return
+
         try:
             text = read_attachment(path)
         except Exception as exc:
             QMessageBox.critical(self, "Attachment error", str(exc))
             return
 
-        self.attachment_context.append({"name": Path(path).name, "content": text})
+        self.attachment_context.append(
+            {
+                "kind": "text",
+                "name": Path(path).name,
+                "content": text,
+            }
+        )
         self.input.insertPlainText(f"\n[Attached: {Path(path).name}]\n")
+
+    def _add_image_attachment(self, name, encoded):
+        self.attachment_context.append(
+            {
+                "kind": "image",
+                "name": str(name or "image.png"),
+                "image": str(encoded or ""),
+            }
+        )
+        self.input.insertPlainText(f"\n[Attached image: {name}]\n")
+
+    def _attach_clipboard_image(self, image):
+        try:
+            encoded = _qimage_to_png_base64(image)
+        except Exception as exc:
+            QMessageBox.critical(self, "Clipboard image error", str(exc))
+            return
+        index = 1 + sum(
+            1
+            for item in self.attachment_context
+            if item.get("kind") == "image"
+        )
+        self._add_image_attachment(
+            f"clipboard_image_{index}.png",
+            encoded,
+        )
 
     def _web_button_toggled(self, checked):
         self.web_button.setText("WEB ON" if checked else "WEB AUTO")
@@ -944,9 +1087,15 @@ class MainWindow(QMainWindow):
             self.current_chat["closed"] = False
             self.show_closed = False
 
+        image_payloads = []
         if self.attachment_context:
             blocks = []
             for attachment in self.attachment_context:
+                if attachment.get("kind") == "image":
+                    encoded = str(attachment.get("image") or "").strip()
+                    if encoded:
+                        image_payloads.append(encoded)
+                    continue
                 blocks.append(
                     f"\n\n--- ATTACHMENT: {attachment['name']} ---\n"
                     f"{attachment['content']}"
@@ -1017,7 +1166,13 @@ class MainWindow(QMainWindow):
         for message in self.current_chat["messages"][:-1]:
             if message.get("role") in {"user", "assistant"}:
                 messages_for_model.append(message)
-        messages_for_model.append({"role": "user", "content": text_for_model})
+        model_user_message = {
+            "role": "user",
+            "content": text_for_model,
+        }
+        if image_payloads:
+            model_user_message["images"] = image_payloads
+        messages_for_model.append(model_user_message)
 
         use_web = action_plan.has(ACTION_WEB_RESEARCH)
 
@@ -1025,28 +1180,51 @@ class MainWindow(QMainWindow):
         self.current_chat_uses_web = use_web
         self.thread = QThread()
 
-        market_extension = (
+        crypto_market_extension = (
             self._crypto_market_extension()
             if use_web and is_crypto_quote_request(text_for_model)
             else None
         )
+        multi_asset_market_extension = (
+            self._multi_asset_market_extension()
+            if use_web and is_multi_asset_quote_request(text_for_model)
+            else None
+        )
 
-        if market_extension is not None:
-            self.status.setText("Market data...")
+        if crypto_market_extension is not None:
+            self.status.setText("Crypto market data...")
             self.worker = MarketDataWorker(
                 self.client,
                 model,
                 messages_for_model,
                 text_for_model,
-                market_extension,
+                crypto_market_extension,
+            )
+        elif multi_asset_market_extension is not None:
+            self.status.setText("Multi-asset market data...")
+            self.worker = MultiAssetMarketDataWorker(
+                self.client,
+                model,
+                messages_for_model,
+                text_for_model,
+                multi_asset_market_extension,
             )
         elif use_web:
-            self.status.setText("Web research...")
+            market_fallback = (
+                is_crypto_quote_request(text_for_model)
+                or is_multi_asset_quote_request(text_for_model)
+            )
+            self.status.setText(
+                "Market web fallback..."
+                if market_fallback
+                else "Web research..."
+            )
             self.worker = ChatWebWorker(
                 self.client,
                 model,
                 messages_for_model,
                 text_for_model,
+                compact_market_quote=market_fallback,
             )
         else:
             self.worker = AdaptiveChatWorker(
@@ -1386,6 +1564,23 @@ class MainWindow(QMainWindow):
         self.extensions_dialog.raise_()
         self.extensions_dialog.activateWindow()
 
+    def _tradingview_workspace_url(self):
+        default_url = "https://www.tradingview.com/markets/"
+        extension = self.extension_store.find_by_preset_id(
+            "tradingview-workspace"
+        )
+        if not extension or not bool(extension.get("enabled", False)):
+            return default_url
+
+        config = dict(extension.get("config") or {})
+        value = str(config.get("workspace_url") or default_url).strip()
+        if not value.startswith(("https://", "http://")):
+            return default_url
+        return value
+
+    def _open_market_browser(self):
+        self._open_resource(self._tradingview_workspace_url())
+
     def _stop_discord_bot_bridge(self):
         bridge = self.discord_bot_bridge
         if bridge is None:
@@ -1405,6 +1600,17 @@ class MainWindow(QMainWindow):
             return None
         capabilities = set(extension.get("capabilities") or [])
         if "crypto_quote" not in capabilities:
+            return None
+        return extension
+
+    def _multi_asset_market_extension(self):
+        extension = self.extension_store.find_by_preset_id(
+            "multi-asset-market-data"
+        )
+        if not extension or not bool(extension.get("enabled", False)):
+            return None
+        capabilities = set(extension.get("capabilities") or [])
+        if "market_quote" not in capabilities:
             return None
         return extension
 

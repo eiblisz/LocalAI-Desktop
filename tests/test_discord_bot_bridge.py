@@ -894,7 +894,7 @@ def test_remote_crypto_quote_falls_back_to_grounded_web_on_market_error(
     )
     monkeypatch.setattr(
         bridge_module,
-        "run_chat_web_request",
+        "run_market_web_request",
         lambda client, model, messages, prompt: (
             "WEB FALLBACK: BTC/USD 81 600 USD."
         ),
@@ -926,3 +926,188 @@ def test_remote_crypto_quote_falls_back_to_grounded_web_on_market_error(
 
     assert answer == "WEB FALLBACK: BTC/USD 81 600 USD."
 
+
+
+def test_remote_stock_quote_prefers_enabled_multi_asset_extension(
+    tmp_path: Path,
+    monkeypatch,
+):
+    import app.discord_bot_bridge as bridge_module
+
+    class ExtensionStore:
+        def find_by_preset_id(self, preset_id):
+            if preset_id == "multi-asset-market-data":
+                return {
+                    "id": "multi-market-ext",
+                    "enabled": True,
+                    "capabilities": [
+                        "market_quote",
+                        "stock_quote",
+                        "forex_quote",
+                        "index_quote",
+                    ],
+                    "config": {},
+                }
+            if preset_id == "crypto-market-data":
+                raise AssertionError(
+                    "stock quote must not query the crypto market extension"
+                )
+            return None
+
+    monkeypatch.setattr(
+        bridge_module,
+        "run_multi_asset_market_request",
+        lambda extension, prompt: (
+            "A Tesla (TSLA) aktuális piaci ára: **250.15 USD**. "
+            "Forrás: Yahoo Finance chart endpoint."
+        ),
+    )
+    monkeypatch.setattr(
+        bridge_module,
+        "run_chat_web_request",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError(
+                "web fallback must not run when multi-asset extension succeeds"
+            )
+        ),
+    )
+
+    class FailingOllama:
+        def chat_once(self, model, messages):
+            raise AssertionError("local model must not answer live stock quote")
+
+    settings = DiscordBotSettings(
+        extension_id="ext-multi-market",
+        name="Prometheusz",
+        guild_id=111111111111111111,
+        channel_id=222222222222222222,
+        allowed_user_id=333333333333333333,
+        model="qwen3-coder:30b",
+    )
+    bridge = DiscordBotBridge(
+        ollama_client=FailingOllama(),
+        chat_store=ChatStore(tmp_path / "chats"),
+        settings=settings,
+        token="T" * 40,
+        extension_store=ExtensionStore(),
+    )
+
+    answer, _chat_id = bridge._answer_prompt(
+        "Mennyi most a Tesla részvény ára?"
+    )
+
+    assert "250.15 USD" in answer
+    assert "Yahoo Finance chart endpoint" in answer
+
+
+def test_remote_stock_quote_falls_back_to_grounded_web_on_multi_asset_error(
+    tmp_path: Path,
+    monkeypatch,
+):
+    import app.discord_bot_bridge as bridge_module
+
+    class ExtensionStore:
+        def find_by_preset_id(self, preset_id):
+            if preset_id == "multi-asset-market-data":
+                return {
+                    "id": "multi-market-ext",
+                    "enabled": True,
+                    "capabilities": ["market_quote"],
+                    "config": {},
+                }
+            if preset_id == "crypto-market-data":
+                raise AssertionError(
+                    "stock quote must not query the crypto market extension"
+                )
+            return None
+
+    monkeypatch.setattr(
+        bridge_module,
+        "run_multi_asset_market_request",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("multi-asset provider unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        bridge_module,
+        "run_market_web_request",
+        lambda client, model, messages, prompt: (
+            "WEB FALLBACK: TSLA 250 USD."
+        ),
+    )
+
+    class FailingOllama:
+        def chat_once(self, model, messages):
+            raise AssertionError("local model must not answer live stock quote")
+
+    settings = DiscordBotSettings(
+        extension_id="ext-multi-market-fallback",
+        name="Prometheusz",
+        guild_id=111111111111111111,
+        channel_id=222222222222222222,
+        allowed_user_id=333333333333333333,
+        model="qwen3-coder:30b",
+    )
+    bridge = DiscordBotBridge(
+        ollama_client=FailingOllama(),
+        chat_store=ChatStore(tmp_path / "chats"),
+        settings=settings,
+        token="T" * 40,
+        extension_store=ExtensionStore(),
+    )
+
+    answer, _chat_id = bridge._answer_prompt(
+        "Mennyi most a Tesla részvény ára?"
+    )
+
+    assert answer == "WEB FALLBACK: TSLA 250 USD."
+
+
+def test_remote_market_quote_without_extension_uses_concise_market_fallback(
+    tmp_path: Path,
+    monkeypatch,
+):
+    import app.discord_bot_bridge as bridge_module
+
+    class ExtensionStore:
+        def find_by_preset_id(self, preset_id):
+            return None
+
+    monkeypatch.setattr(
+        bridge_module,
+        "run_market_web_request",
+        lambda client, model, messages, prompt: "MARKET FALLBACK SHORT",
+    )
+    monkeypatch.setattr(
+        bridge_module,
+        "run_chat_web_request",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("generic web fallback must not handle market quote")
+        ),
+    )
+
+    class FailingOllama:
+        def chat_once(self, model, messages):
+            raise AssertionError("local model must not answer live market quote")
+
+    settings = DiscordBotSettings(
+        extension_id="ext-market-no-provider",
+        name="Prometheusz",
+        guild_id=111111111111111111,
+        channel_id=222222222222222222,
+        allowed_user_id=333333333333333333,
+        model="qwen3-coder:30b",
+    )
+    bridge = DiscordBotBridge(
+        ollama_client=FailingOllama(),
+        chat_store=ChatStore(tmp_path / "chats"),
+        settings=settings,
+        token="T" * 40,
+        extension_store=ExtensionStore(),
+    )
+
+    answer, _chat_id = bridge._answer_prompt(
+        "Mennyi most a Tesla részvény ára?"
+    )
+
+    assert answer == "MARKET FALLBACK SHORT"
