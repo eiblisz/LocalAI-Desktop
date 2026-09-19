@@ -8,6 +8,7 @@ from app.artifact_service import (
     create_artifact,
     infer_artifact_format,
     infer_artifact_request,
+    infer_artifact_requests,
 )
 
 
@@ -205,3 +206,54 @@ def test_artifact_service_rejects_unknown_format(tmp_path: Path):
             content="nope",
             output_dir=tmp_path,
         )
+
+
+def test_multiple_artifact_requests_are_planned_independently():
+    prompt = """Készíts nekem egy Word dokumentumot Red Executive stílusban, amiben röviden összefoglalod, hogy ki nekem Lilla.
+
+Készíts nekem egy Excel fájlt arról, hogy ki nekem Lilla.
+
+Készíts nekem egy HTML riportot Classic Executive stílusban arról, hogy ki nekem Lilla.
+
+Készíts nekem egy összefoglaló Markdown fájlt arról, hogy ki nekem Lilla."""
+
+    plans = infer_artifact_requests(prompt)
+
+    assert [(item.request.format, item.request.preset) for item in plans] == [
+        ("docx", "Red Executive"),
+        ("xlsx", "Red Executive Workbook"),
+        ("html", "Classic Executive"),
+        ("summary", "Local Summary"),
+    ]
+    assert all("Lilla" in item.prompt for item in plans)
+
+
+def test_multiple_artifact_requests_on_one_line_split_at_repeated_creation_intent():
+    prompt = (
+        "Készíts Word dokumentumot Red Executive stílusban. "
+        "Készíts Excel fájlt. "
+        "Készíts HTML riportot Classic Executive stílusban."
+    )
+
+    plans = infer_artifact_requests(prompt)
+
+    assert [(item.request.format, item.request.preset) for item in plans] == [
+        ("docx", "Red Executive"),
+        ("xlsx", "Red Executive Workbook"),
+        ("html", "Classic Executive"),
+    ]
+
+
+def test_artifact_preset_does_not_leak_between_neighboring_requests():
+    prompt = (
+        "Készíts Excel fájlt az adatokról. "
+        "Készíts HTML riportot Classic Executive stílusban."
+    )
+
+    plans = infer_artifact_requests(prompt)
+
+    assert plans[0].request.format == "xlsx"
+    assert plans[0].request.preset == "Red Executive Workbook"
+    assert plans[1].request.format == "html"
+    assert plans[1].request.preset == "Classic Executive"
+
