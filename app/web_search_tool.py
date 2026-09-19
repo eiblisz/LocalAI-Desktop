@@ -1072,7 +1072,7 @@ def rank_authoritative_results(query, results):
     return [item for _index, item in indexed]
 
 
-def _extract_release_value(item):
+def _extract_release_value(item, query=""):
     url = _decode_bing_result_url(str(item.get("url", "")).strip())
     text = "\n".join([
         str(item.get("title", "")),
@@ -1105,8 +1105,37 @@ def _extract_release_value(item):
         if match:
             return match.group(1)
 
-    versions = _SEMVER_RE.findall(compact)
-    return versions[0] if versions else ""
+    # Product/model families often encode the generation in the name itself
+    # (for example "Nimbus3.8"). Prefer that over unrelated decimals such as
+    # parameter counts, benchmark scores, or API versions.
+    identity_terms = _authority_identity_terms(query)
+    for term in identity_terms:
+        named_match = re.search(
+            rf"\b({re.escape(term)}\s*[-_]?\s*\d+(?:\.\d+){{1,3}})\b",
+            compact,
+            flags=re.IGNORECASE,
+        )
+        if named_match:
+            return re.sub(r"\s+", "", named_match.group(1))
+
+    # Bare decimals are accepted only when explicit release/version language
+    # binds them to the requested fact. This prevents values such as
+    # "2.4 trillion parameters" from being misclassified as a version.
+    contextual_patterns = [
+        r"\b(?:latest|current|newest)\s+(?:stable\s+)?(?:version|release)\s*[:=-]?\s*"
+        r"(v?\d+\.\d+(?:\.\d+){0,2}(?:[-+][0-9A-Za-z.-]+)?)",
+        r"\b(?:version|release)\s*[:=-]?\s*"
+        r"(v?\d+\.\d+(?:\.\d+){0,2}(?:[-+][0-9A-Za-z.-]+)?)",
+        r"\b(?:verzió|verzio|kiadás|kiadas)\s*[:=-]?\s*"
+        r"(v?\d+\.\d+(?:\.\d+){0,2}(?:[-+][0-9A-Za-z.-]+)?)",
+        r"\b(v\d+\.\d+(?:\.\d+){0,2}(?:[-+][0-9A-Za-z.-]+)?)\b",
+    ]
+    for pattern in contextual_patterns:
+        match = re.search(pattern, compact, flags=re.IGNORECASE)
+        if match:
+            return match.group(1)
+
+    return ""
 
 
 def authoritative_current_fact(payload):
@@ -1120,7 +1149,7 @@ def authoritative_current_fact(payload):
         if score < 300:
             continue
 
-        value = _extract_release_value(item)
+        value = _extract_release_value(item, query=query)
         if not value:
             continue
 
