@@ -888,3 +888,28 @@ def test_model_refresh_preserves_saved_or_current_chat_model():
     assert "preferred = saved or previous" in source
     assert "self.model_combo.findText(preferred)" in source
     assert "self.model_combo.setCurrentIndex(index)" in source
+
+
+def test_topbar_model_controls_share_one_compact_baseline():
+    import app.main_window as main_window_module
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._build_ui)
+
+    assert "model_box = QVBoxLayout()" not in source
+    assert "model_header = QHBoxLayout()" not in source
+    assert "self.model_combo.setFixedHeight(34)" in source
+    assert "self.refresh_models_button.setFixedHeight(34)" in source
+    assert "Qt.AlignmentFlag.AlignVCenter" in source
+    assert "top_layout.setContentsMargins(18, 6, 18, 6)" in source
+    assert "max-height: 34px" in main_window_module.STYLE
+
+
+def test_schedule_style_no_longer_reintroduces_large_button_height():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._apply_schedule_button_style)
+
+    assert '"min-height:32px;"' in source
+    assert '"max-height:34px;"' in source
+    assert '"min-height:44px;"' not in source
