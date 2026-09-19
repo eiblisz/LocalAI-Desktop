@@ -17,10 +17,10 @@ EXTENSION_PRESETS = (
         "id": "discord-bot",
         "name": "Prometheusz Discord Bot",
         "category": "Communication",
-        "description": "Use the Prometheusz Discord bot as a restricted remote chat bridge to LocalAI.",
+        "description": "Use Prometheusz as a restricted remote LocalAI chat and grounded web research bridge.",
         "type": "mcp_connector",
         "auth_type": "bot_token",
-        "capabilities": ("read_messages", "send_message", "remote_chat"),
+        "capabilities": ("read_messages", "send_message", "remote_chat", "web_research"),
         "provider_url": "https://discord.com/",
         "docs_url": "https://discord.com/developers/docs/intro",
         "default_config": {
