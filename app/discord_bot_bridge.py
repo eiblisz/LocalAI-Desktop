@@ -721,12 +721,27 @@ class DiscordBotBridge(QObject):
         action_plan = plan_user_action(prompt, force_web=force_web)
 
         if action_plan.has(ACTION_WEB_RESEARCH):
-            answer = run_chat_web_request(
-                self.ollama_client,
-                self.settings.model,
-                messages,
-                prompt,
-            ).strip()
+            extension = self._crypto_market_extension()
+            if extension is not None and is_crypto_quote_request(prompt):
+                try:
+                    answer = run_crypto_market_request(
+                        extension,
+                        prompt,
+                    ).strip()
+                except Exception:
+                    answer = run_chat_web_request(
+                        self.ollama_client,
+                        self.settings.model,
+                        messages,
+                        prompt,
+                    ).strip()
+            else:
+                answer = run_chat_web_request(
+                    self.ollama_client,
+                    self.settings.model,
+                    messages,
+                    prompt,
+                ).strip()
         else:
             answer = self.ollama_client.chat_once(
                 model=self.settings.model,
