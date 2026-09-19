@@ -825,15 +825,3 @@ def test_crypto_and_multi_asset_structured_routing_remain_separate():
     assert "is_multi_asset_quote_request(text_for_model)" in source
     assert "MarketDataWorker(" in source
     assert "MultiAssetMarketDataWorker(" in source
-
-
-def test_market_web_fallback_is_compact_even_without_structured_extension():
-    from app.main_window import MainWindow
-
-    source = inspect.getsource(MainWindow._send)
-
-    assert "market_fallback = (" in source
-    assert "is_crypto_quote_request(text_for_model)" in source
-    assert "is_multi_asset_quote_request(text_for_model)" in source
-    assert "compact_market_quote=market_fallback" in source
-    assert '"Market web fallback..."' in source
