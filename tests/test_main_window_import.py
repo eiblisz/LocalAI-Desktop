@@ -825,3 +825,31 @@ def test_crypto_and_multi_asset_structured_routing_remain_separate():
     assert "is_multi_asset_quote_request(text_for_model)" in source
     assert "MarketDataWorker(" in source
     assert "MultiAssetMarketDataWorker(" in source
+
+
+def test_chat_input_accepts_clipboard_images_as_ollama_image_payloads():
+    from app.main_window import MainWindow, PasteAwareTextEdit
+
+    build_source = inspect.getsource(MainWindow._build_chat_panel)
+    send_source = inspect.getsource(MainWindow._send)
+    paste_source = inspect.getsource(PasteAwareTextEdit.insertFromMimeData)
+    attach_source = inspect.getsource(MainWindow._attach_clipboard_image)
+
+    assert "PasteAwareTextEdit()" in build_source
+    assert "imagePasted.connect(self._attach_clipboard_image)" in build_source
+    assert "source.hasImage()" in paste_source
+    assert "self.imagePasted.emit(image)" in paste_source
+    assert "_qimage_to_png_base64(image)" in attach_source
+    assert 'attachment.get("kind") == "image"' in send_source
+    assert 'model_user_message["images"] = image_payloads' in send_source
+
+
+def test_attach_file_supports_common_image_formats():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._attach_file)
+
+    for suffix in (".png", ".jpg", ".jpeg", ".webp", ".bmp"):
+        assert suffix in source
+    assert "base64.b64encode" in source
+    assert "self._add_image_attachment" in source
