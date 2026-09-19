@@ -538,6 +538,7 @@ def test_prometheusz_bridge_starts_only_from_enabled_configured_extension():
     assert "self.secret_store.get_secret" in sync
     assert "DiscordBotSettings.from_extension" in sync
     assert "DiscordBotBridge(" in sync
+    assert "memory_store=self.memory_store" in sync
     assert "self.extensions_dialog.changed.connect(self._sync_discord_bot_bridge)" in open_source
     assert "self._stop_discord_bot_bridge()" in close_source
 
