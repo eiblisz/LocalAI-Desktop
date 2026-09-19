@@ -319,9 +319,37 @@ class MainWindow(QMainWindow):
         top_layout.addWidget(self.resource_label, 1)
         top_layout.addStretch()
 
+        model_box = QVBoxLayout()
+        model_header = QHBoxLayout()
+        self.model_label = QLabel("LOCAL MODELS")
+        self.model_label.setObjectName("muted")
+        model_header.addWidget(self.model_label)
+        model_header.addStretch()
+        self.model_count_label = QLabel("0")
+        self.model_count_label.setObjectName("muted")
+        model_header.addWidget(self.model_count_label)
+        model_box.addLayout(model_header)
+
+        model_row = QHBoxLayout()
         self.model_combo = QComboBox()
+        self.model_combo.setMinimumWidth(300)
+        self.model_combo.setMaxVisibleItems(24)
+        self.model_combo.setToolTip(
+            "All local models currently installed in Ollama. "
+            "The selected model is saved per chat."
+        )
         self.model_combo.currentTextChanged.connect(self._model_changed)
-        top_layout.addWidget(self.model_combo)
+        model_row.addWidget(self.model_combo, 1)
+
+        self.refresh_models_button = QPushButton("REFRESH")
+        self.refresh_models_button.setObjectName("subtleButton")
+        self.refresh_models_button.setToolTip(
+            "Refresh the list of locally installed Ollama models."
+        )
+        self.refresh_models_button.clicked.connect(self._load_models)
+        model_row.addWidget(self.refresh_models_button)
+        model_box.addLayout(model_row)
+        top_layout.addLayout(model_box)
 
         self.status = QLabel("Ollama: checking...")
         self.status.setObjectName("muted")
@@ -633,17 +661,50 @@ class MainWindow(QMainWindow):
         return frame
 
     def _load_models(self):
+        previous = self.model_combo.currentText().strip()
+        saved = ""
+        if self.current_chat:
+            saved = str(self.current_chat.get("model") or "").strip()
+
         try:
-            models = self.client.list_models()
+            models = sorted(
+                {
+                    str(model).strip()
+                    for model in self.client.list_models()
+                    if str(model).strip()
+                },
+                key=str.casefold,
+            )
             self.model_combo.blockSignals(True)
             self.model_combo.clear()
             self.model_combo.addItems(models)
+
+            preferred = saved or previous
+            if preferred:
+                index = self.model_combo.findText(preferred)
+                if index >= 0:
+                    self.model_combo.setCurrentIndex(index)
+
             self.model_combo.blockSignals(False)
-            self.status.setText("Ollama connected" if models else "Ollama connected - no models")
+            self.model_count_label.setText(str(len(models)))
+            self.model_label.setText(
+                f"LOCAL MODELS ({len(models)})"
+                if models
+                else "LOCAL MODELS"
+            )
+            self.status.setText(
+                "Ollama connected"
+                if models
+                else "Ollama connected - no models"
+            )
         except Exception:
             self.status.setText("Ollama offline")
+            self.model_combo.blockSignals(True)
             self.model_combo.clear()
             self.model_combo.addItem("No Ollama model found")
+            self.model_combo.blockSignals(False)
+            self.model_count_label.setText("0")
+            self.model_label.setText("LOCAL MODELS")
 
     def _load_chat_list(self):
         selected_id = self.current_chat.get("id") if self.current_chat else None
@@ -783,9 +844,11 @@ class MainWindow(QMainWindow):
         self._render_chat()
 
     def _model_changed(self, model):
+        model = str(model or "").strip()
         if self.current_chat and model and not model.startswith("No Ollama"):
             self.current_chat["model"] = model
             self.store.save(self.current_chat)
+            self.status.setText(f"Model: {model}")
 
     def _refresh_chat_extensions_button(self):
         button = getattr(self, "chat_extensions_button", None)
