@@ -432,7 +432,13 @@ class BrowserView(QWidget):
 
 
 class PdfViewWidget(QWidget):
-    def __init__(self, path, parent=None, show_save_as=True):
+    def __init__(
+        self,
+        path,
+        parent=None,
+        show_save_as=True,
+        fit_full_page=False,
+    ):
         super().__init__(parent)
         path = Path(path).resolve()
 
@@ -448,7 +454,12 @@ class PdfViewWidget(QWidget):
             self.view.setDocument(self.document)
             try:
                 self.view.setPageMode(QPdfView.PageMode.MultiPage)
-                self.view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
+                zoom_mode = (
+                    QPdfView.ZoomMode.FitInView
+                    if fit_full_page
+                    else QPdfView.ZoomMode.FitToWidth
+                )
+                self.view.setZoomMode(zoom_mode)
             except Exception:
                 pass
             root.addWidget(self.view, 1)
@@ -493,6 +504,7 @@ class DocumentView(QWidget):
                 preview_pdf,
                 parent=self,
                 show_save_as=False,
+                fit_full_page=True,
             )
             root.addWidget(self.preview, 1)
             return
