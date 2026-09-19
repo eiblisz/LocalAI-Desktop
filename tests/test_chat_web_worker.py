@@ -1018,3 +1018,76 @@ def test_web_worker_replaces_stale_secondary_release_with_first_party_current_fa
     assert "Value: v0.34.2" in grounded
     assert "prefer that first-party authority" in grounded
 
+
+def test_web_worker_does_not_replace_family_answer_with_qualified_tool_release(monkeypatch):
+    class FamilyClient(DummyWebClient):
+        def chat_stream(
+            self,
+            model,
+            messages,
+            on_token,
+            should_stop,
+            timeout=600.0,
+        ):
+            self.stream_calls.append((model, messages))
+            if not should_stop():
+                on_token(
+                    "A legfrissebb Qwen modellcsalád a Qwen3.8, "
+                    "a hivatalos Qwen források alapján."
+                )
+
+    monkeypatch.setattr(
+        workers.ChatWebWorker,
+        "_generate_search_queries",
+        lambda self: ["Qwen latest version release"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "search_web",
+        lambda query, max_results=6, fetch_pages=True: {
+            "provider": "Brave Search API",
+            "query": query,
+            "provider_query": query,
+            "retrieved_at": "2026-09-19T13:20:00",
+            "provider_chain_errors": [],
+            "results": [
+                {
+                    "title": "Releases · QwenLM/qwen-code",
+                    "url": "https://github.com/QwenLM/qwen-code/releases",
+                    "snippet": "Qwen Code v0.24.1",
+                    "page_text": "Release list v0.24.1 Latest",
+                },
+                {
+                    "title": "Qwen",
+                    "url": "https://qwen.ai/",
+                    "snippet": "Official Qwen model family",
+                    "page_text": "Qwen3.8 is the latest Qwen model family release.",
+                },
+            ],
+        },
+    )
+
+    client = FamilyClient()
+    tokens = []
+    failed = []
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Melyik a jelenlegi legfrissebb Qwen verzió?",
+    )
+    worker.token.connect(tokens.append)
+    worker.failed.connect(failed.append)
+    worker.run()
+
+    assert not failed
+    combined = "".join(tokens)
+    assert "Qwen3.8" in combined
+    assert "v0.24.1" not in combined
+
+    grounded = "\n".join(
+        item["content"] for item in client.stream_calls[0][1]
+    )
+    assert "qualified subproduct/tool not named in the query" in grounded
+    assert "do not use that result as the current-version authority" in grounded
+
