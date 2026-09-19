@@ -172,12 +172,11 @@ def is_freshness_sensitive_request(text):
         "breaking news",
     )
     for marker in markers:
-        if " " in marker:
-            if marker in normalized:
-                return True
+        phrase = marker.strip()
+        if not phrase:
             continue
         if re.search(
-            rf"(?<!\\w){re.escape(marker)}(?!\\w)",
+            rf"(?<!\w){re.escape(phrase)}(?!\w)",
             normalized,
             flags=re.IGNORECASE,
         ):
