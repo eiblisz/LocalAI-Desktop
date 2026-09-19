@@ -10,6 +10,7 @@ from app.discord_bot_bridge import (
     test_discord_bot_token as run_bot_token_test,
     validate_bot_token,
 )
+from app.memory_store import MemoryStore
 from app.storage import ChatStore
 
 
@@ -148,3 +149,91 @@ def test_remote_prompt_uses_dedicated_persistent_discord_chat(tmp_path: Path):
     assert "Prometheusz is not a separate AI system" in system
     assert "If the user asks whether you are Prometheusz, answer yes" in system
     assert "conversational access only" in system
+
+
+def test_remote_prompt_answers_direct_user_memory_without_model(tmp_path: Path):
+    class FailingOllama:
+        def chat_once(self, model, messages):
+            raise AssertionError("model must not be called for deterministic memory answer")
+
+    memory_store = MemoryStore(tmp_path / "memory.sqlite3")
+    memory_store.remember_explicit(
+        category="USER_PROFILE",
+        scope="USER",
+        subject="Lilla",
+        key="relationship_to_user",
+        value="daughter",
+        source_chat_id="seed",
+        source_excerpt="Jegyezd meg, hogy Lilla a lányom.",
+    )
+
+    settings = DiscordBotSettings(
+        extension_id="ext-memory",
+        name="Prometheusz",
+        guild_id=111111111111111111,
+        channel_id=222222222222222222,
+        allowed_user_id=333333333333333333,
+        model="qwen3-coder:30b",
+    )
+    bridge = DiscordBotBridge(
+        ollama_client=FailingOllama(),
+        chat_store=ChatStore(tmp_path / "chats"),
+        settings=settings,
+        token="T" * 40,
+        memory_store=memory_store,
+    )
+
+    answer, chat_id = bridge._answer_prompt("Ki nekem Lilla?")
+
+    assert answer == "Lilla a lányod."
+    chat = bridge.chat_store.load(chat_id)
+    assert chat["messages"][-1] == {
+        "role": "assistant",
+        "content": "Lilla a lányod.",
+    }
+
+
+def test_remote_prompt_injects_relevant_persistent_memory_for_model(tmp_path: Path):
+    class FakeOllama:
+        def __init__(self):
+            self.messages = None
+
+        def chat_once(self, model, messages):
+            self.messages = messages
+            return "Rendben."
+
+    memory_store = MemoryStore(tmp_path / "memory.sqlite3")
+    memory_store.remember_explicit(
+        category="PROJECT",
+        scope="USER",
+        subject="LocalAI Desktop",
+        key="preferred_remote_name",
+        value="Prometheusz",
+        source_chat_id="seed",
+        source_excerpt="A Discord bot neve Prometheusz.",
+    )
+
+    ollama = FakeOllama()
+    settings = DiscordBotSettings(
+        extension_id="ext-memory-context",
+        name="Prometheusz",
+        guild_id=111111111111111111,
+        channel_id=222222222222222222,
+        allowed_user_id=333333333333333333,
+        model="qwen3-coder:30b",
+    )
+    bridge = DiscordBotBridge(
+        ollama_client=ollama,
+        chat_store=ChatStore(tmp_path / "chats"),
+        settings=settings,
+        token="T" * 40,
+        memory_store=memory_store,
+    )
+
+    answer, _chat_id = bridge._answer_prompt("Mit tudsz a LocalAI Desktop Prometheusz nevéről?")
+
+    assert answer == "Rendben."
+    system = ollama.messages[0]["content"]
+    assert "LONG-TERM MEMORY CONTEXT:" in system
+    assert "[PROJECT] LocalAI Desktop | preferred_remote_name: Prometheusz" in system
+
