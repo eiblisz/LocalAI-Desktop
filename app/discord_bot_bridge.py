@@ -773,6 +773,7 @@ class DiscordBotBridge(QObject):
                         self.settings.model,
                         messages,
                         prompt,
+                        compact_market_quote=True,
                     ).strip()
             elif is_multi_asset_quote_request(prompt):
                 multi_asset_extension = self._multi_asset_market_extension()
@@ -796,6 +797,7 @@ class DiscordBotBridge(QObject):
                         self.settings.model,
                         messages,
                         prompt,
+                        compact_market_quote=True,
                     ).strip()
             else:
                 answer = run_chat_web_request(
