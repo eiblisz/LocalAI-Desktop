@@ -1,3 +1,4 @@
+import re
 import asyncio
 import threading
 from dataclasses import dataclass
@@ -284,6 +285,48 @@ class DiscordBotBridge(QObject):
         )
         return direct_user_memory_answer(query, memories)
 
+    @staticmethod
+    def _direct_prometheusz_identity_answer(query):
+        text = " ".join(str(query or "").strip().split()).casefold()
+        if "prometheusz" not in text:
+            return ""
+
+        identity_markers = (
+            "itt vagy",
+            "te vagy",
+            "ki vagy",
+            "are you",
+            "who are you",
+            "you prometheus",
+        )
+        if not any(marker in text for marker in identity_markers):
+            return ""
+
+        return (
+            "Igen, itt vagyok. Prometheusz a Discordos nevem és felületem; "
+            "a háttérben a helyi LocalAI/Qwen rendszer fut."
+        )
+
+    def _direct_compound_answer(self, query):
+        parts = [
+            part.strip(" \t\r\n.,!;:")
+            for part in re.split(r"[?\n]+", str(query or ""))
+            if part.strip()
+        ]
+        if not parts:
+            return ""
+
+        answers = []
+        for part in parts:
+            answer = self._direct_prometheusz_identity_answer(part)
+            if not answer:
+                answer = self._direct_memory_answer(part)
+            if not answer:
+                return ""
+            answers.append(answer)
+
+        return "\n\n".join(answers)
+
     def _build_memory_context(self, query, limit=8):
         if self.memory_store is None:
             return ""
@@ -342,13 +385,13 @@ class DiscordBotBridge(QObject):
         chat["messages"].append({"role": "user", "content": prompt})
         self.chat_store.save(chat)
 
-        direct_memory_answer = self._direct_memory_answer(prompt)
-        if direct_memory_answer:
+        direct_answer = self._direct_compound_answer(prompt)
+        if direct_answer:
             chat["messages"].append(
-                {"role": "assistant", "content": direct_memory_answer}
+                {"role": "assistant", "content": direct_answer}
             )
             self.chat_store.save(chat)
-            return direct_memory_answer, str(chat.get("id", ""))
+            return direct_answer, str(chat.get("id", ""))
 
         system_prompt = (
             f"{DEFAULT_SYSTEM_PROMPT}\n\n"
