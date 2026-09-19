@@ -1112,17 +1112,54 @@ def _extract_release_value(item, query=""):
             return match.group(1)
 
     # Product/model families often encode the generation in the name itself
-    # (for example "Nimbus3.8"). Prefer that over unrelated decimals such as
-    # parameter counts, benchmark scores, or API versions.
+    # (for example "Nimbus3.8"). First prefer a generation explicitly tied to
+    # latest/current wording. If the page contains several historical family
+    # generations, fall back to the highest numeric generation instead of the
+    # first textual occurrence.
     identity_terms = _authority_identity_terms(query)
     for term in identity_terms:
-        named_match = re.search(
-            rf"\b({re.escape(term)}\s*[-_]?\s*\d+(?:\.\d+){{1,3}})\b",
-            compact,
-            flags=re.IGNORECASE,
+        named_token = (
+            rf"({re.escape(term)}\s*[-_]?\s*\d+(?:\.\d+){{1,3}})"
         )
-        if named_match:
-            return re.sub(r"\s+", "", named_match.group(1))
+        latest_named_patterns = [
+            rf"\b(?:latest|current|newest)\s+"
+            rf"(?:(?:stable|flagship|model|family|generation)\s+)*"
+            rf"(?:version|release|model|generation)?\s*[,;:=-]?\s*"
+            rf"{named_token}\b",
+            rf"\b(?:its\s+)?(?:latest|current|newest)\s+"
+            rf"(?:version|release|model|generation)\s*[,;:=-]?\s*"
+            rf"{named_token}\b",
+            rf"\b{named_token}\b\s+(?:is\s+)?(?:the\s+)?"
+            rf"(?:latest|current|newest)\s+"
+            rf"(?:version|release|model|generation)\b",
+        ]
+        for pattern in latest_named_patterns:
+            match = re.search(pattern, compact, flags=re.IGNORECASE)
+            if match:
+                return re.sub(r"\s+", "", match.group(1))
+
+        named_matches = list(
+            re.finditer(
+                rf"\b{named_token}\b",
+                compact,
+                flags=re.IGNORECASE,
+            )
+        )
+        if named_matches:
+            def generation_key(match):
+                value = re.sub(r"\s+", "", match.group(1))
+                suffix = re.sub(
+                    rf"(?i)^{re.escape(term)}[-_]?",
+                    "",
+                    value,
+                )
+                try:
+                    return tuple(int(part) for part in suffix.split("."))
+                except ValueError:
+                    return ()
+
+            best_match = max(named_matches, key=generation_key)
+            return re.sub(r"\s+", "", best_match.group(1))
 
     # Bare decimals are accepted only when explicit release/version language
     # binds them to the requested fact. This prevents values such as
