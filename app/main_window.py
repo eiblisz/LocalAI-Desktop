@@ -1,6 +1,5 @@
 import html
 import re
-import webbrowser
 from datetime import datetime
 from pathlib import Path
 
@@ -32,7 +31,6 @@ from PySide6.QtWidgets import (
 from .artifact_service import create_artifact
 from .artifact_utils import (
     artifact_url,
-    open_file,
     open_folder,
     path_from_artifact_url,
 )
