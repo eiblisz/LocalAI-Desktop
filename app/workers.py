@@ -588,9 +588,12 @@ class ChatWebWorker(QObject):
         it may omit supporting detail, but it may not introduce new numeric facts
         or URLs that were not already present in the grounded answer.
         """
-        final = str(answer or "").strip()
-        if not final or self._wants_detailed_web_answer():
+        original = str(answer or "")
+        final = original.strip()
+        if not final:
             return final
+        if self._wants_detailed_web_answer():
+            return original
 
         if len(final) <= 650:
             return final
