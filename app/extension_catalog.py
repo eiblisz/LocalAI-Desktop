@@ -53,6 +53,23 @@ EXTENSION_PRESETS = (
         "docs_url": "https://discord.com/developers/docs/resources/webhook",
     },
     {
+        "id": "crypto-market-data",
+        "name": "Crypto Market Data",
+        "category": "Business & Operations",
+        "description": "Fetch structured live cryptocurrency quotes and 24-hour market statistics with automatic web fallback.",
+        "type": "http_api",
+        "auth_type": "none",
+        "capabilities": ("crypto_quote", "crypto_ticker", "crypto_24h"),
+        "provider_url": "https://www.coinbase.com/",
+        "docs_url": "https://docs.cdp.coinbase.com/exchange/reference/exchangerestapi_getproductticker",
+        "default_endpoint": "https://api.exchange.coinbase.com/time",
+        "default_config": {
+            "api_base_url": "https://api.exchange.coinbase.com",
+            "default_quote": "USD",
+            "provider": "coinbase_exchange_public",
+        },
+    },
+    {
         "id": "google-calendar",
         "name": "Google Calendar",
         "category": "Productivity",
@@ -320,7 +337,7 @@ def preset_to_registry_entry(preset):
     return {
         "name": preset["name"],
         "type": preset["type"],
-        "endpoint": "",
+        "endpoint": preset.get("default_endpoint", ""),
         "enabled": False,
         "auth_type": preset["auth_type"],
         "capabilities": list(preset["capabilities"]),
