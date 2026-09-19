@@ -645,3 +645,85 @@ def test_brave_http_error_is_compact_and_does_not_echo_request_url(monkeypatch):
     assert "spellcheck must be a boolean" in message
     assert "https://api.search.brave.com" not in message
     assert len(message) < 400
+
+
+def test_current_version_ranking_prefers_matching_first_party_github_releases():
+    results = [
+        {
+            "title": "Releasebot - Ollama releases",
+            "url": "https://releasebot.io/updates/ollama",
+            "snippet": "Ollama v0.33.2",
+            "page_text": "Latest tracked version v0.33.2",
+        },
+        {
+            "title": "Releases · ollama/ollama · GitHub",
+            "url": "https://github.com/ollama/ollama/releases",
+            "snippet": "Official releases",
+            "page_text": "Release list v0.34.2 v0.34.1 v0.34.0 v0.33.3 v0.33.2",
+        },
+    ]
+
+    ranked = web_search_tool.rank_authoritative_results(
+        "Ollama latest version release",
+        results,
+    )
+
+    assert ranked[0]["url"] == "https://github.com/ollama/ollama/releases"
+
+
+def test_authoritative_current_fact_extracts_latest_from_official_release_page():
+    payload = {
+        "query": "Ollama latest version release",
+        "results": [
+            {
+                "title": "Releasebot - Ollama releases",
+                "url": "https://releasebot.io/updates/ollama",
+                "snippet": "Tracked version v0.33.2",
+                "page_text": "v0.33.2",
+            },
+            {
+                "title": "Releases · ollama/ollama · GitHub",
+                "url": "https://github.com/ollama/ollama/releases",
+                "snippet": "Official releases",
+                "page_text": (
+                    "Release list v0.34.2 v0.34.1 v0.34.0 v0.33.3 v0.33.2 "
+                    "v0.34.2 Latest What's Changed"
+                ),
+            },
+        ],
+    }
+
+    fact = web_search_tool.authoritative_current_fact(payload)
+
+    assert fact == {
+        "kind": "latest_release",
+        "value": "v0.34.2",
+        "url": "https://github.com/ollama/ollama/releases",
+        "title": "Releases · ollama/ollama · GitHub",
+        "authority": "first_party",
+    }
+
+
+def test_web_context_surfaces_authoritative_current_fact_before_results():
+    payload = {
+        "provider": "Brave Search API",
+        "query": "Ollama latest version release",
+        "retrieved_at": "2026-09-19T12:59:00",
+        "results": [
+            {
+                "title": "Releases · ollama/ollama · GitHub",
+                "url": "https://github.com/ollama/ollama/releases",
+                "snippet": "Official releases",
+                "page_text": "Release list v0.34.2 v0.34.1 v0.34.0",
+            }
+        ],
+    }
+
+    context = web_search_tool.web_search_context_text(payload)
+
+    assert "AUTHORITATIVE CURRENT FACT" in context
+    assert "Value: v0.34.2" in context
+    assert "Authority: first_party" in context
+    assert "Source URL: https://github.com/ollama/ollama/releases" in context
+    assert context.index("AUTHORITATIVE CURRENT FACT") < context.index("SEARCH RESULTS")
+
