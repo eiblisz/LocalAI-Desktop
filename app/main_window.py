@@ -1,10 +1,11 @@
+import base64
 import html
 import re
 from datetime import datetime
 from pathlib import Path
 
 import markdown
-from PySide6.QtCore import QThread, QTimer, Qt
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QThread, QTimer, Qt, Signal
 from PySide6.QtGui import QTextOption
 from PySide6.QtWidgets import (
     QComboBox,
@@ -198,6 +199,31 @@ QMenu::item:selected {
     background: #2A3440;
 }
 """
+
+
+class PasteAwareTextEdit(QTextEdit):
+    imagePasted = Signal(object)
+
+    def insertFromMimeData(self, source):
+        if source is not None and source.hasImage():
+            image = source.imageData()
+            if image is not None:
+                self.imagePasted.emit(image)
+                return
+        super().insertFromMimeData(source)
+
+
+def _qimage_to_png_base64(image):
+    byte_array = QByteArray()
+    buffer = QBuffer(byte_array)
+    if not buffer.open(QIODevice.OpenModeFlag.WriteOnly):
+        raise RuntimeError("Could not open clipboard image buffer.")
+    try:
+        if not image.save(buffer, "PNG"):
+            raise RuntimeError("Could not encode clipboard image as PNG.")
+    finally:
+        buffer.close()
+    return base64.b64encode(bytes(byte_array)).decode("ascii")
 
 
 class MainWindow(QMainWindow):
@@ -492,9 +518,12 @@ class MainWindow(QMainWindow):
         self.web_button.toggled.connect(self._web_button_toggled)
         input_row.addWidget(self.web_button)
 
-        self.input = QTextEdit()
-        self.input.setPlaceholderText("Write a message...")
+        self.input = PasteAwareTextEdit()
+        self.input.setPlaceholderText(
+            "Write a message... (Ctrl+V also accepts clipboard images)"
+        )
         self.input.setFixedHeight(82)
+        self.input.imagePasted.connect(self._attach_clipboard_image)
         input_row.addWidget(self.input, 1)
 
         self.stop_button = QPushButton("Stop")
@@ -827,18 +856,64 @@ class MainWindow(QMainWindow):
             self,
             "Attach file",
             "",
-            "Supported (*.txt *.md *.csv *.json *.log *.py *.toml *.yaml *.yml *.pdf *.docx);;All files (*.*)",
+            (
+                "Supported (*.txt *.md *.csv *.json *.log *.py *.toml *.yaml *.yml "
+                "*.pdf *.docx *.png *.jpg *.jpeg *.webp *.bmp);;All files (*.*)"
+            ),
         )
         if not path:
             return
+
+        suffix = Path(path).suffix.lower()
+        if suffix in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}:
+            try:
+                encoded = base64.b64encode(Path(path).read_bytes()).decode("ascii")
+            except Exception as exc:
+                QMessageBox.critical(self, "Attachment error", str(exc))
+                return
+            self._add_image_attachment(Path(path).name, encoded)
+            return
+
         try:
             text = read_attachment(path)
         except Exception as exc:
             QMessageBox.critical(self, "Attachment error", str(exc))
             return
 
-        self.attachment_context.append({"name": Path(path).name, "content": text})
+        self.attachment_context.append(
+            {
+                "kind": "text",
+                "name": Path(path).name,
+                "content": text,
+            }
+        )
         self.input.insertPlainText(f"\n[Attached: {Path(path).name}]\n")
+
+    def _add_image_attachment(self, name, encoded):
+        self.attachment_context.append(
+            {
+                "kind": "image",
+                "name": str(name or "image.png"),
+                "image": str(encoded or ""),
+            }
+        )
+        self.input.insertPlainText(f"\n[Attached image: {name}]\n")
+
+    def _attach_clipboard_image(self, image):
+        try:
+            encoded = _qimage_to_png_base64(image)
+        except Exception as exc:
+            QMessageBox.critical(self, "Clipboard image error", str(exc))
+            return
+        index = 1 + sum(
+            1
+            for item in self.attachment_context
+            if item.get("kind") == "image"
+        )
+        self._add_image_attachment(
+            f"clipboard_image_{index}.png",
+            encoded,
+        )
 
     def _web_button_toggled(self, checked):
         self.web_button.setText("WEB ON" if checked else "WEB AUTO")
@@ -946,9 +1021,15 @@ class MainWindow(QMainWindow):
             self.current_chat["closed"] = False
             self.show_closed = False
 
+        image_payloads = []
         if self.attachment_context:
             blocks = []
             for attachment in self.attachment_context:
+                if attachment.get("kind") == "image":
+                    encoded = str(attachment.get("image") or "").strip()
+                    if encoded:
+                        image_payloads.append(encoded)
+                    continue
                 blocks.append(
                     f"\n\n--- ATTACHMENT: {attachment['name']} ---\n"
                     f"{attachment['content']}"
@@ -1019,7 +1100,13 @@ class MainWindow(QMainWindow):
         for message in self.current_chat["messages"][:-1]:
             if message.get("role") in {"user", "assistant"}:
                 messages_for_model.append(message)
-        messages_for_model.append({"role": "user", "content": text_for_model})
+        model_user_message = {
+            "role": "user",
+            "content": text_for_model,
+        }
+        if image_payloads:
+            model_user_message["images"] = image_payloads
+        messages_for_model.append(model_user_message)
 
         use_web = action_plan.has(ACTION_WEB_RESEARCH)
 
