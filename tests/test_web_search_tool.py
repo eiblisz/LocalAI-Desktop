@@ -929,3 +929,97 @@ def test_qwen_style_family_page_does_not_return_parameter_count_as_version():
     assert fact["value"].lower() == "qwen3.8"
     assert fact["value"] != "2.4"
 
+
+def test_family_latest_wording_beats_older_historical_generation():
+    item = {
+        "title": "Nimbus official model family",
+        "url": "https://nimbus.example.com/models",
+        "snippet": "Nimbus model family",
+        "page_text": (
+            "Nimbus2.5 was a previous generation. "
+            "Its latest version, Nimbus3.8, is the current flagship model."
+        ),
+    }
+
+    value = web_search_tool._extract_release_value(
+        item,
+        query="Nimbus latest version release",
+    )
+
+    assert value == "Nimbus3.8"
+
+
+def test_family_generation_fallback_uses_highest_numeric_generation():
+    item = {
+        "title": "Nimbus official model family",
+        "url": "https://nimbus.example.com/models",
+        "snippet": "Nimbus releases",
+        "page_text": (
+            "Nimbus2.5 remains supported. Nimbus3.7 added multimodal support. "
+            "Nimbus3.8 is now available."
+        ),
+    }
+
+    value = web_search_tool._extract_release_value(
+        item,
+        query="Nimbus latest version release",
+    )
+
+    assert value == "Nimbus3.8"
+
+
+def test_qwen_latest_family_does_not_fall_back_to_older_qwen25():
+    payload = {
+        "query": "Qwen latest version release",
+        "results": [
+            {
+                "title": "Qwen",
+                "url": "https://qwen.ai/",
+                "snippet": "Official Qwen model family",
+                "page_text": (
+                    "Qwen2.5 was an earlier generation. "
+                    "Its latest version, Qwen3.8, is the current flagship family."
+                ),
+            },
+            {
+                "title": "Releases · QwenLM/qwen-code",
+                "url": "https://github.com/QwenLM/qwen-code/releases",
+                "snippet": "Qwen Code v0.24.1",
+                "page_text": "Release list v0.24.1 Latest",
+            },
+        ],
+    }
+
+    fact = web_search_tool.authoritative_current_fact(payload)
+
+    assert fact is not None
+    assert fact["value"].lower() == "qwen3.8"
+    assert fact["value"].lower() != "qwen2.5"
+    assert fact["value"] != "v0.24.1"
+
+
+def test_explicit_qwen_code_query_still_uses_tool_release():
+    payload = {
+        "query": "Qwen Code latest version release",
+        "results": [
+            {
+                "title": "Releases · QwenLM/qwen-code",
+                "url": "https://github.com/QwenLM/qwen-code/releases",
+                "snippet": "Qwen Code v0.24.1",
+                "page_text": "Release list v0.24.1 Latest",
+            },
+            {
+                "title": "Qwen",
+                "url": "https://qwen.ai/",
+                "snippet": "Official Qwen model family",
+                "page_text": "Its latest version, Qwen3.8, is the current flagship family.",
+            },
+        ],
+    }
+
+    fact = web_search_tool.authoritative_current_fact(payload)
+
+    assert fact is not None
+    assert fact["value"] == "v0.24.1"
+    assert "qwen-code" in fact["url"]
+
