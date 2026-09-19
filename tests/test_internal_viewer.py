@@ -5,7 +5,9 @@ from openpyxl import Workbook
 
 from app.internal_viewer import (
     classify_resource,
+    pdf_text_fallback,
     render_docx_html,
+    resource_identity,
     resource_title,
     spreadsheet_preview,
 )
@@ -80,3 +82,42 @@ def test_spreadsheet_preview_is_bounded(tmp_path):
     assert len(preview[0]["rows"]) == 3
     assert len(preview[0]["rows"][0]) == 2
     assert preview[0]["truncated"] is True
+
+
+def test_resource_identity_normalizes_files_and_preserves_web_urls():
+    url = "https://example.com/path?q=1"
+    assert resource_identity(url) == url
+    assert resource_identity(Path("report.pdf")) == str(Path("report.pdf").resolve())
+
+
+def test_spreadsheet_preview_reads_csv_cells(tmp_path):
+    path = tmp_path / "data.csv"
+    path.write_text("Name,Value\nBTC,100\nETH,200\n", encoding="utf-8")
+
+    preview = spreadsheet_preview(path)
+
+    assert preview[0]["name"] == "data"
+    assert preview[0]["rows"][0] == ["Name", "Value"]
+    assert preview[0]["rows"][1] == ["BTC", "100"]
+    assert preview[0]["rows"][2] == ["ETH", "200"]
+
+
+def test_pdf_text_fallback_extracts_text_and_marks_truncation(monkeypatch):
+    class Page:
+        def __init__(self, text):
+            self.text = text
+
+        def extract_text(self):
+            return self.text
+
+    class Reader:
+        pages = [Page("First page"), Page("Second page")]
+
+    monkeypatch.setattr("app.internal_viewer.PdfReader", lambda _path: Reader())
+
+    rendered = pdf_text_fallback("ignored.pdf", max_pages=1)
+
+    assert "--- PAGE 1 ---" in rendered
+    assert "First page" in rendered
+    assert "Second page" not in rendered
+    assert "[PDF preview truncated]" in rendered
