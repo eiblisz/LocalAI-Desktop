@@ -669,3 +669,52 @@ def test_compound_web_to_artifact_workflow_stays_one_action_unit():
     assert len(planned) == 1
     assert planned[0].prompt.startswith("Mi a legújabb Ollama")
 
+
+def test_live_market_price_questions_route_to_web():
+    from app.web_intent import (
+        ACTION_WEB_RESEARCH,
+        is_freshness_sensitive_request,
+        plan_user_action,
+    )
+
+    prompts = [
+        "Mennyi most a bitcoin árfolyama?",
+        "Mennyi most az ETH arfolyama?",
+        "Mi a Tesla részvény piaci ára most?",
+        "What is the current BTC market price?",
+        "What is the EUR USD exchange rate?",
+        "Wie hoch ist der Bitcoin Kurs aktuell?",
+    ]
+
+    for prompt in prompts:
+        assert is_freshness_sensitive_request(prompt)
+        assert plan_user_action(prompt).has(ACTION_WEB_RESEARCH)
+
+
+def test_market_price_routing_does_not_capture_stable_explanations():
+    from app.web_intent import (
+        ACTION_WEB_RESEARCH,
+        plan_user_action,
+    )
+
+    stable_prompts = [
+        "Mi az a bitcoin?",
+        "Magyarázd el, mi az az árfolyam.",
+        "Mi a különbség a spot és futures piac között?",
+    ]
+
+    for prompt in stable_prompts:
+        assert not plan_user_action(prompt).has(ACTION_WEB_RESEARCH)
+
+
+def test_realtime_access_refusal_triggers_grounded_web_fallback():
+    from app.web_intent import answer_requires_web_fallback
+
+    assert answer_requires_web_fallback(
+        "Mennyi most a bitcoin árfolyama?",
+        (
+            "Ha konkrét árat szeretnél, kérlek nézd meg közvetlenül, "
+            "mivel én nem tudok valós időben hozzáférni a kriptovaluta piaci adatokhoz."
+        ),
+    )
+
