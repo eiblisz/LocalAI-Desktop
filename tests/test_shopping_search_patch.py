@@ -1,5 +1,5 @@
 from app import web_search_tool
-from app.shopping_search_patch import _is_generic_shopping_url
+from app.web_research_pipeline import is_generic_shopping_url
 
 
 QUERY = (
@@ -25,20 +25,20 @@ def test_memory_kit_provider_query_adds_total_capacity_and_purchase_intent():
 
 
 def test_generic_shopping_urls_are_detected_without_rejecting_product_pages():
-    assert _is_generic_shopping_url(
+    assert is_generic_shopping_url(
         "https://www.ebay.de/sch/i.html?_nkw=2x32gb+ddr4"
     )
-    assert _is_generic_shopping_url(
+    assert is_generic_shopping_url(
         "https://www.amazon.de/s?k=2x32gb+ddr4"
     )
-    assert _is_generic_shopping_url(
+    assert is_generic_shopping_url(
         "https://shop.example.de/search?query=2x32gb"
     )
 
-    assert not _is_generic_shopping_url(
+    assert not is_generic_shopping_url(
         "https://www.ebay.de/itm/123456789"
     )
-    assert not _is_generic_shopping_url(
+    assert not is_generic_shopping_url(
         "https://shop.example.de/products/kingston-fury-64gb"
     )
 
