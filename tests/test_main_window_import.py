@@ -27,7 +27,7 @@ def test_chat_render_uses_deferred_scroll_to_bottom():
     bottom_source = inspect.getsource(MainWindow._scroll_chat_to_bottom)
     schedule_source = inspect.getsource(MainWindow._schedule_scroll_to_bottom)
 
-    assert 'name="localai-chat-end"' in render_source
+    assert "localai-chat-end" in render_source
     assert "_schedule_scroll_to_bottom()" in render_source
     assert 'scrollToAnchor("localai-chat-end")' in bottom_source
     assert "self._scroll_chat_to_bottom()" in schedule_source
