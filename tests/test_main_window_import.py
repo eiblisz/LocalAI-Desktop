@@ -1034,3 +1034,17 @@ def test_manual_run_now_forces_claim_but_automatic_due_run_does_not():
 
     assert "force=True" in open_source
     assert "_run_scheduled_task(task_id, force=False)" in check_source
+
+
+def test_desktop_poll_surfaces_background_scheduler_results():
+    from app.main_window import MainWindow
+
+    check_source = inspect.getsource(MainWindow._check_scheduled_tasks)
+    health_source = inspect.getsource(MainWindow._schedule_health_state)
+    labels_source = inspect.getsource(MainWindow._refresh_schedule_task_labels)
+
+    assert "self._refresh_schedule_indicator()" in check_source
+    assert "self.scheduler_dialog._refresh_list()" in check_source
+    assert "self._load_chat_list()" in check_source
+    assert "self.scheduler_store.is_leased(task)" in health_source
+    assert "self.scheduler_store.is_leased(task)" in labels_source
