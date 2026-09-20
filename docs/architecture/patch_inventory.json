@@ -1,0 +1,152 @@
+{
+  "schema_version": 1,
+  "policy": "NO_NEW_PATCH_MODULES",
+  "baseline_main_sha": "5be80a2fd60f994df78a86f5199a8275ab9d571a",
+  "authority_note": "This inventory documents the existing import-time patch composition. It is a migration ledger, not permission to add new patch modules.",
+  "install_order": [
+    {
+      "order": 1,
+      "module": "app/shopping_search_patch.py",
+      "installer": "install_shopping_search_patch",
+      "target_module": "app.web_search_tool",
+      "mutations": [
+        {
+          "symbol": "build_provider_query",
+          "operation": "wrap"
+        },
+        {
+          "symbol": "_filter_relevant_results",
+          "operation": "wrap"
+        }
+      ],
+      "migration_target": "WebResearchPipeline",
+      "purpose": "Shopping query construction and constrained result filtering."
+    },
+    {
+      "order": 2,
+      "module": "app/price_evidence_patch.py",
+      "installer": "install_price_evidence_patch",
+      "target_module": "app.evidence_verifier",
+      "mutations": [
+        {
+          "symbol": "build_evidence_ledger",
+          "operation": "wrap"
+        }
+      ],
+      "migration_target": "WebResearchPipeline/EvidencePolicy",
+      "purpose": "Authoritative price evidence extraction for constrained shopping evidence."
+    },
+    {
+      "order": 3,
+      "module": "app/answer_verifier_patch.py",
+      "installer": "install_answer_price_equivalence_patch",
+      "target_module": "app.evidence_verifier",
+      "mutations": [
+        {
+          "symbol": "verify_answer_against_evidence",
+          "operation": "wrap"
+        }
+      ],
+      "migration_target": "WebResearchPipeline/EvidencePolicy",
+      "purpose": "Verified-price equivalence and ordinary whole-unit rounding acceptance."
+    },
+    {
+      "order": 4,
+      "module": "app/verified_fallback_patch.py",
+      "installer": "install_verified_fallback_patch",
+      "target_module": "app.workers",
+      "mutations": [
+        {
+          "symbol": "filter_verified_results",
+          "operation": "wrap"
+        },
+        {
+          "symbol": "ChatWebWorker._safe_evidence_failure",
+          "operation": "wrap"
+        }
+      ],
+      "migration_target": "WebResearchPipeline",
+      "purpose": "Preserve verified ledgers and produce deterministic host-verified fallback output."
+    },
+    {
+      "order": 5,
+      "module": "app/bilingual_search_patch.py",
+      "installer": "install_bilingual_search_patch",
+      "target_module": "app.workers.ChatWebWorker",
+      "mutations": [
+        {
+          "symbol": "_generate_bilingual_market_queries",
+          "operation": "add"
+        },
+        {
+          "symbol": "_generate_search_queries",
+          "operation": "wrap"
+        }
+      ],
+      "migration_target": "WebResearchPipeline",
+      "purpose": "Hungarian/German bilingual shopping search planning."
+    },
+    {
+      "order": 6,
+      "module": "app/vram_release_patch.py",
+      "installer": "install_vram_release_patch",
+      "target_module": "app.main_window.MainWindow",
+      "mutations": [
+        {
+          "symbol": "_release_vram",
+          "operation": "add"
+        },
+        {
+          "symbol": "_load_models",
+          "operation": "wrap"
+        }
+      ],
+      "migration_target": "VramController",
+      "purpose": "VRAM release action and FREE VRAM control installation."
+    },
+    {
+      "order": 7,
+      "module": "app/sidebar_navigation_patch.py",
+      "installer": "install_sidebar_navigation_patch",
+      "target_module": "app.main_window.MainWindow",
+      "mutations": [
+        {
+          "symbol": "_build_sidebar",
+          "operation": "replace"
+        },
+        {
+          "symbol": "_load_chat_list",
+          "operation": "replace"
+        },
+        {
+          "symbol": "_refresh_schedule_task_labels",
+          "operation": "replace"
+        }
+      ],
+      "migration_target": "SidebarController",
+      "purpose": "Sidebar navigation, schedule/history separation and chat-list presentation."
+    },
+    {
+      "order": 8,
+      "module": "app/image_studio_patch.py",
+      "installer": "install_image_studio_patch",
+      "target_module": "app.main_window.MainWindow",
+      "mutations": [
+        {
+          "symbol": "_open_image_studio",
+          "operation": "add"
+        },
+        {
+          "symbol": "_poll_comfyui_ready",
+          "operation": "add"
+        },
+        {
+          "symbol": "_build_tools_panel",
+          "operation": "wrap"
+        }
+      ],
+      "migration_target": "ImageStudioController",
+      "purpose": "ComfyUI/Image Studio launch, readiness polling and tool-button injection."
+    }
+  ]
+}
