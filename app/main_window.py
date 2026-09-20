@@ -1873,9 +1873,9 @@ class MainWindow(QMainWindow):
         ):
             return
 
-        due = self.scheduler_store.due_tasks()
-        if due:
-            self._run_scheduled_task(due[0]["id"])
+        task_id = self.scheduler_runtime.next_due_task_id()
+        if task_id:
+            self._run_scheduled_task(task_id)
 
     def _run_scheduled_task(self, task_id):
         if (
@@ -1898,7 +1898,7 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            task = self.scheduler_store.get(task_id)
+            task = self.scheduler_runtime.get_task(task_id)
         except KeyError:
             return
 
@@ -1926,41 +1926,19 @@ class MainWindow(QMainWindow):
         self.scheduled_thread.start()
 
     def _scheduled_task_chat(self, task):
-        chat_id = task.get("chat_id", "")
-        if chat_id:
-            try:
-                return self.store.load(chat_id)
-            except Exception:
-                pass
-
-        chat = self.store.new_chat(task.get("model", ""))
-        chat["title"] = f'[SCHEDULE] {task.get("name", "Scheduled task")}'[:80]
-        chat["model"] = task.get("model", "")
-        self.store.save(chat)
-        return chat
+        return self.scheduler_runtime.ensure_schedule_chat(task)
 
     def _scheduled_task_finished(self, task_id, content):
         try:
-            task = self.scheduler_store.get(task_id)
+            completion = self.scheduler_runtime.complete(
+                task_id,
+                content,
+            )
         except KeyError:
             return
 
-        chat = self._scheduled_task_chat(task)
-        stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-        chat["messages"].append({
-            "role": "assistant",
-            "content": (
-                f"## Scheduled run - {stamp}\n\n"
-                f"**Task:** {task.get('name', 'Scheduled task')}\n\n"
-                f"{content}"
-            ),
-        })
-        self.store.save(chat)
-        self.scheduler_store.mark_result(
-            task_id,
-            status="success",
-            chat_id=chat["id"],
-        )
+        task = completion.task
+        chat = completion.chat
 
         current_id = str((self.current_chat or {}).get("id", ""))
         scheduled_chat_id = str(chat.get("id", ""))
@@ -1984,11 +1962,7 @@ class MainWindow(QMainWindow):
 
     def _scheduled_task_failed(self, task_id, message):
         try:
-            task = self.scheduler_store.mark_result(
-                task_id,
-                status="failed",
-                error=message,
-            )
+            task = self.scheduler_runtime.fail(task_id, message)
             name = task.get("name", "task")
         except Exception:
             name = "task"
