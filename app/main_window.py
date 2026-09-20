@@ -1557,7 +1557,7 @@ class MainWindow(QMainWindow):
                 "</div>"
             )
 
-        html_parts.append("</div>")
+        html_parts.append("<a name=\"localai-chat-end\"></a></div>")
         self.chat_view.setHtml("".join(html_parts))
         if keep_bottom:
             if streaming:
@@ -1566,8 +1566,12 @@ class MainWindow(QMainWindow):
                 self._schedule_scroll_to_bottom()
 
     def _scroll_chat_to_bottom(self):
+        # A named end anchor is more stable than scrollbar maximum alone while
+        # QTextBrowser is still relaying out rich Markdown/HTML.
+        self.chat_view.scrollToAnchor("localai-chat-end")
         scrollbar = self.chat_view.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
+
 
     def _chat_is_near_bottom(self, threshold=90):
         scrollbar = self.chat_view.verticalScrollBar()
@@ -1577,12 +1581,19 @@ class MainWindow(QMainWindow):
         if self.partial_assistant:
             self._render_chat(include_partial=True, streaming=True)
 
+    def _restore_chat_input_focus(self):
+        if hasattr(self, "input"):
+            self.input.setFocus()
+
     def _schedule_scroll_to_bottom(self):
-        # QTextBrowser lays out rich HTML after setHtml returns. A delayed
-        # second scroll makes chat switches and streamed replies reliably
-        # land on the newest message instead of around the middle.
-        QTimer.singleShot(0, self._scroll_chat_to_bottom)
-        QTimer.singleShot(60, self._scroll_chat_to_bottom)
+        # QTextBrowser can relayout several times after setHtml(), especially
+        # for long wrapped lines, lists and links. Reassert the bottom position
+        # through that short layout window, then return keyboard focus to input.
+        self._scroll_chat_to_bottom()
+        for delay in (0, 60, 180, 320):
+            QTimer.singleShot(delay, self._scroll_chat_to_bottom)
+        QTimer.singleShot(340, self._restore_chat_input_focus)
+
 
     def _refresh_resources(self):
         try:
