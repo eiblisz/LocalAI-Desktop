@@ -4,6 +4,12 @@ import unicodedata
 
 from PySide6.QtCore import QObject, Signal, Slot
 
+from .artifact_service import ArtifactPlanItem, create_artifact
+from .document_tools import (
+    build_document_messages,
+    build_excel_messages,
+    build_summary_messages,
+)
 from .computer_status_tool import (
     computer_status_context_text,
     get_computer_status,
@@ -1377,6 +1383,112 @@ class AdaptiveChatWorker(QObject):
             if final:
                 self.token.emit(final)
             self.finished.emit()
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+    def stop(self):
+        self._stop_event.set()
+
+
+class ArtifactActionWorker(QObject):
+    finished = Signal(object)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        client: OllamaClient,
+        model: str,
+        messages: list[dict],
+        user_prompt: str,
+        artifact_plans,
+        *,
+        use_web=False,
+    ):
+        super().__init__()
+        self.client = client
+        self.model = model
+        self.messages = [dict(message) for message in messages]
+        self.user_prompt = str(user_prompt or "").strip()
+        self.artifact_plans = tuple(artifact_plans or ())
+        self.use_web = bool(use_web)
+        self._stop_event = threading.Event()
+
+    def _artifact_messages(self, plan, source_context=""):
+        if not isinstance(plan, ArtifactPlanItem):
+            raise TypeError(
+                "artifact_plans must contain ArtifactPlanItem values"
+            )
+
+        prompt = str(plan.prompt or self.user_prompt).strip()
+        if source_context:
+            prompt = (
+                prompt
+                + "\n\nVERIFIED WEB RESEARCH SOURCE:\n"
+                + source_context
+            )
+
+        fmt = plan.request.format
+        if fmt == "xlsx":
+            return build_excel_messages(prompt)
+        if fmt == "summary":
+            return build_summary_messages(prompt)
+        return build_document_messages(prompt)
+
+    @Slot()
+    def run(self):
+        try:
+            if not self.artifact_plans:
+                raise RuntimeError("Artifact action contains no artifact plan.")
+
+            source_context = ""
+            if self.use_web:
+                source_context = run_chat_web_request(
+                    self.client,
+                    self.model,
+                    self.messages,
+                    self.user_prompt,
+                ).strip()
+
+            results = []
+            for plan in self.artifact_plans:
+                if self._stop_event.is_set():
+                    break
+
+                content = self.client.chat_once(
+                    model=self.model,
+                    messages=self._artifact_messages(
+                        plan,
+                        source_context=source_context,
+                    ),
+                ).strip()
+                if not content:
+                    raise RuntimeError(
+                        "The model returned empty artifact content."
+                    )
+
+                path = create_artifact(
+                    plan.request.format,
+                    content=content,
+                    title=self.user_prompt[:96] or "Local AI Document",
+                    preset=plan.request.preset,
+                    source_text=(
+                        self.user_prompt
+                        + (
+                            "\n\nVERIFIED WEB RESEARCH SOURCE:\n"
+                            + source_context
+                            if source_context
+                            else ""
+                        )
+                    ),
+                    model_name=self.model,
+                )
+                results.append({
+                    "path": str(path),
+                    "format": plan.request.format,
+                    "preset": plan.request.preset,
+                })
+
+            self.finished.emit(results)
         except Exception as exc:
             self.failed.emit(str(exc))
 
