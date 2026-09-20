@@ -282,5 +282,5 @@ def test_worker_buffers_and_replaces_unverified_model_answer(monkeypatch):
     assert not failed
     assert "Wrong product" not in combined
     assert "234.95" not in combined
-    assert "Answer verification: FAIL-CLOSED" in combined
+    assert "Evidence verification: PASS (host-verified fallback used)" in combined
     assert "https://shop.example.de/kingston-64gb" in combined

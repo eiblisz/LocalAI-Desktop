@@ -1,15 +1,17 @@
-"""Presentation-only sidebar separation for schedules and normal chats.
-
-This patch deliberately leaves scheduler execution/storage and chat persistence unchanged.
-"""
-
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QLabel, QListWidget, QListWidgetItem, QPushButton, QVBoxLayout, QFrame
+from PySide6.QtWidgets import (
+    QFrame,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QPushButton,
+    QVBoxLayout,
+)
 
 from .ui_theme import COLORS, schedule_status_color
 
 
-def _scheduled_chat_ids(window):
+def scheduled_chat_ids(window):
     ids = set()
     try:
         tasks = window.scheduler_store.list_tasks()
@@ -22,14 +24,14 @@ def _scheduled_chat_ids(window):
     return ids
 
 
-def _is_schedule_chat(window, chat):
+def is_schedule_chat(window, chat):
     chat_id = str(chat.get("id", "") or "")
     title = str(chat.get("title", "") or "")
-    return chat_id in _scheduled_chat_ids(window) or title.startswith("[SCHEDULE]")
+    return chat_id in scheduled_chat_ids(window) or title.startswith("[SCHEDULE]")
 
 
-def _open_schedule_history(window, task_id):
-    """Open an existing schedule history without creating or mutating data."""
+def open_schedule_history(window, task_id):
+    """Open existing schedule history without creating or mutating data."""
     try:
         task = window.scheduler_store.get(task_id)
     except Exception:
@@ -49,12 +51,14 @@ def _open_schedule_history(window, task_id):
     window._load_chat_list()
 
 
-def install_sidebar_navigation_patch(main_window_module):
-    MainWindow = main_window_module.MainWindow
-    if getattr(MainWindow, "_sidebar_navigation_patch_installed", False):
-        return
+class SidebarController:
+    """Canonical sidebar presentation controller."""
 
-    def _build_sidebar(self):
+    def __init__(self, window):
+        self.window = window
+
+    def build_sidebar(self):
+        window = self.window
         frame = QFrame()
         frame.setObjectName("sidebar")
         layout = QVBoxLayout(frame)
@@ -64,16 +68,16 @@ def install_sidebar_navigation_patch(main_window_module):
         new_chat = QPushButton("+  NEW CHAT")
         new_chat.setObjectName("sideMenuButton")
         new_chat.setFixedHeight(34)
-        new_chat.clicked.connect(self._new_chat)
+        new_chat.clicked.connect(window._new_chat)
         layout.addWidget(new_chat)
 
-        self.schedule_button = QPushButton("SCHEDULE")
-        self.schedule_button.setObjectName("sideMenuButton")
-        self.schedule_button.setFixedHeight(34)
-        self.schedule_button.clicked.connect(self._open_scheduler)
-        layout.addWidget(self.schedule_button)
+        window.schedule_button = QPushButton("SCHEDULE")
+        window.schedule_button.setObjectName("sideMenuButton")
+        window.schedule_button.setFixedHeight(34)
+        window.schedule_button.clicked.connect(window._open_scheduler)
+        layout.addWidget(window.schedule_button)
 
-        self.sidebar_navigation_buttons = {}
+        window.sidebar_navigation_buttons = {}
         for text in ["PROJECTS", "BROWSER", "MEMORY", "EXTENSIONS", "SETTINGS"]:
             button = QPushButton(text)
             button.setObjectName("sideMenuButton")
@@ -83,23 +87,23 @@ def install_sidebar_navigation_patch(main_window_module):
                 button.setToolTip(
                     "Open the TradingView market workspace inside LocalAI Desktop."
                 )
-                button.clicked.connect(self._open_market_browser)
+                button.clicked.connect(window._open_market_browser)
             elif text == "MEMORY":
                 button.setEnabled(True)
                 button.setToolTip(
                     "Review, revise, pin, archive and delete persistent memories."
                 )
-                button.clicked.connect(self._open_memory)
+                button.clicked.connect(window._open_memory)
             elif text == "EXTENSIONS":
                 button.setEnabled(True)
                 button.setToolTip(
                     "Manage saved extension endpoints, capabilities and connection state."
                 )
-                button.clicked.connect(self._open_extensions)
+                button.clicked.connect(window._open_extensions)
             else:
                 button.setEnabled(False)
                 button.setToolTip(f"{text.title()} view is not implemented yet.")
-            self.sidebar_navigation_buttons[text] = button
+            window.sidebar_navigation_buttons[text] = button
             layout.addWidget(button)
 
         layout.addSpacing(8)
@@ -107,26 +111,28 @@ def install_sidebar_navigation_patch(main_window_module):
         schedules_label.setObjectName("muted")
         layout.addWidget(schedules_label)
 
-        self.schedule_task_status_layout = QVBoxLayout()
-        self.schedule_task_status_layout.setContentsMargins(6, 0, 4, 0)
-        self.schedule_task_status_layout.setSpacing(1)
-        layout.addLayout(self.schedule_task_status_layout)
+        window.schedule_task_status_layout = QVBoxLayout()
+        window.schedule_task_status_layout.setContentsMargins(6, 0, 4, 0)
+        window.schedule_task_status_layout.setSpacing(1)
+        layout.addLayout(window.schedule_task_status_layout)
 
         layout.addSpacing(10)
         chats_label = QLabel("CHATS")
         chats_label.setObjectName("muted")
         layout.addWidget(chats_label)
 
-        self.chat_list = QListWidget()
-        self.chat_list.setObjectName("sideChatList")
-        self.chat_list.setHorizontalScrollBarPolicy(
+        window.chat_list = QListWidget()
+        window.chat_list.setObjectName("sideChatList")
+        window.chat_list.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
-        self.chat_list.itemClicked.connect(self._chat_selected)
-        self.chat_list.itemDoubleClicked.connect(self._rename_chat_item)
-        self.chat_list.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.chat_list.customContextMenuRequested.connect(self._chat_context_menu)
-        layout.addWidget(self.chat_list, 1)
+        window.chat_list.itemClicked.connect(window._chat_selected)
+        window.chat_list.itemDoubleClicked.connect(window._rename_chat_item)
+        window.chat_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        window.chat_list.customContextMenuRequested.connect(
+            window._chat_context_menu
+        )
+        layout.addWidget(window.chat_list, 1)
 
         note = QLabel("Right-click a chat to rename, pin or close it.")
         note.setWordWrap(True)
@@ -134,16 +140,18 @@ def install_sidebar_navigation_patch(main_window_module):
         layout.addWidget(note)
         return frame
 
-    def _load_chat_list(self):
-        selected_id = self.current_chat.get("id") if self.current_chat else None
-        all_chats = self.store.list_chats(include_closed=True)
+    def load_chat_list(self):
+        window = self.window
+        selected_id = window.current_chat.get("id") if window.current_chat else None
+        all_chats = window.store.list_chats(include_closed=True)
         chats = [
             chat
             for chat in all_chats
-            if not bool(chat.get("closed", False)) and not _is_schedule_chat(self, chat)
+            if not bool(chat.get("closed", False))
+            and not is_schedule_chat(window, chat)
         ]
 
-        self.chat_list.clear()
+        window.chat_list.clear()
         selected_row = -1
         for row, chat in enumerate(chats):
             title = chat.get("title", "New chat")
@@ -152,31 +160,34 @@ def install_sidebar_navigation_patch(main_window_module):
             item = QListWidgetItem(title)
             item.setData(Qt.UserRole, chat["id"])
             item.setToolTip("Right-click for chat actions")
-            self.chat_list.addItem(item)
+            window.chat_list.addItem(item)
             if chat["id"] == selected_id:
                 selected_row = row
 
         if selected_row >= 0:
-            self.chat_list.setCurrentRow(selected_row)
+            window.chat_list.setCurrentRow(selected_row)
 
-    def _refresh_schedule_task_labels(self):
-        if not hasattr(self, "schedule_task_status_layout"):
+    def refresh_schedule_task_labels(self):
+        window = self.window
+        if not hasattr(window, "schedule_task_status_layout"):
             return
 
-        self._clear_schedule_task_labels()
-        tasks = self.scheduler_store.list_tasks()
+        window._clear_schedule_task_labels()
+        tasks = window.scheduler_store.list_tasks()
         running_id = ""
-        if self.scheduled_worker is not None:
-            running_id = str(getattr(self.scheduled_worker, "task", {}).get("id", ""))
+        if window.scheduled_worker is not None:
+            running_id = str(
+                getattr(window.scheduled_worker, "task", {}).get("id", "")
+            )
 
         for task in tasks:
             enabled = bool(task.get("enabled", True))
             failed = task.get("last_status") == "failed"
             running = (
                 task.get("id") == running_id
-                or self.scheduler_store.is_leased(task)
+                or window.scheduler_store.is_leased(task)
             )
-            pulse = self.schedule_pulse_on
+            pulse = window.schedule_pulse_on
 
             if failed and enabled:
                 dot = "●"
@@ -217,13 +228,8 @@ def install_sidebar_navigation_patch(main_window_module):
                 )
             )
             button.clicked.connect(
-                lambda _checked=False, selected_task_id=task_id: _open_schedule_history(
-                    self, selected_task_id
+                lambda _checked=False, selected_task_id=task_id: open_schedule_history(
+                    window, selected_task_id
                 )
             )
-            self.schedule_task_status_layout.addWidget(button)
-
-    MainWindow._build_sidebar = _build_sidebar
-    MainWindow._load_chat_list = _load_chat_list
-    MainWindow._refresh_schedule_task_labels = _refresh_schedule_task_labels
-    MainWindow._sidebar_navigation_patch_installed = True
+            window.schedule_task_status_layout.addWidget(button)

@@ -12,6 +12,10 @@ import requests
 from bs4 import BeautifulSoup
 
 from .browser_web_tool import browser_read_pages, browser_search
+from .web_research_pipeline import (
+    filter_relevant_results as pipeline_filter_relevant_results,
+    specialize_provider_query,
+)
 
 BRAVE_WEB_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
 BING_WEB_RSS_URL = "https://www.bing.com/search"
@@ -668,7 +672,7 @@ def _format_exact_kit(value):
     return f"{match.group(1)}x{match.group(2)}{match.group(3).upper()}"
 
 
-def build_provider_query(plan):
+def _build_provider_query_base(plan):
     original = " ".join(str(plan.get("query") or "").split())
     hard_values = [
         plan.get("exact_kit"),
@@ -714,6 +718,17 @@ def build_provider_query(plan):
 
     canonical = " ".join(str(value).strip() for value in parts if str(value).strip())
     return canonical[:260] or original
+
+
+def build_provider_query(plan):
+    base = _build_provider_query_base(plan)
+    return specialize_provider_query(
+        plan,
+        base,
+        query_terms=_query_terms,
+        normalized_spec_text=_normalized_spec_text,
+        format_exact_kit=_format_exact_kit,
+    )
 
 
 def _hard_query_specs(query):
@@ -854,7 +869,7 @@ def _validate_result_against_plan(plan, item, require_verified=True):
     return (not reasons), reasons
 
 
-def _filter_relevant_results(
+def _filter_relevant_results_base(
     query,
     results,
     *,
@@ -942,6 +957,25 @@ _SEMVER_RE = re.compile(
     r"(?:[-+][0-9A-Za-z.-]+)?(?![A-Za-z0-9])",
     flags=re.IGNORECASE,
 )
+
+
+def _filter_relevant_results(
+    query,
+    results,
+    *,
+    plan=None,
+    require_verified=True,
+):
+    effective_plan = plan or build_search_plan(query)
+    return pipeline_filter_relevant_results(
+        query,
+        results,
+        plan=effective_plan,
+        require_verified=require_verified,
+        base_filter=_filter_relevant_results_base,
+        query_terms=_query_terms,
+        validate_result_against_plan=_validate_result_against_plan,
+    )
 
 
 def _fold_authority_text(value):

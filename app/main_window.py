@@ -72,6 +72,7 @@ from .internal_viewer import (
     resource_identity,
     resource_title,
 )
+from .image_studio_controller import ImageStudioController
 from .language_policy import response_language_instruction
 from .memory_answers import direct_user_memory_answer
 from .memory_dialog import MemoryDialog
@@ -80,11 +81,13 @@ from .memory_store import MemoryStore
 from .ollama_client import OllamaClient
 from .resource_monitor import format_resource_summary, get_system_metrics
 from .scheduler_dialog import SchedulerDialog
+from .sidebar_controller import SidebarController
 from .scheduler_runtime import SchedulerRuntime
 from .scheduler_store import ScheduledTaskStore
 from .secret_store import SecretStore
 from .storage import ChatStore
 from .ui_theme import MAIN_STYLESHEET, SIDE_MENU_BUTTON_STYLE
+from .vram_controller import VramController
 from .web_intent import looks_like_web_request
 from .workers import (
     AdaptiveChatWorker,
@@ -189,6 +192,9 @@ class MainWindow(QMainWindow):
         self.pending_scheduled_force = False
         self.schedule_indicator_state = "idle"
         self.schedule_pulse_on = False
+        self.vram_controller = VramController(self)
+        self.sidebar_controller = SidebarController(self)
+        self.image_studio_controller = ImageStudioController(self)
 
         self.setStyleSheet(STYLE)
         self._build_ui()
@@ -296,48 +302,8 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
     def _build_sidebar(self):
-        frame = QFrame()
-        frame.setObjectName("sidebar")
-        layout = QVBoxLayout(frame)
-        layout.setContentsMargins(14, 16, 14, 16)
+        return self.sidebar_controller.build_sidebar()
 
-        new_chat = QPushButton("+  NEW CHAT")
-        new_chat.clicked.connect(self._new_chat)
-        layout.addWidget(new_chat)
-
-        self.schedule_button = QPushButton("SCHEDULE")
-        self.schedule_button.setObjectName("toolButton")
-        self.schedule_button.clicked.connect(self._open_scheduler)
-        layout.addWidget(self.schedule_button)
-
-        self.schedule_task_status_layout = QVBoxLayout()
-        self.schedule_task_status_layout.setContentsMargins(6, 0, 4, 0)
-        self.schedule_task_status_layout.setSpacing(1)
-        layout.addLayout(self.schedule_task_status_layout)
-
-        layout.addSpacing(8)
-
-        label = QLabel("Conversations")
-        label.setObjectName("muted")
-        layout.addWidget(label)
-
-        self.chat_list = QListWidget()
-        self.chat_list.itemClicked.connect(self._chat_selected)
-        self.chat_list.itemDoubleClicked.connect(self._rename_chat_item)
-        self.chat_list.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.chat_list.customContextMenuRequested.connect(self._chat_context_menu)
-        layout.addWidget(self.chat_list, 1)
-
-        self.closed_button = QPushButton("CLOSED CHATS")
-        self.closed_button.setObjectName("subtleButton")
-        self.closed_button.clicked.connect(self._toggle_closed_chats)
-        layout.addWidget(self.closed_button)
-
-        note = QLabel("Right-click a chat to rename, pin or close it.")
-        note.setWordWrap(True)
-        note.setObjectName("muted")
-        layout.addWidget(note)
-        return frame
 
     def _build_workspace_panel(self):
         self.workspace_tabs = QTabWidget()
@@ -533,6 +499,8 @@ class MainWindow(QMainWindow):
             self.tool_buttons[text] = button
             layout.addWidget(button)
 
+        self.image_studio_controller.install_tool_button(layout)
+
         layout.addSpacing(10)
         self.tool_options_label = QLabel("PDF OPTIONS")
         self.tool_options_label.setObjectName("muted")
@@ -606,6 +574,13 @@ class MainWindow(QMainWindow):
         self._select_tool("PDF")
         return frame
 
+    def _open_image_studio(self):
+        return self.image_studio_controller.open()
+
+    def _poll_comfyui_ready(self, remaining=90):
+        return self.image_studio_controller.poll_ready(remaining)
+
+
     def _refresh_local_model_hub(self):
         previous = self.model_combo.currentText().strip()
         saved = ""
@@ -655,6 +630,11 @@ class MainWindow(QMainWindow):
 
     def _load_models(self):
         self._refresh_local_model_hub()
+        self.vram_controller.ensure_button()
+
+    def _release_vram(self):
+        return self.vram_controller.release()
+
 
     def _default_local_model(self):
         index = self.model_combo.findText(PREFERRED_LOCAL_MODEL)
@@ -663,35 +643,8 @@ class MainWindow(QMainWindow):
         return self.model_combo.currentText().strip()
 
     def _load_chat_list(self):
-        selected_id = self.current_chat.get("id") if self.current_chat else None
-        all_chats = self.store.list_chats(include_closed=True)
-        closed_count = sum(1 for chat in all_chats if chat.get("closed", False))
+        return self.sidebar_controller.load_chat_list()
 
-        self.closed_button.setText(
-            "BACK TO CHATS" if self.show_closed else f"CLOSED CHATS ({closed_count})"
-        )
-
-        chats = [
-            chat
-            for chat in all_chats
-            if bool(chat.get("closed", False)) == self.show_closed
-        ]
-
-        self.chat_list.clear()
-        selected_row = -1
-        for row, chat in enumerate(chats):
-            title = chat.get("title", "New chat")
-            if chat.get("pinned", False):
-                title = f"[PIN] {title}"
-            item = QListWidgetItem(title)
-            item.setData(Qt.UserRole, chat["id"])
-            item.setToolTip("Right-click for chat actions")
-            self.chat_list.addItem(item)
-            if chat["id"] == selected_id:
-                selected_row = row
-
-        if selected_row >= 0:
-            self.chat_list.setCurrentRow(selected_row)
 
     def _ensure_chat(self):
         chats = self.store.list_chats()
@@ -1604,7 +1557,7 @@ class MainWindow(QMainWindow):
                 "</div>"
             )
 
-        html_parts.append("</div>")
+        html_parts.append("<a name=\"localai-chat-end\"></a></div>")
         self.chat_view.setHtml("".join(html_parts))
         if keep_bottom:
             if streaming:
@@ -1613,8 +1566,12 @@ class MainWindow(QMainWindow):
                 self._schedule_scroll_to_bottom()
 
     def _scroll_chat_to_bottom(self):
+        # A named end anchor is more stable than scrollbar maximum alone while
+        # QTextBrowser is still relaying out rich Markdown/HTML.
+        self.chat_view.scrollToAnchor("localai-chat-end")
         scrollbar = self.chat_view.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
+
 
     def _chat_is_near_bottom(self, threshold=90):
         scrollbar = self.chat_view.verticalScrollBar()
@@ -1624,12 +1581,19 @@ class MainWindow(QMainWindow):
         if self.partial_assistant:
             self._render_chat(include_partial=True, streaming=True)
 
+    def _restore_chat_input_focus(self):
+        if hasattr(self, "input"):
+            self.input.setFocus()
+
     def _schedule_scroll_to_bottom(self):
-        # QTextBrowser lays out rich HTML after setHtml returns. A delayed
-        # second scroll makes chat switches and streamed replies reliably
-        # land on the newest message instead of around the middle.
-        QTimer.singleShot(0, self._scroll_chat_to_bottom)
-        QTimer.singleShot(60, self._scroll_chat_to_bottom)
+        # QTextBrowser can relayout several times after setHtml(), especially
+        # for long wrapped lines, lists and links. Reassert the bottom position
+        # through that short layout window, then return keyboard focus to input.
+        self._scroll_chat_to_bottom()
+        for delay in (0, 60, 180, 320):
+            QTimer.singleShot(delay, self._scroll_chat_to_bottom)
+        QTimer.singleShot(340, self._restore_chat_input_focus)
+
 
     def _refresh_resources(self):
         try:
@@ -1882,56 +1846,7 @@ class MainWindow(QMainWindow):
                 widget.deleteLater()
 
     def _refresh_schedule_task_labels(self):
-        if not hasattr(self, "schedule_task_status_layout"):
-            return
-
-        self._clear_schedule_task_labels()
-        tasks = self.scheduler_store.list_tasks()
-        running_id = ""
-        if self.scheduled_worker is not None:
-            running_id = str(
-                getattr(self.scheduled_worker, "task", {}).get("id", "")
-            )
-
-        for task in tasks:
-            enabled = bool(task.get("enabled", True))
-            failed = task.get("last_status") == "failed"
-            running = (
-                task.get("id") == running_id
-                or self.scheduler_store.is_leased(task)
-            )
-            pulse = self.schedule_pulse_on
-
-            if failed and enabled:
-                dot = "●"
-                color = "#E07A82" if pulse else "#B95A63"
-                suffix = "  ERROR"
-            elif running:
-                dot = "●"
-                color = "#8AC89C" if pulse else "#5FAE78"
-                suffix = "  RUNNING"
-            elif enabled:
-                dot = "●"
-                color = "#86C69A" if pulse else "#65A97A"
-                suffix = ""
-            else:
-                dot = "○"
-                color = "#7F8995"
-                suffix = "  DISABLED"
-
-            name = str(task.get("name", "Scheduled task")).strip() or "Scheduled task"
-            label = QLabel(f"{dot}  {name}{suffix}")
-            label.setStyleSheet(
-                f"padding:2px 4px 2px 8px;color:{color};font-size:11px;"
-            )
-            label.setToolTip(
-                "Type: {task_type}\nNext run: {next_run}\nLast status: {last_status}".format(
-                    task_type=task.get("task_type", "custom"),
-                    next_run=task.get("next_run_at") or "not scheduled",
-                    last_status=task.get("last_status", "never"),
-                )
-            )
-            self.schedule_task_status_layout.addWidget(label)
+        return self.sidebar_controller.refresh_schedule_task_labels()
 
 
     def _check_scheduled_tasks(self):

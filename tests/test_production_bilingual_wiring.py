@@ -4,7 +4,7 @@ import subprocess
 import sys
 
 
-def test_cold_production_startup_binds_bilingual_worker_before_gui_construction():
+def test_cold_production_startup_uses_explicit_web_research_pipeline_before_gui_construction():
     repository_root = Path(__file__).resolve().parents[1]
     script = r'''
 import json
@@ -33,13 +33,10 @@ worker = main_window.ChatWebWorker(
     "Keress nekem teas kannat 100 EUR alatt.",
 )
 print(json.dumps({
-    "patch_installed": getattr(
-        workers.ChatWebWorker,
-        "_bilingual_search_patch_installed",
-        False,
-    ),
     "gui_class_identity": main_window.ChatWebWorker is workers.ChatWebWorker,
     "method_module": workers.ChatWebWorker._generate_search_queries.__module__,
+    "pipeline_module": worker.web_research_pipeline.__class__.__module__,
+    "pipeline_class": worker.web_research_pipeline.__class__.__name__,
     "queries": worker._generate_search_queries(),
     "calls": client.calls,
 }, separators=(",", ":"), sort_keys=True))
@@ -54,9 +51,10 @@ print(json.dumps({
     )
     evidence = json.loads(completed.stdout)
 
-    assert evidence["patch_installed"] is True
     assert evidence["gui_class_identity"] is True
-    assert evidence["method_module"] == "app.bilingual_search_patch"
+    assert evidence["method_module"] == "app.workers"
+    assert evidence["pipeline_module"] == "app.web_research_pipeline"
+    assert evidence["pipeline_class"] == "WebResearchPipeline"
     assert evidence["queries"] == [
         "teaskanna 100 EUR alatt",
         "Teekanne unter 100 EUR kaufen Deutschland",

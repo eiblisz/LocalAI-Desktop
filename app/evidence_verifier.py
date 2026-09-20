@@ -3,6 +3,7 @@ import unicodedata
 from urllib.parse import urlparse
 
 from .web_search_tool import build_search_plan
+from .evidence_policy import EvidencePolicy
 
 
 VERIFIED = "VERIFIED"
@@ -200,7 +201,7 @@ def _speed_field(requested, found, label):
     return _field(UNKNOWN, None, label)
 
 
-def build_evidence_ledger(query, item):
+def _build_evidence_ledger_base(query, item):
     plan = build_search_plan(query)
     title = " ".join(str(item.get("title", "")).split())
     snippet = " ".join(str(item.get("snippet", "")).split())
@@ -372,6 +373,20 @@ def build_evidence_ledger(query, item):
     }
 
 
+def build_evidence_ledger(query, item):
+    ledger = _build_evidence_ledger_base(query, item)
+    return EvidencePolicy.apply_price_evidence(
+        ledger,
+        item,
+        extract_prices=_extract_prices,
+        has_lowest_price_marker=_has_lowest_price_marker,
+        field=_field,
+        VERIFIED=VERIFIED,
+        REJECTED=REJECTED,
+        UNKNOWN=UNKNOWN,
+    )
+
+
 def filter_verified_results(query, results):
     plan = build_search_plan(query)
     if not evidence_required(plan):
@@ -435,7 +450,7 @@ def evidence_ledger_context_text(payload):
     return "\n".join(lines).strip()
 
 
-def verify_answer_against_evidence(answer, query, ledgers):
+def _verify_answer_against_evidence_base(answer, query, ledgers):
     text = str(answer or "")
     plan = build_search_plan(query)
     if not evidence_required(plan):
@@ -508,3 +523,21 @@ def verify_answer_against_evidence(answer, query, ledgers):
             reasons.append("answer_missing_verified_url")
 
     return (not reasons), list(dict.fromkeys(reasons))
+
+def verify_answer_against_evidence(answer, query, ledgers):
+    valid, reasons = _verify_answer_against_evidence_base(
+        answer,
+        query,
+        ledgers,
+    )
+    return EvidencePolicy.reconcile_price_equivalence(
+        valid,
+        reasons,
+        answer,
+        query,
+        ledgers,
+        build_search_plan=build_search_plan,
+        extract_prices=_extract_prices,
+        VERIFIED=VERIFIED,
+    )
+
