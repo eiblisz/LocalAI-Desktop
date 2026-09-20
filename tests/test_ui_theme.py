@@ -27,7 +27,7 @@ def test_rendered_buttons_match_canonical_theme_in_isolated_qt_process():
     script = textwrap.dedent(
         """
         from PySide6.QtCore import Qt
-        from PySide6.QtGui import QImage, QPainter
+        from PySide6.QtGui import QImage
         from PySide6.QtWidgets import QApplication, QPushButton
 
         from app.ui_theme import COLORS, MAIN_STYLESHEET
@@ -48,9 +48,7 @@ def test_rendered_buttons_match_canonical_theme_in_isolated_qt_process():
                 QImage.Format.Format_ARGB32,
             )
             image.fill(Qt.GlobalColor.transparent)
-            painter = QPainter(image)
-            button.render(painter)
-            painter.end()
+            button.render(image)
             color = image.pixelColor(
                 button.width() // 2,
                 button.height() // 2,
