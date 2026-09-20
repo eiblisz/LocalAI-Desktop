@@ -993,3 +993,15 @@ def test_scheduler_result_persistence_is_delegated_out_of_main_window():
     assert "self.scheduler_runtime.ensure_schedule_chat(task)" in chat_source
     assert "self.store.save(chat)" not in success_source
     assert "self.scheduler_store.mark_result" not in success_source
+
+
+def test_main_window_wires_memory_dialog_without_new_patch_layer():
+    from app.main_window import MainWindow
+
+    init_source = inspect.getsource(MainWindow.__init__)
+    open_source = inspect.getsource(MainWindow._open_memory)
+
+    assert "self.memory_dialog = None" in init_source
+    assert "MemoryDialog(" in open_source
+    assert "self.memory_store" in open_source
+    assert "self.memory_dialog.refresh()" in open_source
