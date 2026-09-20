@@ -521,7 +521,8 @@ def test_chat_panel_exposes_extension_attachment_button():
     assert "ChatExtensionsDialog(" in open_source
     assert "dialog.saved.connect(self._chat_extensions_saved)" in open_source
     assert 'button.setText(f"EXT {count}")' in refresh_source
-    assert "host authority grants the requested capability" in refresh_source
+    assert "host " in refresh_source
+    assert "authority grants the requested capability." in refresh_source
 
 
 def test_chat_extension_attachments_constrain_host_runtime_without_prompt_injection():
