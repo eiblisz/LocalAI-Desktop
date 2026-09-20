@@ -41,13 +41,14 @@ def test_tool_panel_uses_shared_theme_lists():
 
 def test_schedule_button_and_scheduler_methods_are_wired():
     from app.main_window import MainWindow
+    from app.sidebar_controller import SidebarController
 
-    sidebar_source = inspect.getsource(MainWindow._build_sidebar)
+    sidebar_source = inspect.getsource(SidebarController.build_sidebar)
     tools_source = inspect.getsource(MainWindow._build_tools_panel)
     check_source = inspect.getsource(MainWindow._check_scheduled_tasks)
     run_source = inspect.getsource(MainWindow._run_scheduled_task)
 
-    assert 'self.schedule_button = QPushButton("SCHEDULE")' in sidebar_source
+    assert 'window.schedule_button = QPushButton("SCHEDULE")' in sidebar_source
     assert "_open_scheduler" in sidebar_source
     assert 'QPushButton("SCHEDULE")' not in tools_source
     assert "self.scheduler_runtime.next_due_task_id()" in check_source
@@ -84,12 +85,13 @@ def test_pending_schedule_runs_after_worker_cleanup():
 def test_schedule_button_stays_neutral_and_task_rows_carry_health():
     import app.main_window as main_window_module
     from app.main_window import MainWindow
+    from app.sidebar_controller import SidebarController
 
-    sidebar_source = inspect.getsource(MainWindow._build_sidebar)
+    sidebar_source = inspect.getsource(SidebarController.build_sidebar)
     button_source = inspect.getsource(MainWindow._apply_schedule_button_style)
-    task_source = inspect.getsource(MainWindow._refresh_schedule_task_labels)
+    task_source = inspect.getsource(SidebarController.refresh_schedule_task_labels)
 
-    assert 'self.schedule_button = QPushButton("SCHEDULE")' in sidebar_source
+    assert 'window.schedule_button = QPushButton("SCHEDULE")' in sidebar_source
     assert 'self.schedule_button.setObjectName("sideMenuButton")' in button_source
     assert 'self.schedule_button.setStyleSheet("")' in button_source
     assert "QPushButton#sideMenuButton" in main_window_module.STYLE
@@ -113,10 +115,10 @@ def test_schedule_button_refreshes_after_task_results():
 
 
 def test_sidebar_lists_only_saved_tasks_not_predeclared_categories():
-    from app.main_window import MainWindow
+    from app.sidebar_controller import SidebarController
 
-    sidebar = inspect.getsource(MainWindow._build_sidebar)
-    refresh = inspect.getsource(MainWindow._refresh_schedule_task_labels)
+    sidebar = inspect.getsource(SidebarController.build_sidebar)
+    refresh = inspect.getsource(SidebarController.refresh_schedule_task_labels)
 
     assert "schedule_task_status_layout" in sidebar
     assert '("weather", "Weather")' not in sidebar
@@ -1081,16 +1083,17 @@ def test_manual_run_now_forces_claim_but_automatic_due_run_does_not():
 
 def test_desktop_poll_surfaces_background_scheduler_results():
     from app.main_window import MainWindow
+    from app.sidebar_controller import SidebarController
 
     check_source = inspect.getsource(MainWindow._check_scheduled_tasks)
     health_source = inspect.getsource(MainWindow._schedule_health_state)
-    labels_source = inspect.getsource(MainWindow._refresh_schedule_task_labels)
+    labels_source = inspect.getsource(SidebarController.refresh_schedule_task_labels)
 
     assert "self._refresh_schedule_indicator()" in check_source
     assert "self.scheduler_dialog._refresh_list()" in check_source
     assert "self._load_chat_list()" in check_source
     assert "self.scheduler_store.is_leased(task)" in health_source
-    assert "self.scheduler_store.is_leased(task)" in labels_source
+    assert "window.scheduler_store.is_leased(task)" in labels_source
 
 
 def test_main_window_owns_explicit_extension_authority():
@@ -1189,9 +1192,9 @@ def test_main_window_style_comes_from_canonical_theme_module():
 
 
 def test_sidebar_schedule_statuses_use_canonical_theme_tokens():
-    from app.main_window import MainWindow
+    from app.sidebar_controller import SidebarController
 
-    source = inspect.getsource(MainWindow._refresh_schedule_task_labels)
+    source = inspect.getsource(SidebarController.refresh_schedule_task_labels)
 
     assert 'schedule_status_color("failed", pulse=pulse)' in source
     assert 'schedule_status_color("running", pulse=pulse)' in source
@@ -1199,3 +1202,23 @@ def test_sidebar_schedule_statuses_use_canonical_theme_tokens():
     assert 'schedule_status_color("disabled")' in source
     assert "COLORS.panel_hover" in source
     assert "COLORS.text_bright" in source
+
+
+def test_main_window_owns_explicit_ui_controllers():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow.__init__)
+
+    assert "self.vram_controller = VramController(self)" in source
+    assert "self.sidebar_controller = SidebarController(self)" in source
+    assert "self.image_studio_controller = ImageStudioController(self)" in source
+
+
+def test_vram_release_is_explicit_controller_delegation():
+    from app.main_window import MainWindow
+
+    load_source = inspect.getsource(MainWindow._load_models)
+    release_source = inspect.getsource(MainWindow._release_vram)
+
+    assert "self.vram_controller.ensure_button()" in load_source
+    assert "self.vram_controller.release()" in release_source
