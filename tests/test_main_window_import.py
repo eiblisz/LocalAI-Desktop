@@ -789,6 +789,10 @@ def test_open_resource_creates_internal_tab_and_keeps_browser_navigation_interna
     assert 'widget.setProperty("resource_target", resource_key)' in open_source
     assert "create_resource_view(" in open_source
     assert "open_resource=self._open_resource" in open_source
+    assert "navigation_authority=self.browser_navigation_authority" in open_source
+    assert "self.browser_navigation_authority.decide(" in open_source
+    assert 'source="resource_open"' in open_source
+    assert 'self.status.setText("Navigation blocked")' in open_source
     assert "self.workspace_tabs.addTab" in open_source
     assert "self.workspace_tabs.setCurrentIndex" in open_source
     assert "BrowserView" in open_source
@@ -1068,3 +1072,22 @@ def test_main_window_owns_explicit_extension_authority():
     init_source = inspect.getsource(MainWindow.__init__)
 
     assert "self.extension_authority = ExtensionAuthority(self.extension_store)" in init_source
+
+
+def test_main_window_owns_browser_navigation_authority():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow.__init__)
+
+    assert "self.browser_navigation_authority = BrowserNavigationAuthority()" in source
+
+
+def test_chat_and_artifact_links_share_internal_resource_authority():
+    from app.main_window import MainWindow
+
+    artifact_source = inspect.getsource(MainWindow._open_artifact_link)
+    market_source = inspect.getsource(MainWindow._open_market_browser)
+
+    assert "self._open_resource(url.toString())" in artifact_source
+    assert "self._open_resource(target)" in artifact_source
+    assert "self._open_resource(self._tradingview_workspace_url())" in market_source
