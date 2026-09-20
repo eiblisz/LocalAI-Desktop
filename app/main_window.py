@@ -1,6 +1,8 @@
 import base64
 import html
+import os
 import re
+import uuid
 from pathlib import Path
 
 import markdown
@@ -348,7 +350,12 @@ class MainWindow(QMainWindow):
         self.discord_bot_bridge = None
         self.scheduled_thread = None
         self.scheduled_worker = None
+        self.scheduler_owner_id = (
+            f"desktop:{os.getpid()}:{uuid.uuid4().hex[:8]}"
+        )
+        self.scheduled_attempt_id = ""
         self.pending_scheduled_task_id = ""
+        self.pending_scheduled_force = False
         self.schedule_indicator_state = "idle"
         self.schedule_pulse_on = False
 
@@ -1617,7 +1624,10 @@ class MainWindow(QMainWindow):
                 parent=self,
             )
             self.scheduler_dialog.run_requested.connect(
-                lambda task_id: self._run_scheduled_task(task_id)
+                lambda task_id: self._run_scheduled_task(
+                    task_id,
+                    force=True,
+                )
             )
             self.scheduler_dialog.tasks_changed.connect(
                 self._refresh_schedule_indicator
@@ -1890,15 +1900,16 @@ class MainWindow(QMainWindow):
 
         task_id = self.scheduler_runtime.next_due_task_id()
         if task_id:
-            self._run_scheduled_task(task_id)
+            self._run_scheduled_task(task_id, force=False)
 
-    def _run_scheduled_task(self, task_id):
+    def _run_scheduled_task(self, task_id, force=True):
         if (
             self.scheduled_worker is not None
             or self.worker is not None
             or self.pdf_worker is not None
         ):
             self.pending_scheduled_task_id = task_id
+            self.pending_scheduled_force = bool(force)
             message = (
                 "Queued: LocalAI is busy with another generation. "
                 "This task will start automatically when the model is free."
@@ -1913,11 +1924,31 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            task = self.scheduler_runtime.get_task(task_id)
+            task = self.scheduler_runtime.claim_task(
+                task_id,
+                owner_id=self.scheduler_owner_id,
+                force=bool(force),
+                lease_seconds=3600,
+            )
         except KeyError:
             return
 
+        if task is None:
+            if self.scheduler_dialog is not None and force:
+                self.scheduler_dialog.set_run_status(
+                    task_id,
+                    (
+                        "Run skipped: this task is already running in another "
+                        "LocalAI scheduler process."
+                    ),
+                    running=False,
+                )
+            self._refresh_schedule_indicator()
+            return
+
         self.pending_scheduled_task_id = ""
+        self.pending_scheduled_force = False
+        self.scheduled_attempt_id = str(task.get("attempt_id") or "")
         self.status.setText(f'Schedule running: {task.get("name", "task")}')
         self.status.setToolTip("")
         self._refresh_schedule_indicator()
@@ -1948,8 +1979,10 @@ class MainWindow(QMainWindow):
             completion = self.scheduler_runtime.complete(
                 task_id,
                 content,
+                attempt_id=self.scheduled_attempt_id,
+                owner_id=self.scheduler_owner_id,
             )
-        except KeyError:
+        except (KeyError, RuntimeError):
             return
 
         task = completion.task
@@ -1977,7 +2010,12 @@ class MainWindow(QMainWindow):
 
     def _scheduled_task_failed(self, task_id, message):
         try:
-            task = self.scheduler_runtime.fail(task_id, message)
+            task = self.scheduler_runtime.fail(
+                task_id,
+                message,
+                attempt_id=self.scheduled_attempt_id,
+                owner_id=self.scheduler_owner_id,
+            )
             name = task.get("name", "task")
         except Exception:
             name = "task"
@@ -2001,6 +2039,7 @@ class MainWindow(QMainWindow):
             self.scheduled_thread.deleteLater()
         self.scheduled_worker = None
         self.scheduled_thread = None
+        self.scheduled_attempt_id = ""
         self._refresh_schedule_indicator()
         QTimer.singleShot(0, self._run_pending_scheduled_task)
 
@@ -2014,8 +2053,10 @@ class MainWindow(QMainWindow):
             or self.pdf_worker is not None
         ):
             return
+        force = self.pending_scheduled_force
         self.pending_scheduled_task_id = ""
-        self._run_scheduled_task(task_id)
+        self.pending_scheduled_force = False
+        self._run_scheduled_task(task_id, force=force)
 
     def _select_tool(self, name):
         self.active_tool = name
