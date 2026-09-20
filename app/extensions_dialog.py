@@ -38,6 +38,7 @@ from .extension_store import (
     test_extension_connection,
 )
 from .secret_store import SecretStore
+from .ui_theme import muted_label_style
 
 
 class ExtensionTestWorker(QObject):
@@ -138,7 +139,7 @@ class ExtensionsDialog(QDialog):
             "Enabling an extension does not give the chat access yet."
         )
         intro.setWordWrap(True)
-        intro.setStyleSheet("color:#9099A6;")
+        intro.setStyleSheet(muted_label_style())
         left.addWidget(intro)
 
         self.tabs = QTabWidget()
@@ -179,7 +180,7 @@ class ExtensionsDialog(QDialog):
             "Select a preset to review its capabilities before adding it."
         )
         self.catalog_details.setWordWrap(True)
-        self.catalog_details.setStyleSheet("color:#9099A6;font-size:12px;")
+        self.catalog_details.setStyleSheet(muted_label_style(font_size=12))
         catalog_layout.addWidget(self.catalog_details)
 
         self.install_preset_button = QPushButton("ADD PRESET")
@@ -277,7 +278,7 @@ class ExtensionsDialog(QDialog):
 
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
-        self.status_label.setStyleSheet("color:#9099A6;")
+        self.status_label.setStyleSheet(muted_label_style())
         right.addWidget(self.status_label)
 
         buttons = QHBoxLayout()
