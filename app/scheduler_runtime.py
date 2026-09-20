@@ -27,6 +27,22 @@ class SchedulerRuntime:
             return ""
         return str(due[0].get("id") or "")
 
+    def claim_task(
+        self,
+        task_id="",
+        *,
+        owner_id,
+        force=False,
+        lease_seconds=3600,
+    ):
+        return self.scheduler_store.claim_task(
+            owner_id=owner_id,
+            task_id=task_id,
+            now=self._now_provider(),
+            lease_seconds=lease_seconds,
+            force=force,
+        )
+
     def get_task(self, task_id):
         return self.scheduler_store.get(task_id)
 
@@ -46,7 +62,14 @@ class SchedulerRuntime:
         self.chat_store.save(chat)
         return chat
 
-    def complete(self, task_id, content):
+    def complete(
+        self,
+        task_id,
+        content,
+        *,
+        attempt_id="",
+        owner_id="",
+    ):
         task = self.get_task(task_id)
         chat = self.ensure_schedule_chat(task)
         stamp = self._now_provider().strftime("%Y-%m-%d %H:%M")
@@ -61,16 +84,29 @@ class SchedulerRuntime:
             }
         )
         self.chat_store.save(chat)
-        self.scheduler_store.mark_result(
+        updated = self.scheduler_store.mark_result(
             task_id,
             status="success",
             chat_id=chat["id"],
+            attempt_id=attempt_id,
+            owner_id=owner_id,
+            now=self._now_provider(),
         )
-        return ScheduledCompletion(task=task, chat=chat)
+        return ScheduledCompletion(task=updated, chat=chat)
 
-    def fail(self, task_id, message):
+    def fail(
+        self,
+        task_id,
+        message,
+        *,
+        attempt_id="",
+        owner_id="",
+    ):
         return self.scheduler_store.mark_result(
             task_id,
             status="failed",
             error=message,
+            attempt_id=attempt_id,
+            owner_id=owner_id,
+            now=self._now_provider(),
         )
