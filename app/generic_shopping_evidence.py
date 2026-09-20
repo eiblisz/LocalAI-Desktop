@@ -3,7 +3,7 @@ import unicodedata
 from urllib.parse import parse_qs, urlparse
 
 from .language_policy import detect_user_language
-from .shopping_search_patch import _is_generic_shopping_url
+from .web_research_pipeline import is_generic_shopping_url
 
 
 _INFO_QUERY_MARKERS = {
@@ -224,7 +224,7 @@ def _meaningful_topic_terms(query):
 
 
 def _is_product_specific_url(url):
-    if _is_generic_shopping_url(url):
+    if is_generic_shopping_url(url):
         return False
 
     try:
