@@ -1199,12 +1199,19 @@ class MainWindow(QMainWindow):
         self._load_chat_list()
         self._render_chat()
 
-        action_plan = plan_user_action(
+        crypto_market_extension = self._crypto_market_extension()
+        multi_asset_market_extension = self._multi_asset_market_extension()
+        action_decision = self.action_runtime.decide(
             text,
+            model_text=text_for_model,
             force_web=self.web_button.isChecked(),
+            crypto_market_available=crypto_market_extension is not None,
+            multi_asset_market_available=(
+                multi_asset_market_extension is not None
+            ),
         )
 
-        if action_plan.has(ACTION_MEMORY_WRITE):
+        if action_decision.route == ROUTE_MEMORY_WRITE:
             self.partial_assistant = ""
             self.current_chat_uses_web = False
             self.thread = QThread()
@@ -1257,24 +1264,13 @@ class MainWindow(QMainWindow):
             model_user_message["images"] = image_payloads
         messages_for_model.append(model_user_message)
 
-        use_web = action_plan.has(ACTION_WEB_RESEARCH)
+        use_web = action_decision.use_web
 
         self.partial_assistant = ""
         self.current_chat_uses_web = use_web
         self.thread = QThread()
 
-        crypto_market_extension = (
-            self._crypto_market_extension()
-            if use_web and is_crypto_quote_request(text_for_model)
-            else None
-        )
-        multi_asset_market_extension = (
-            self._multi_asset_market_extension()
-            if use_web and is_multi_asset_quote_request(text_for_model)
-            else None
-        )
-
-        if crypto_market_extension is not None:
+        if action_decision.route == ROUTE_CRYPTO_MARKET:
             self.status.setText("Crypto market data...")
             self.worker = MarketDataWorker(
                 self.client,
@@ -1283,7 +1279,7 @@ class MainWindow(QMainWindow):
                 text_for_model,
                 crypto_market_extension,
             )
-        elif multi_asset_market_extension is not None:
+        elif action_decision.route == ROUTE_MULTI_ASSET_MARKET:
             self.status.setText("Multi-asset market data...")
             self.worker = MultiAssetMarketDataWorker(
                 self.client,
@@ -1292,14 +1288,10 @@ class MainWindow(QMainWindow):
                 text_for_model,
                 multi_asset_market_extension,
             )
-        elif use_web:
-            market_fallback = (
-                is_crypto_quote_request(text_for_model)
-                or is_multi_asset_quote_request(text_for_model)
-            )
+        elif action_decision.route in {ROUTE_WEB, ROUTE_MARKET_WEB}:
             self.status.setText(
                 "Market web fallback..."
-                if market_fallback
+                if action_decision.market_fallback
                 else "Web research..."
             )
             self.worker = ChatWebWorker(
@@ -1307,14 +1299,18 @@ class MainWindow(QMainWindow):
                 model,
                 messages_for_model,
                 text_for_model,
-                compact_market_quote=market_fallback,
+                compact_market_quote=action_decision.market_fallback,
             )
-        else:
+        elif action_decision.route == ROUTE_CHAT:
             self.worker = AdaptiveChatWorker(
                 self.client,
                 model,
                 messages_for_model,
                 text_for_model,
+            )
+        else:
+            raise RuntimeError(
+                f"Unsupported action route: {action_decision.route}"
             )
 
         self.worker.moveToThread(self.thread)
