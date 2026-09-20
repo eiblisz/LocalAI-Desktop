@@ -33,8 +33,8 @@ class ChatExtensionsDialog(QDialog):
 
         intro = QLabel(
             "Choose which installed extensions belong to this conversation. "
-            "Attachments are saved per chat. This slice does not execute extensions "
-            "or inject credentials into the model."
+            "Attachments are saved per chat and make enabled capabilities eligible "
+            "for host-authorized execution. Credentials are never injected into the model."
         )
         intro.setWordWrap(True)
         intro.setStyleSheet("color:#9099A6;")
