@@ -841,6 +841,12 @@ class MainWindow(QMainWindow):
     def _load_models(self):
         self._refresh_local_model_hub()
 
+    def _default_local_model(self):
+        index = self.model_combo.findText(PREFERRED_LOCAL_MODEL)
+        if index >= 0:
+            return PREFERRED_LOCAL_MODEL
+        return self.model_combo.currentText().strip()
+
     def _load_chat_list(self):
         selected_id = self.current_chat.get("id") if self.current_chat else None
         all_chats = self.store.list_chats(include_closed=True)
@@ -890,14 +896,19 @@ class MainWindow(QMainWindow):
                 self.model_combo.blockSignals(False)
         else:
             self.current_chat = self.store.new_chat(
-                self.model_combo.currentText()
+                self._default_local_model()
             )
         self._render_chat()
         self._load_chat_list()
 
     def _new_chat(self):
         self.show_closed = False
-        self.current_chat = self.store.new_chat(self.model_combo.currentText())
+        default_model = self._default_local_model()
+        self.current_chat = self.store.new_chat(default_model)
+        if default_model:
+            index = self.model_combo.findText(default_model)
+            if index >= 0:
+                self.model_combo.setCurrentIndex(index)
         self.attachment_context = []
         self._load_chat_list()
         self._render_chat()
