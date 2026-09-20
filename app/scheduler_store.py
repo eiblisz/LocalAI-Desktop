@@ -309,6 +309,26 @@ class ScheduledTaskStore:
             self._save_all(tasks)
             return dict(task)
 
+    def validate_claim(self, task_id, *, attempt_id, owner_id):
+        with self._exclusive_lock():
+            tasks = [self._normalize(item) for item in self._load_all()]
+            task = next(
+                (item for item in tasks if item["id"] == task_id),
+                None,
+            )
+            if task is None:
+                raise KeyError(task_id)
+
+            if str(task.get("attempt_id") or "") != str(attempt_id or ""):
+                raise RuntimeError(
+                    "stale scheduler attempt cannot mutate scheduled output"
+                )
+            if str(task.get("lease_owner") or "") != str(owner_id or ""):
+                raise RuntimeError(
+                    "scheduler lease is owned by another runner"
+                )
+            return dict(task)
+
     def mark_result(
         self,
         task_id,
