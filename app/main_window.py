@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from .action_runtime import (
+    ROUTE_ARTIFACT,
     ROUTE_CHAT,
     ROUTE_CRYPTO_MARKET,
     ROUTE_MARKET_WEB,
@@ -86,6 +87,7 @@ from .storage import ChatStore
 from .web_intent import looks_like_web_request
 from .workers import (
     AdaptiveChatWorker,
+    ArtifactActionWorker,
     ChatWebWorker,
     ChatWorker,
     DocumentWorker,
@@ -327,6 +329,11 @@ class MainWindow(QMainWindow):
         self.partial_assistant = ""
         self.current_chat_uses_web = False
         self.generation_chat_id = ""
+        self.pending_action_contracts = []
+        self.active_action_contract = None
+        self.pending_action_model = ""
+        self.pending_action_context_suffix = ""
+        self.pending_action_images = []
         self.show_closed = False
         self.thinking_phase = 0
         self.thinking_base_text = "Gondolkodik"
@@ -1201,12 +1208,16 @@ class MainWindow(QMainWindow):
 
     def _send(self):
         text = self.input.toPlainText().strip()
-        if not text or self.worker is not None:
+        if not text or self.worker is not None or self.pending_action_contracts:
             return
 
         model = self.model_combo.currentText().strip()
         if not model or model.startswith("No Ollama"):
-            QMessageBox.warning(self, "Ollama", "Start Ollama and install a model first.")
+            QMessageBox.warning(
+                self,
+                "Ollama",
+                "Start Ollama and install a model first.",
+            )
             return
 
         if self.current_chat.get("closed", False):
@@ -1214,27 +1225,26 @@ class MainWindow(QMainWindow):
             self.show_closed = False
 
         image_payloads = []
-        if self.attachment_context:
-            blocks = []
-            for attachment in self.attachment_context:
-                if attachment.get("kind") == "image":
-                    encoded = str(attachment.get("image") or "").strip()
-                    if encoded:
-                        image_payloads.append(encoded)
-                    continue
-                blocks.append(
-                    f"\n\n--- ATTACHMENT: {attachment['name']} ---\n"
-                    f"{attachment['content']}"
-                )
-            text_for_model = text + "".join(blocks)
-        else:
-            text_for_model = text
+        blocks = []
+        for attachment in self.attachment_context:
+            if attachment.get("kind") == "image":
+                encoded = str(attachment.get("image") or "").strip()
+                if encoded:
+                    image_payloads.append(encoded)
+                continue
+            blocks.append(
+                f"\n\n--- ATTACHMENT: {attachment['name']} ---\n"
+                f"{attachment['content']}"
+            )
+        context_suffix = "".join(blocks)
 
         if self.current_chat["title"] == "New chat":
             self.current_chat["title"] = self.store.infer_title(text)
 
         self.current_chat["model"] = model
-        self.current_chat["messages"].append({"role": "user", "content": text})
+        self.current_chat["messages"].append(
+            {"role": "user", "content": text}
+        )
         self.store.save(self.current_chat)
         self.generation_chat_id = str(self.current_chat.get("id", ""))
         self.input.clear()
@@ -1244,24 +1254,108 @@ class MainWindow(QMainWindow):
 
         crypto_market_extension = self._crypto_market_extension()
         multi_asset_market_extension = self._multi_asset_market_extension()
-        action_decision = self.action_runtime.decide(
+
+        contracts = self.action_runtime.plan_many(
             text,
-            model_text=text_for_model,
+            model_context_suffix=context_suffix,
             force_web=self.web_button.isChecked(),
             crypto_market_available=crypto_market_extension is not None,
             multi_asset_market_available=(
                 multi_asset_market_extension is not None
             ),
         )
+        try:
+            contracts = self.action_runtime.validate_many(contracts)
+        except PermissionError as exc:
+            self.status.setText("Action blocked")
+            QMessageBox.warning(self, "Action authority", str(exc))
+            return
 
-        if action_decision.route == ROUTE_MEMORY_WRITE:
-            self.partial_assistant = ""
-            self.current_chat_uses_web = False
-            self.thread = QThread()
+        self.pending_action_contracts = list(contracts)
+        self.pending_action_model = model
+        self.pending_action_context_suffix = context_suffix
+        self.pending_action_images = list(image_payloads)
+        self._run_next_action_contract()
+
+    def _action_messages_for_model(self, prompt):
+        prompt = str(prompt or "").strip()
+        system_prompt = (
+            f"{DEFAULT_SYSTEM_PROMPT}\n\n"
+            f"{response_language_instruction(prompt)}"
+        )
+        memory_context = self._build_memory_context(prompt)
+        if memory_context:
+            system_prompt = f"{system_prompt}\n\n{memory_context}"
+
+        messages = [{"role": "system", "content": system_prompt}]
+        chat_messages = list((self.current_chat or {}).get("messages", []))
+        if chat_messages:
+            chat_messages = chat_messages[:-1]
+
+        for message in chat_messages:
+            if message.get("role") in {"user", "assistant"}:
+                messages.append(message)
+
+        user_message = {
+            "role": "user",
+            "content": prompt + self.pending_action_context_suffix,
+        }
+        if self.pending_action_images:
+            user_message["images"] = list(self.pending_action_images)
+        messages.append(user_message)
+        return messages
+
+    def _run_next_action_contract(self):
+        if self.worker is not None or self.thread is not None:
+            return
+
+        if not self.pending_action_contracts:
+            self.active_action_contract = None
+            self.pending_action_model = ""
+            self.pending_action_context_suffix = ""
+            self.pending_action_images = []
+            self.status.setText("Ollama connected")
+            QTimer.singleShot(0, self._run_pending_scheduled_task)
+            return
+
+        contract = self.pending_action_contracts.pop(0)
+        self.active_action_contract = contract
+        prompt = contract.prompt
+        model = self.pending_action_model
+        self.generation_chat_id = str(
+            (self.current_chat or {}).get("id", "")
+        )
+
+        direct_memory_answer = (
+            ""
+            if contract.route == ROUTE_MEMORY_WRITE
+            else self._direct_user_memory_answer(prompt)
+        )
+        if direct_memory_answer:
+            self.current_chat["messages"].append(
+                {"role": "assistant", "content": direct_memory_answer}
+            )
+            self.store.save(self.current_chat)
+            self.status.setText("Memory answer")
+            self._render_chat()
+            self._load_chat_list()
+            self.active_action_contract = None
+            QTimer.singleShot(0, self._run_next_action_contract)
+            return
+
+        messages_for_model = self._action_messages_for_model(prompt)
+        execution_text = prompt + self.pending_action_context_suffix
+
+        self.partial_assistant = ""
+        self.current_chat_uses_web = contract.use_web
+        self.thread = QThread()
+
+        if contract.route == ROUTE_MEMORY_WRITE:
+            self.status.setText("Saving memory...")
             self.worker = MemoryWriteWorker(
                 self.client,
                 model,
-                text,
+                prompt,
                 self.memory_store,
                 self.generation_chat_id,
             )
@@ -1273,91 +1367,83 @@ class MainWindow(QMainWindow):
             self.worker.failed.connect(self.thread.quit)
             self.thread.finished.connect(self._cleanup_worker)
             self.stop_button.setEnabled(False)
-            self.status.setText("Saving memory...")
             self.thread.start()
             return
 
-        direct_memory_answer = self._direct_user_memory_answer(text)
-        if direct_memory_answer:
-            self.current_chat["messages"].append(
-                {"role": "assistant", "content": direct_memory_answer}
+        if contract.route == ROUTE_ARTIFACT:
+            self.status.setText(
+                "Web research + artifact..."
+                if contract.use_web
+                else "Creating artifact..."
             )
-            self.store.save(self.current_chat)
-            self.status.setText("Memory answer")
-            self._render_chat()
-            self._load_chat_list()
+            self.worker = ArtifactActionWorker(
+                self.client,
+                model,
+                messages_for_model,
+                prompt,
+                contract.artifact_plans,
+                use_web=contract.use_web,
+            )
+            self.worker.moveToThread(self.thread)
+            self.thread.started.connect(self.worker.run)
+            self.worker.finished.connect(self._on_action_artifacts_finished)
+            self.worker.failed.connect(self._on_failed)
+            self.worker.finished.connect(self.thread.quit)
+            self.worker.failed.connect(self.thread.quit)
+            self.thread.finished.connect(self._cleanup_worker)
+            self.stop_button.setEnabled(True)
+            self._start_thinking_indicator(contract.use_web)
+            self.thread.start()
             return
 
-        system_prompt = (
-            f"{DEFAULT_SYSTEM_PROMPT}\n\n{response_language_instruction(text)}"
-        )
-        memory_context = self._build_memory_context(text)
-        if memory_context:
-            system_prompt = f"{system_prompt}\n\n{memory_context}"
+        crypto_market_extension = self._crypto_market_extension()
+        multi_asset_market_extension = self._multi_asset_market_extension()
 
-        messages_for_model = [{"role": "system", "content": system_prompt}]
-        for message in self.current_chat["messages"][:-1]:
-            if message.get("role") in {"user", "assistant"}:
-                messages_for_model.append(message)
-        model_user_message = {
-            "role": "user",
-            "content": text_for_model,
-        }
-        if image_payloads:
-            model_user_message["images"] = image_payloads
-        messages_for_model.append(model_user_message)
-
-        use_web = action_decision.use_web
-
-        self.partial_assistant = ""
-        self.current_chat_uses_web = use_web
-        self.thread = QThread()
-
-        if action_decision.route == ROUTE_CRYPTO_MARKET:
+        if contract.route == ROUTE_CRYPTO_MARKET:
             self.status.setText("Crypto market data...")
             self.worker = MarketDataWorker(
                 self.client,
                 model,
                 messages_for_model,
-                text_for_model,
+                execution_text,
                 crypto_market_extension,
             )
-        elif action_decision.route == ROUTE_MULTI_ASSET_MARKET:
+        elif contract.route == ROUTE_MULTI_ASSET_MARKET:
             self.status.setText("Multi-asset market data...")
             self.worker = MultiAssetMarketDataWorker(
                 self.client,
                 model,
                 messages_for_model,
-                text_for_model,
+                execution_text,
                 multi_asset_market_extension,
             )
-        elif action_decision.route in {ROUTE_WEB, ROUTE_MARKET_WEB}:
+        elif contract.route in {ROUTE_WEB, ROUTE_MARKET_WEB}:
             self.status.setText(
                 "Market web fallback..."
-                if action_decision.market_fallback
+                if contract.market_fallback
                 else "Web research..."
             )
             self.worker = ChatWebWorker(
                 self.client,
                 model,
                 messages_for_model,
-                text_for_model,
-                compact_market_quote=action_decision.market_fallback,
+                execution_text,
+                compact_market_quote=contract.market_fallback,
             )
-        elif action_decision.route == ROUTE_CHAT:
+        elif contract.route == ROUTE_CHAT:
             self.worker = AdaptiveChatWorker(
                 self.client,
                 model,
                 messages_for_model,
-                text_for_model,
+                execution_text,
             )
         else:
+            self.thread = None
             raise RuntimeError(
-                f"Unsupported action route: {action_decision.route}"
+                f"Unsupported action route: {contract.route}"
             )
 
         self.worker.moveToThread(self.thread)
-
         self.thread.started.connect(self.worker.run)
         self.worker.token.connect(self._on_token)
         self.worker.finished.connect(self._on_finished)
@@ -1367,8 +1453,56 @@ class MainWindow(QMainWindow):
         self.thread.finished.connect(self._cleanup_worker)
 
         self.stop_button.setEnabled(True)
-        self._start_thinking_indicator(use_web)
+        self._start_thinking_indicator(contract.use_web)
         self.thread.start()
+
+    def _on_action_artifacts_finished(self, results):
+        self._stop_thinking_indicator()
+        target_chat = self.current_chat
+        if self.generation_chat_id:
+            try:
+                target_chat = self.store.load(self.generation_chat_id)
+            except Exception:
+                target_chat = self.current_chat
+
+        created = []
+        for result in list(results or []):
+            path = Path(str(result.get("path") or "")).resolve()
+            if not path.exists():
+                continue
+            created.append(path)
+            if target_chat is not None:
+                target_chat["messages"].append({
+                    "role": "artifact",
+                    "content": f"{path.suffix.upper().lstrip('.')} created",
+                    "path": str(path),
+                    "name": path.name,
+                })
+
+        if target_chat is not None and created:
+            target_chat["messages"].append({
+                "role": "assistant",
+                "content": (
+                    f"Artifact created: {len(created)} file(s)."
+                ),
+            })
+            self.store.save(target_chat)
+            current_id = str((self.current_chat or {}).get("id", ""))
+            target_id = str(target_chat.get("id", ""))
+            if current_id == target_id:
+                self.current_chat = target_chat
+                self._render_chat()
+
+        if created:
+            self.last_artifact_path = created[-1]
+            self.artifact_path_label.setText(str(created[-1]))
+            self.artifact_path_label.show()
+            self.open_artifact_button.show()
+            self.open_artifact_folder_button.show()
+            self.status.setText("Artifact ready")
+        self.stop_button.setEnabled(False)
+        self._load_chat_list()
+
 
     def _on_token(self, token):
         self.partial_assistant += token
@@ -1482,8 +1616,15 @@ class MainWindow(QMainWindow):
         self.thread = None
         self.current_chat_uses_web = False
         self.generation_chat_id = ""
+        self.active_action_contract = None
         self._stop_thinking_indicator()
-        QTimer.singleShot(0, self._run_pending_scheduled_task)
+        if self.pending_action_contracts:
+            QTimer.singleShot(0, self._run_next_action_contract)
+        else:
+            self.pending_action_model = ""
+            self.pending_action_context_suffix = ""
+            self.pending_action_images = []
+            QTimer.singleShot(0, self._run_pending_scheduled_task)
 
     def _stop_generation(self):
         if self.worker is not None:
