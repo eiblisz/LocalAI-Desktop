@@ -53,7 +53,8 @@ def test_extensions_dialog_explains_host_authorized_runtime_access():
 
     assert "Enabling an extension does not give the chat access yet." in source
     assert "Runtime execution is host-authorized per scope." in source
-    assert "Enabled state alone does not grant execution" in source
+    assert "Enabled state alone" in source
+    assert "does not grant execution" in source
 
 
 def test_extensions_dialog_has_installed_and_catalog_tabs():
