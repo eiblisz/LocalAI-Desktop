@@ -356,11 +356,9 @@ class WebResearchPipeline:
         hungarian = "Hungarian" in worker._conversation_language_instruction()
         lines = [
             (
-                "A modell generalt valasza nem ment at az ellenorzesen, ezert "
-                "csak a host altal VERIFIED bizonyitekokat mutatom:"
+                "Az ellenorzott forrasok alapjan:"
                 if hungarian
-                else "The model-generated answer did not pass verification, so "
-                "only host-VERIFIED evidence is shown:"
+                else "Based on the verified sources:"
             ),
             "",
         ]
