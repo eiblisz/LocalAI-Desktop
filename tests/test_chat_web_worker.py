@@ -1443,3 +1443,80 @@ def test_market_quote_web_mode_is_concise_and_hides_source_appendix(monkeypatch)
     assert combined == "A Tesla részvény ára jelenleg **364.27 USD**."
     assert "Search query:" not in combined
     assert "Web results / sources:" not in combined
+
+
+def test_web_worker_chooses_newest_family_fact_across_multiple_queries(monkeypatch):
+    class StaleFirstClient(DummyWebClient):
+        def chat_stream(
+            self,
+            model,
+            messages,
+            on_token,
+            should_stop,
+            timeout=600.0,
+        ):
+            self.stream_calls.append((model, messages))
+            if not should_stop():
+                on_token(
+                    "A hivatalos forrás alapján a legfrissebb Qwen verzió Qwen2.5."
+                )
+
+    monkeypatch.setattr(
+        workers.ChatWebWorker,
+        "_generate_search_queries",
+        lambda self: [
+            "Qwen current version release",
+            "Qwen latest model family release",
+        ],
+    )
+
+    def fake_search(query, max_results=6, fetch_pages=True):
+        if "current version" in query:
+            return {
+                "provider": "Brave Search API",
+                "query": query,
+                "provider_query": query,
+                "retrieved_at": "2026-09-20T09:30:00",
+                "provider_chain_errors": [],
+                "results": [{
+                    "title": "Qwen legacy official site",
+                    "url": "https://qwenlm.github.io/",
+                    "snippet": "Official Qwen model family",
+                    "page_text": "The current model generation is Qwen2.5.",
+                }],
+            }
+        return {
+            "provider": "Brave Search API",
+            "query": query,
+            "provider_query": query,
+            "retrieved_at": "2026-09-20T09:30:01",
+            "provider_chain_errors": [],
+            "results": [{
+                "title": "Qwen",
+                "url": "https://qwen.ai/blog?id=qwen3.8",
+                "snippet": "Official Qwen model family update",
+                "page_text": "Qwen3.8 is the latest Qwen model family release.",
+            }],
+        }
+
+    monkeypatch.setattr(workers, "search_web", fake_search)
+
+    client = StaleFirstClient()
+    tokens = []
+    failed = []
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Melyik a jelenlegi legfrissebb Qwen verzió?",
+    )
+    worker.token.connect(tokens.append)
+    worker.failed.connect(failed.append)
+    worker.run()
+
+    assert not failed
+    assert tokens
+    main_answer = tokens[0]
+    assert "Qwen3.8" in main_answer
+    assert "Qwen2.5" not in main_answer
+    assert "qwen.ai/blog?id=qwen3.8" in main_answer
