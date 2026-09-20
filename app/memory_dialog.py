@@ -303,9 +303,9 @@ class MemoryDialog(QDialog):
         lineage = self.store.memory_lineage(memory_id)
 
         parts = [
-            f"<b>ID</b>: {html.escape(memory_id)}",
-            f"<b>Source chat</b>: "
-            f"{html.escape(str(memory.get('source_chat_id') or 'none'))}",
+            f"<div><b>ID</b>: {html.escape(memory_id)}</div>",
+            "<div><b>Source chat</b>: "
+            f"{html.escape(str(memory.get('source_chat_id') or 'none'))}</div>",
             "<hr><b>Sources</b>",
         ]
         if not sources:
