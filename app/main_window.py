@@ -1804,7 +1804,10 @@ class MainWindow(QMainWindow):
         ):
             return "error"
 
-        if self.scheduled_worker is not None:
+        if (
+            self.scheduled_worker is not None
+            or any(self.scheduler_store.is_leased(task) for task in enabled)
+        ):
             return "running"
 
         return "active"
@@ -1855,7 +1858,10 @@ class MainWindow(QMainWindow):
         for task in tasks:
             enabled = bool(task.get("enabled", True))
             failed = task.get("last_status") == "failed"
-            running = task.get("id") == running_id
+            running = (
+                task.get("id") == running_id
+                or self.scheduler_store.is_leased(task)
+            )
             pulse = self.schedule_pulse_on
 
             if failed and enabled:
@@ -1891,6 +1897,11 @@ class MainWindow(QMainWindow):
 
 
     def _check_scheduled_tasks(self):
+        self._refresh_schedule_indicator()
+        if self.scheduler_dialog is not None:
+            self.scheduler_dialog._refresh_list()
+        self._load_chat_list()
+
         if (
             self.scheduled_worker is not None
             or self.worker is not None
