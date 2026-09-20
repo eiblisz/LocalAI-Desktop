@@ -51,7 +51,10 @@ def test_schedule_button_and_scheduler_methods_are_wired():
     assert "_open_scheduler" in sidebar_source
     assert 'QPushButton("SCHEDULE")' not in tools_source
     assert "self.scheduler_runtime.next_due_task_id()" in check_source
-    assert "self.scheduler_runtime.get_task(task_id)" in run_source
+    assert "_run_scheduled_task(task_id, force=False)" in check_source
+    assert "self.scheduler_runtime.claim_task(" in run_source
+    assert "owner_id=self.scheduler_owner_id" in run_source
+    assert "lease_seconds=3600" in run_source
     assert "ScheduledTaskWorker" in run_source
 
 
@@ -60,6 +63,7 @@ def test_run_now_queues_when_localai_is_busy():
 
     source = inspect.getsource(MainWindow._run_scheduled_task)
     assert "pending_scheduled_task_id = task_id" in source
+    assert "pending_scheduled_force = bool(force)" in source
     assert "will start automatically" in source
     assert "set_run_status" in source
 
@@ -73,7 +77,8 @@ def test_pending_schedule_runs_after_worker_cleanup():
 
     assert "_run_pending_scheduled_task" in chat_cleanup
     assert "_run_pending_scheduled_task" in doc_cleanup
-    assert "_run_scheduled_task(task_id)" in pending
+    assert "force = self.pending_scheduled_force" in pending
+    assert "_run_scheduled_task(task_id, force=force)" in pending
 
 
 def test_schedule_button_stays_neutral_and_task_rows_carry_health():
@@ -989,7 +994,11 @@ def test_scheduler_result_persistence_is_delegated_out_of_main_window():
     chat_source = inspect.getsource(MainWindow._scheduled_task_chat)
 
     assert "self.scheduler_runtime.complete(" in success_source
-    assert "self.scheduler_runtime.fail(task_id, message)" in failure_source
+    assert "attempt_id=self.scheduled_attempt_id" in success_source
+    assert "owner_id=self.scheduler_owner_id" in success_source
+    assert "self.scheduler_runtime.fail(" in failure_source
+    assert "attempt_id=self.scheduled_attempt_id" in failure_source
+    assert "owner_id=self.scheduler_owner_id" in failure_source
     assert "self.scheduler_runtime.ensure_schedule_chat(task)" in chat_source
     assert "self.store.save(chat)" not in success_source
     assert "self.scheduler_store.mark_result" not in success_source
@@ -1005,3 +1014,23 @@ def test_main_window_wires_memory_dialog_without_new_patch_layer():
     assert "MemoryDialog(" in open_source
     assert "self.memory_store" in open_source
     assert "self.memory_dialog.refresh()" in open_source
+
+
+def test_desktop_scheduler_has_process_unique_execution_owner():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow.__init__)
+
+    assert 'f"desktop:{os.getpid()}:{uuid.uuid4().hex[:8]}"' in source
+    assert 'self.scheduled_attempt_id = ""' in source
+    assert "self.pending_scheduled_force = False" in source
+
+
+def test_manual_run_now_forces_claim_but_automatic_due_run_does_not():
+    from app.main_window import MainWindow
+
+    open_source = inspect.getsource(MainWindow._open_scheduler)
+    check_source = inspect.getsource(MainWindow._check_scheduled_tasks)
+
+    assert "force=True" in open_source
+    assert "_run_scheduled_task(task_id, force=False)" in check_source
