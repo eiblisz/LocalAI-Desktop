@@ -82,6 +82,12 @@ def install_sidebar_navigation_patch(main_window_module):
                     "Open the TradingView market workspace inside LocalAI Desktop."
                 )
                 button.clicked.connect(self._open_market_browser)
+            elif text == "MEMORY":
+                button.setEnabled(True)
+                button.setToolTip(
+                    "Review, revise, pin, archive and delete persistent memories."
+                )
+                button.clicked.connect(self._open_memory)
             elif text == "EXTENSIONS":
                 button.setEnabled(True)
                 button.setToolTip(
