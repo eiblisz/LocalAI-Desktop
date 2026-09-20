@@ -104,3 +104,18 @@ Campaign is complete only when:
 7. Exact-head Windows GitHub CI passes.
 8. Local smoke acceptance confirms Desktop startup, sidebar, FREE VRAM, Image
    Studio button, web search and constrained shopping still behave as before.
+
+
+## Acceptance hardening found during local smoke test
+
+The local smoke test exposed two UX-only issues after the architectural migration:
+
+- completed rich-text replies could briefly reset the QTextBrowser viewport to the top;
+  the chat renderer now uses a named end anchor plus bounded delayed re-assertion and
+  restores focus to the input;
+- a generated constrained-shopping answer could be rejected for omitting the verified
+  product URL even though the deterministic host fallback was valid; the safety policy
+  remains fail-closed, but successful host-verified fallback is now presented as a
+  normal verified result instead of exposing the internal rejection reason.
+
+These changes do not weaken evidence verification or alter search authority.
