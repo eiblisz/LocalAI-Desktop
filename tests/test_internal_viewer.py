@@ -265,3 +265,49 @@ def test_pdf_zoom_is_bounded_between_25_and_400_percent():
     source = inspect.getsource(PdfViewWidget._set_zoom_percent)
 
     assert "max(25, min(int(percent), 400))" in source
+
+
+def test_browser_view_routes_navigation_through_host_authority():
+    from app.internal_viewer import BrowserView, create_resource_view
+
+    init_source = inspect.getsource(BrowserView.__init__)
+    load_source = inspect.getsource(BrowserView.load)
+    address_source = inspect.getsource(BrowserView._navigate_address)
+    popup_source = inspect.getsource(BrowserView._new_window_requested)
+    fallback_source = inspect.getsource(BrowserView._fallback_link_clicked)
+    external_source = inspect.getsource(BrowserView._open_external)
+    create_source = inspect.getsource(create_resource_view)
+
+    assert "BrowserNavigationAuthority()" in init_source
+    assert "_AuthorityWebPage(" in init_source
+    assert "self.navigation_authority.decide(" in load_source
+    assert 'source="address_bar"' in address_source
+    assert 'source="new_window"' in popup_source
+    assert 'source="page_link"' in fallback_source
+    assert "self.load(decision.target, source=\"page_link\")" in fallback_source
+    assert 'source="external_button"' in external_source
+    assert "ACTION_EXTERNAL" in external_source
+    assert "navigation_authority=navigation_authority" in create_source
+
+
+def test_webengine_page_blocks_non_authorized_main_frame_navigation():
+    from app import internal_viewer
+
+    source = inspect.getsource(internal_viewer)
+
+    assert "class _AuthorityWebPage(QWebEnginePage):" in source
+    assert "def acceptNavigationRequest" in source
+    assert 'source="page_link"' in source
+    assert "return False" in source
+
+
+def test_browser_external_open_is_not_an_automatic_navigation_path():
+    from app.internal_viewer import BrowserView
+
+    load_source = inspect.getsource(BrowserView.load)
+    popup_source = inspect.getsource(BrowserView._new_window_requested)
+    external_source = inspect.getsource(BrowserView._open_external)
+
+    assert "QDesktopServices.openUrl" not in popup_source
+    assert "QDesktopServices.openUrl" in external_source
+    assert "ACTION_EXTERNAL" in load_source
