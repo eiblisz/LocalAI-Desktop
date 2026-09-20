@@ -18,11 +18,10 @@ $Argument = "-m app.scheduler_runner --loop --interval $IntervalSeconds"
 $Action = New-ScheduledTaskAction -Execute $Pythonw -Argument $Argument -WorkingDirectory $RepoRoot
 $Trigger = New-ScheduledTaskTrigger -AtLogOn -User $User
 $Principal = New-ScheduledTaskPrincipal -UserId $User -LogonType Interactive -RunLevel Limited
-$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew
+$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
 $Task = New-ScheduledTask -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings -Description "Runs LocalAI Desktop scheduled tasks while the user session is active."
 
 Register-ScheduledTask -TaskName $TaskName -InputObject $Task -Force | Out-Null
 Start-ScheduledTask -TaskName $TaskName
 
 Write-Host "Registered and started: $TaskName"
-Write-Host "Runner log: $RepoRoot\runtime\schedules\runner.log"
