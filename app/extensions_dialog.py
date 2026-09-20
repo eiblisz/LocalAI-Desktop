@@ -301,8 +301,9 @@ class ExtensionsDialog(QDialog):
         right.addWidget(self.send_test_message_button)
 
         note = QLabel(
-            "Foundation slice: registry, enable/disable state, capabilities and "
-            "connection testing only. Runtime tool injection is deliberately not enabled yet."
+            "Runtime execution is host-authorized per scope. Enabled state alone "
+            "does not grant execution; the requested capability and host permission "
+            "must also be allowed."
         )
         note.setWordWrap(True)
         note.setStyleSheet("color:#7F8995;font-size:12px;")

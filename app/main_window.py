@@ -56,6 +56,10 @@ from .document_tools import (
 from .artifact_themes import document_preset_labels, workbook_preset_labels
 from .chat_extensions_dialog import ChatExtensionsDialog
 from .discord_bot_bridge import DiscordBotBridge, DiscordBotSettings
+from .extension_authority import (
+    ExtensionAuthority,
+    ExtensionExecutionContext,
+)
 from .extension_store import ExtensionStore
 from .extensions_dialog import ExtensionsDialog
 from .file_reader import read_attachment
@@ -344,6 +348,7 @@ class MainWindow(QMainWindow):
         self.action_runtime = ActionRuntime()
         self.scheduler_dialog = None
         self.extension_store = ExtensionStore()
+        self.extension_authority = ExtensionAuthority(self.extension_store)
         self.extensions_dialog = None
         self.memory_dialog = None
         self.secret_store = SecretStore()
@@ -984,7 +989,10 @@ class MainWindow(QMainWindow):
         )
         button.setToolTip(
             button.toolTip()
-            + "Attachments are metadata only; runtime execution is not enabled yet."
+            + (
+                "Attached extensions may execute only when enabled and the host "
+                "authority grants the requested capability."
+            )
         )
 
     def _open_chat_extensions(self):
@@ -1670,10 +1678,12 @@ class MainWindow(QMainWindow):
 
     def _tradingview_workspace_url(self):
         default_url = "https://www.tradingview.com/markets/"
-        extension = self.extension_store.find_by_preset_id(
-            "tradingview-workspace"
+        extension = self.extension_authority.resolve_preset(
+            "tradingview-workspace",
+            "market_chart",
+            ExtensionExecutionContext.desktop_workspace(),
         )
-        if not extension or not bool(extension.get("enabled", False)):
+        if extension is None:
             return default_url
 
         config = dict(extension.get("config") or {})
@@ -1696,31 +1706,37 @@ class MainWindow(QMainWindow):
         self.discord_bot_bridge = None
 
     def _discord_bot_extension(self):
-        return self.extension_store.find_by_preset_id("discord-bot")
+        return self.extension_authority.resolve_preset(
+            "discord-bot",
+            "remote_chat",
+            ExtensionExecutionContext.background_service(),
+        )
+
+    def _chat_extension_context(self):
+        attached = (
+            self.current_chat.get("attached_extensions") or []
+            if self.current_chat
+            else []
+        )
+        return ExtensionExecutionContext.desktop_chat(attached)
 
     def _crypto_market_extension(self):
-        extension = self.extension_store.find_by_preset_id("crypto-market-data")
-        if not extension or not bool(extension.get("enabled", False)):
-            return None
-        capabilities = set(extension.get("capabilities") or [])
-        if "crypto_quote" not in capabilities:
-            return None
-        return extension
+        return self.extension_authority.resolve_preset(
+            "crypto-market-data",
+            "crypto_quote",
+            self._chat_extension_context(),
+        )
 
     def _multi_asset_market_extension(self):
-        extension = self.extension_store.find_by_preset_id(
-            "multi-asset-market-data"
+        return self.extension_authority.resolve_preset(
+            "multi-asset-market-data",
+            "market_quote",
+            self._chat_extension_context(),
         )
-        if not extension or not bool(extension.get("enabled", False)):
-            return None
-        capabilities = set(extension.get("capabilities") or [])
-        if "market_quote" not in capabilities:
-            return None
-        return extension
 
     def _sync_discord_bot_bridge(self):
         extension = self._discord_bot_extension()
-        if not extension or not bool(extension.get("enabled", False)):
+        if extension is None:
             self._stop_discord_bot_bridge()
             return
 

@@ -48,11 +48,13 @@ def test_extension_test_worker_delegates_to_bounded_connection_test():
     assert "self.failed.emit" in source
 
 
-def test_foundation_slice_does_not_claim_chat_runtime_access():
+def test_extensions_dialog_explains_host_authorized_runtime_access():
     source = inspect.getsource(ExtensionsDialog._build_ui)
 
     assert "Enabling an extension does not give the chat access yet." in source
-    assert "Runtime tool injection is deliberately not enabled yet." in source
+    assert "Runtime execution is host-authorized per scope." in source
+    assert "Enabled state alone" in source
+    assert "does not grant execution" in source
 
 
 def test_extensions_dialog_has_installed_and_catalog_tabs():

@@ -15,6 +15,10 @@ from .artifact_service import (
     infer_artifact_requests,
 )
 from .config import DEFAULT_SYSTEM_PROMPT
+from .extension_authority import (
+    ExtensionAuthority,
+    ExtensionExecutionContext,
+)
 from .crypto_market_data import (
     is_crypto_quote_request,
     run_crypto_market_request,
@@ -174,6 +178,11 @@ class DiscordBotBridge(QObject):
         self.chat_store = chat_store
         self.memory_store = memory_store
         self.extension_store = extension_store
+        self.extension_authority = (
+            ExtensionAuthority(extension_store)
+            if extension_store is not None
+            else None
+        )
         self.settings = settings
         self.token = validate_bot_token(token)
         self._thread = None
@@ -638,26 +647,22 @@ class DiscordBotBridge(QObject):
         ).strip()
 
     def _crypto_market_extension(self):
-        if self.extension_store is None:
+        if self.extension_authority is None:
             return None
-        extension = self.extension_store.find_by_preset_id("crypto-market-data")
-        if not extension or not bool(extension.get("enabled", False)):
-            return None
-        if "crypto_quote" not in set(extension.get("capabilities") or []):
-            return None
-        return extension
+        return self.extension_authority.resolve_preset(
+            "crypto-market-data",
+            "crypto_quote",
+            ExtensionExecutionContext.discord_remote(),
+        )
 
     def _multi_asset_market_extension(self):
-        if self.extension_store is None:
+        if self.extension_authority is None:
             return None
-        extension = self.extension_store.find_by_preset_id(
-            "multi-asset-market-data"
+        return self.extension_authority.resolve_preset(
+            "multi-asset-market-data",
+            "market_quote",
+            ExtensionExecutionContext.discord_remote(),
         )
-        if not extension or not bool(extension.get("enabled", False)):
-            return None
-        if "market_quote" not in set(extension.get("capabilities") or []):
-            return None
-        return extension
 
     def _grounded_external_answer(self, prompt):
         if is_crypto_quote_request(prompt):

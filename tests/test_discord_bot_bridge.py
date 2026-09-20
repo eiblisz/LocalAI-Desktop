@@ -1,3 +1,4 @@
+import inspect
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1111,3 +1112,20 @@ def test_remote_market_quote_without_extension_uses_concise_market_fallback(
     )
 
     assert answer == "MARKET FALLBACK SHORT"
+
+
+def test_discord_market_extensions_use_remote_host_authority():
+    crypto_source = inspect.getsource(DiscordBotBridge._crypto_market_extension)
+    multi_source = inspect.getsource(DiscordBotBridge._multi_asset_market_extension)
+    init_source = inspect.getsource(DiscordBotBridge.__init__)
+
+    assert "ExtensionAuthority(extension_store)" in init_source
+    assert "self.extension_authority.resolve_preset(" in crypto_source
+    assert '"crypto-market-data"' in crypto_source
+    assert '"crypto_quote"' in crypto_source
+    assert "ExtensionExecutionContext.discord_remote()" in crypto_source
+
+    assert "self.extension_authority.resolve_preset(" in multi_source
+    assert '"multi-asset-market-data"' in multi_source
+    assert '"market_quote"' in multi_source
+    assert "ExtensionExecutionContext.discord_remote()" in multi_source

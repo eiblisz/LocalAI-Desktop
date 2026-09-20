@@ -521,16 +521,20 @@ def test_chat_panel_exposes_extension_attachment_button():
     assert "ChatExtensionsDialog(" in open_source
     assert "dialog.saved.connect(self._chat_extensions_saved)" in open_source
     assert 'button.setText(f"EXT {count}")' in refresh_source
-    assert "runtime execution is not enabled yet" in refresh_source.lower()
+    assert "host " in refresh_source
+    assert "authority grants the requested capability." in refresh_source
 
 
-def test_chat_extension_attachments_are_not_injected_into_model_runtime_yet():
+def test_chat_extension_attachments_constrain_host_runtime_without_prompt_injection():
     from app.main_window import MainWindow
 
     send_source = inspect.getsource(MainWindow._send)
+    context_source = inspect.getsource(MainWindow._chat_extension_context)
 
     assert "attached_extensions" not in send_source
     assert "ChatExtensionsDialog" not in send_source
+    assert 'self.current_chat.get("attached_extensions")' in context_source
+    assert "ExtensionExecutionContext.desktop_chat(attached)" in context_source
 
 
 def test_chat_render_refreshes_extension_attachment_badge():
@@ -548,8 +552,12 @@ def test_prometheusz_bridge_starts_only_from_enabled_configured_extension():
     open_source = inspect.getsource(MainWindow._open_extensions)
     close_source = inspect.getsource(MainWindow.closeEvent)
 
-    assert 'find_by_preset_id("discord-bot")' in inspect.getsource(MainWindow._discord_bot_extension)
-    assert 'not bool(extension.get("enabled", False))' in sync
+    bot_source = inspect.getsource(MainWindow._discord_bot_extension)
+    assert "self.extension_authority.resolve_preset(" in bot_source
+    assert '"discord-bot"' in bot_source
+    assert '"remote_chat"' in bot_source
+    assert "ExtensionExecutionContext.background_service()" in bot_source
+    assert "if extension is None:" in sync
     assert "self.secret_store.get_secret" in sync
     assert "DiscordBotSettings.from_extension" in sync
     assert "DiscordBotBridge(" in sync
@@ -737,8 +745,10 @@ def test_live_crypto_quotes_prefer_enabled_market_data_extension():
     send_source = inspect.getsource(MainWindow._send)
     helper_source = inspect.getsource(MainWindow._crypto_market_extension)
 
-    assert 'find_by_preset_id("crypto-market-data")' in helper_source
+    assert "self.extension_authority.resolve_preset(" in helper_source
+    assert '"crypto-market-data"' in helper_source
     assert '"crypto_quote"' in helper_source
+    assert "self._chat_extension_context()" in helper_source
     assert "crypto_market_available=crypto_market_extension is not None" in send_source
     assert "ROUTE_CRYPTO_MARKET" in send_source
     assert "MarketDataWorker(" in send_source
@@ -801,9 +811,10 @@ def test_tradingview_workspace_uses_enabled_extension_config_or_safe_default():
     open_source = inspect.getsource(MainWindow._open_market_browser)
 
     assert '"https://www.tradingview.com/markets/"' in url_source
-    assert 'find_by_preset_id(' in url_source
+    assert "self.extension_authority.resolve_preset(" in url_source
     assert '"tradingview-workspace"' in url_source
-    assert 'extension.get("enabled", False)' in url_source
+    assert '"market_chart"' in url_source
+    assert "ExtensionExecutionContext.desktop_workspace()" in url_source
     assert 'config.get("workspace_url")' in url_source
     assert 'value.startswith(("https://", "http://"))' in url_source
     assert "self._open_resource(self._tradingview_workspace_url())" in open_source
@@ -815,9 +826,10 @@ def test_live_stock_forex_and_index_quotes_prefer_multi_asset_extension():
     send_source = inspect.getsource(MainWindow._send)
     helper_source = inspect.getsource(MainWindow._multi_asset_market_extension)
 
-    assert 'find_by_preset_id(' in helper_source
+    assert "self.extension_authority.resolve_preset(" in helper_source
     assert '"multi-asset-market-data"' in helper_source
     assert '"market_quote"' in helper_source
+    assert "self._chat_extension_context()" in helper_source
     assert "multi_asset_market_available=(" in send_source
     assert "ROUTE_MULTI_ASSET_MARKET" in send_source
     assert "MultiAssetMarketDataWorker(" in send_source
@@ -1048,3 +1060,11 @@ def test_desktop_poll_surfaces_background_scheduler_results():
     assert "self._load_chat_list()" in check_source
     assert "self.scheduler_store.is_leased(task)" in health_source
     assert "self.scheduler_store.is_leased(task)" in labels_source
+
+
+def test_main_window_owns_explicit_extension_authority():
+    from app.main_window import MainWindow
+
+    init_source = inspect.getsource(MainWindow.__init__)
+
+    assert "self.extension_authority = ExtensionAuthority(self.extension_store)" in init_source

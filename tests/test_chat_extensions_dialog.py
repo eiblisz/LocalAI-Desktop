@@ -16,13 +16,16 @@ def test_chat_extensions_dialog_is_per_chat_and_persists_selection():
     assert "self.saved.emit(selected)" in save
 
 
-def test_chat_extensions_dialog_shows_enabled_state_but_does_not_execute_tools():
+def test_chat_extensions_dialog_shows_enabled_state_and_authority_contract():
     load = inspect.getsource(ChatExtensionsDialog._load_extensions)
     module_source = inspect.getsource(ChatExtensionsDialog)
 
     assert '"ENABLED" if enabled else "DISABLED"' in load
     assert "Capabilities:" in load
-    assert "Chat runtime execution: not enabled yet" in load
+    assert "Runtime execution requires enabled state" in load
+    assert "declared capability" in load
+    assert "chat attachment" in load
+    assert "host permission" in load
     assert "requests." not in module_source
     assert "subprocess" not in module_source
 
