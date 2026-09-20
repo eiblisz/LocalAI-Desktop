@@ -39,6 +39,7 @@ from .ollama_client import OllamaClient
 from .scheduled_task_executor import ScheduledTaskExecutor
 from .weather_tool import get_weather, weather_context_text
 from .web_intent import answer_requires_web_fallback
+from .web_research_pipeline import WebResearchPipeline
 from .web_search_tool import (
     authoritative_current_fact,
     build_search_plan,
@@ -261,6 +262,8 @@ class ChatWebWorker(QObject):
         self.user_prompt = str(user_prompt or "").strip()
         self.compact_market_quote = bool(compact_market_quote)
         self._stop_event = threading.Event()
+        self.web_research_pipeline = WebResearchPipeline(self)
+        self._latest_evidence_ledgers = []
 
     def _recent_user_requests(self, limit=4):
         requests = []
@@ -459,7 +462,7 @@ class ChatWebWorker(QObject):
             return message
         return message[: max(0, limit - 3)].rstrip() + "..."
 
-    def _generate_search_queries(self):
+    def _generate_search_queries_legacy(self):
         prompt = self.user_prompt[:5000]
         use_previous_context = self._needs_previous_search_context()
         recent_requests = (
@@ -557,6 +560,12 @@ class ChatWebWorker(QObject):
         elif len(queries) == 1:
             queries = [self._preserve_search_constraints(queries[0])]
         return queries
+
+    def _generate_search_queries(self):
+        return self.web_research_pipeline.generate_search_queries(
+            self._generate_search_queries_legacy
+        )
+
 
     def _authoritative_fact_answer(self, fact):
         value = str(fact.get("value", "")).strip()
@@ -822,7 +831,7 @@ class ChatWebWorker(QObject):
         return compact
 
 
-    def _safe_evidence_failure(self, answer_rejected=False):
+    def _safe_evidence_failure_base(self, answer_rejected=False):
         if "Hungarian" in self._conversation_language_instruction():
             if answer_rejected:
                 return (
@@ -848,6 +857,14 @@ class ChatWebWorker(QObject):
         )
 
     @staticmethod
+    def _safe_evidence_failure(self, answer_rejected=False):
+        return self.web_research_pipeline.safe_evidence_failure(
+            answer_rejected=answer_rejected,
+            ledgers=self._latest_evidence_ledgers,
+            legacy_failure=self._safe_evidence_failure_base,
+        )
+
+
     def _evidence_diagnostic(ledgers, limit=6):
         lines = []
         for index, ledger in enumerate(list(ledgers or [])[:limit], start=1):
@@ -963,6 +980,7 @@ class ChatWebWorker(QObject):
                         query,
                         payload.get("results") or [],
                     )
+                    self._latest_evidence_ledgers = list(ledgers or [])
                     if constrained:
                         evidence_ledgers.extend(ledgers)
                         payload = dict(payload)
