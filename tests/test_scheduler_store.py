@@ -294,3 +294,33 @@ def test_active_lease_requires_attempt_and_owner_to_record_result(tmp_path: Path
         now=datetime(2026, 9, 20, 11, 1, 0),
     )
     assert updated["last_status"] == "success"
+
+
+def test_is_leased_only_reports_unexpired_claims(tmp_path: Path):
+    store = ScheduledTaskStore(tmp_path / "tasks.json")
+    task = store.upsert({
+        "name": "Visible lease",
+        "prompt": "run",
+        "model": "qwen-test",
+        "frequency": "hourly",
+        "enabled": True,
+    })
+    task["next_run_at"] = "2026-09-20T10:00:00"
+    store.upsert(task)
+
+    claimed = store.claim_task(
+        owner_id="runner-a",
+        task_id=task["id"],
+        now=datetime(2026, 9, 20, 11, 0, 0),
+        force=True,
+        lease_seconds=60,
+    )
+
+    assert store.is_leased(
+        claimed,
+        datetime(2026, 9, 20, 11, 0, 30),
+    )
+    assert not store.is_leased(
+        claimed,
+        datetime(2026, 9, 20, 11, 2, 0),
+    )
