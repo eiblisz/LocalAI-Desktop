@@ -1,7 +1,7 @@
 import pytest
 
 from app import workers
-from app.bilingual_search_patch import _BILINGUAL_QUERY_SCHEMA
+from app.web_research_pipeline import BILINGUAL_QUERY_SCHEMA
 
 
 class SequenceClient:
@@ -37,7 +37,7 @@ def test_new_hungarian_search_adds_normalized_hungarian_and_german_queries():
     ]
     assert len(client.calls) == 1
     assert "SEARCH AUTHORITY:" in client.calls[0][1][-1]["content"]
-    assert client.calls[0][2] == _BILINGUAL_QUERY_SCHEMA
+    assert client.calls[0][2] == BILINGUAL_QUERY_SCHEMA
 
 
 def test_invalid_bilingual_plan_fails_closed_without_legacy_query_fallback():
@@ -57,7 +57,7 @@ def test_invalid_bilingual_plan_fails_closed_without_legacy_query_fallback():
         worker._generate_search_queries()
 
     assert len(client.calls) == 1
-    assert client.calls[0][2] == _BILINGUAL_QUERY_SCHEMA
+    assert client.calls[0][2] == BILINGUAL_QUERY_SCHEMA
 
 
 def test_explicit_country_market_does_not_auto_expand_to_germany():
