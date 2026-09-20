@@ -740,11 +740,12 @@ class MainWindow(QMainWindow):
         self._load_chat_list()
 
     def _set_chat_closed(self, chat_id, closed):
+        active_generation_chat_id = str(self.generation_chat_id or "")
         if (
             closed
             and self.worker is not None
-            and self.current_chat
-            and self.current_chat.get("id") == chat_id
+            and active_generation_chat_id
+            and active_generation_chat_id == str(chat_id)
         ):
             QMessageBox.warning(
                 self,
