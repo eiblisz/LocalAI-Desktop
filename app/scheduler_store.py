@@ -186,11 +186,25 @@ class ScheduledTaskStore:
     def upsert(self, task):
         with self._exclusive_lock():
             tasks = [self._normalize(item) for item in self._load_all()]
-            item = self._normalize(task)
+            raw_item = dict(task)
+            item = self._normalize(raw_item)
             existing = next(
                 (i for i, current in enumerate(tasks) if current["id"] == item["id"]),
                 None,
             )
+
+            if existing is not None:
+                current = tasks[existing]
+                for field in (
+                    "lease_owner",
+                    "lease_until",
+                    "attempt_id",
+                    "attempt_started_at",
+                    "attempt_count",
+                    "last_attempt_id",
+                ):
+                    if field not in raw_item:
+                        item[field] = current.get(field, item.get(field))
 
             if not item.get("next_run_at"):
                 item["next_run_at"] = compute_next_run(item).isoformat(
