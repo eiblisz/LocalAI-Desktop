@@ -1,4 +1,9 @@
 from app.action_runtime import (
+    AUTH_ARTIFACT_CREATE,
+    AUTH_EXTERNAL_READ,
+    AUTH_LOCAL_MODEL,
+    AUTH_MEMORY_WRITE,
+    ROUTE_ARTIFACT,
     ROUTE_CHAT,
     ROUTE_CRYPTO_MARKET,
     ROUTE_MARKET_WEB,
@@ -89,3 +94,105 @@ def test_action_runtime_can_route_using_attachment_augmented_model_text():
     )
 
     assert decision.route in {ROUTE_MULTI_ASSET_MARKET, ROUTE_WEB}
+
+
+def test_action_runtime_routes_artifact_request_explicitly():
+    decision = ActionRuntime().decide(
+        "Készíts egy Red Executive PDF riportot a Bitcoinról."
+    )
+
+    assert decision.route == ROUTE_ARTIFACT
+    assert decision.use_web is False
+    assert decision.plan.artifact_plans[0].request.format == "pdf"
+
+
+def test_action_runtime_routes_web_grounded_artifact_as_one_contract():
+    runtime = ActionRuntime()
+    contracts = runtime.plan_many(
+        "Mi a legújabb Ollama verzió, és készíts róla egy rövid HTML riportot."
+    )
+
+    assert len(contracts) == 1
+    contract = contracts[0]
+    assert contract.route == ROUTE_ARTIFACT
+    assert contract.use_web is True
+    assert contract.artifact_plans[0].request.format == "html"
+    assert contract.required_authorities == (
+        AUTH_LOCAL_MODEL,
+        AUTH_ARTIFACT_CREATE,
+        AUTH_EXTERNAL_READ,
+    )
+
+
+def test_action_runtime_plans_numbered_tasks_independently_in_source_order():
+    runtime = ActionRuntime()
+    contracts = runtime.plan_many(
+        """1. Mennyi most a Bitcoin árfolyama?
+2. Magyarázd el röviden, mi az a TCP.
+3. Jegyezd meg, hogy a kedvenc tesztszínem a kék.
+4. Készíts egy Classic HTML riportot a TCP-ről.""",
+        crypto_market_available=True,
+    )
+
+    assert [item.index for item in contracts] == [0, 1, 2, 3]
+    assert [item.route for item in contracts] == [
+        ROUTE_CRYPTO_MARKET,
+        ROUTE_CHAT,
+        ROUTE_MEMORY_WRITE,
+        ROUTE_ARTIFACT,
+    ]
+    assert contracts[0].prompt.startswith("Mennyi most")
+    assert contracts[1].required_authorities == (AUTH_LOCAL_MODEL,)
+    assert contracts[2].required_authorities == (AUTH_MEMORY_WRITE,)
+    assert contracts[3].artifact_plans[0].request.format == "html"
+
+
+def test_action_runtime_model_context_suffix_can_help_route_each_unit_without_mutating_prompt():
+    runtime = ActionRuntime()
+    contracts = runtime.plan_many(
+        "1. Mi ennek az aktuális ára?\n2. Magyarázd el röviden.",
+        model_context_suffix="\n\nTSLA stock price",
+        force_web=True,
+        multi_asset_market_available=True,
+    )
+
+    assert len(contracts) == 2
+    assert contracts[0].prompt == "Mi ennek az aktuális ára?"
+    assert contracts[0].route in {ROUTE_MULTI_ASSET_MARKET, ROUTE_WEB}
+    assert contracts[1].prompt == "Magyarázd el röviden."
+
+
+def test_action_runtime_host_authority_validation_fails_closed():
+    runtime = ActionRuntime()
+    contract = runtime.plan_many(
+        "Készíts egy PDF riportot."
+    )[0]
+
+    authorization = runtime.authorize(
+        contract,
+        {AUTH_LOCAL_MODEL},
+    )
+
+    assert authorization.allowed is False
+    assert authorization.missing_authorities == (AUTH_ARTIFACT_CREATE,)
+
+    try:
+        runtime.validate_many(
+            [contract],
+            {AUTH_LOCAL_MODEL},
+        )
+    except PermissionError as exc:
+        assert "artifact_create" in str(exc)
+    else:
+        raise AssertionError("missing host authority must fail closed")
+
+
+def test_action_runtime_default_host_authorities_accept_existing_bounded_actions():
+    runtime = ActionRuntime()
+    contracts = runtime.plan_many(
+        """1. Jegyezd meg, hogy a kedvenc tesztszínem a kék.
+2. Mi a jelenlegi legfrissebb Qwen modell?
+3. Készíts egy PDF riportot a TCP-ről."""
+    )
+
+    assert runtime.validate_many(contracts) == contracts
