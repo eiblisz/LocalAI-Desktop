@@ -912,9 +912,38 @@ def test_model_refresh_preserves_saved_or_current_chat_model():
     source = inspect.getsource(MainWindow._refresh_local_model_hub)
 
     assert 'saved = str(self.current_chat.get("model") or "").strip()' in source
-    assert "preferred = saved or previous" in source
+    assert "preferred = saved or previous or PREFERRED_LOCAL_MODEL" in source
     assert "self.model_combo.findText(preferred)" in source
     assert "self.model_combo.setCurrentIndex(index)" in source
+
+
+def test_preferred_local_model_is_qwen3_coder_30b():
+    import app.config as config
+
+    assert config.PREFERRED_LOCAL_MODEL == "qwen3-coder:30b-a3b-q8_0"
+
+
+def test_startup_prefers_qwen3_coder_30b_over_alphabetical_first_model():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._refresh_local_model_hub)
+
+    assert "PREFERRED_LOCAL_MODEL" in source
+    assert "preferred = saved or previous or PREFERRED_LOCAL_MODEL" in source
+    assert "self.model_combo.findText(PREFERRED_LOCAL_MODEL)" in source
+
+
+def test_existing_chat_restores_saved_model_or_qwen30b_fallback():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._ensure_chat)
+
+    assert 'saved_model = str(self.current_chat.get("model") or "").strip()' in source
+    assert "self.model_combo.findText(saved_model)" in source
+    assert "self.model_combo.findText(PREFERRED_LOCAL_MODEL)" in source
+    assert "self.model_combo.blockSignals(True)" in source
+    assert "self.model_combo.setCurrentIndex(index)" in source
+    assert "self.model_combo.blockSignals(False)" in source
 
 
 def test_topbar_model_controls_share_one_compact_baseline():
