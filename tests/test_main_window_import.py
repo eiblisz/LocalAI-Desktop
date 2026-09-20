@@ -50,7 +50,8 @@ def test_schedule_button_and_scheduler_methods_are_wired():
     assert 'self.schedule_button = QPushButton("SCHEDULE")' in sidebar_source
     assert "_open_scheduler" in sidebar_source
     assert 'QPushButton("SCHEDULE")' not in tools_source
-    assert "due_tasks()" in check_source
+    assert "self.scheduler_runtime.next_due_task_id()" in check_source
+    assert "self.scheduler_runtime.get_task(task_id)" in run_source
     assert "ScheduledTaskWorker" in run_source
 
 
@@ -131,8 +132,8 @@ def test_normal_chat_has_web_auto_and_manual_web_toggle():
     assert 'QPushButton("WEB AUTO")' in build
     assert "setCheckable(True)" in build
     assert "self.web_button.isChecked()" in send
-    assert "plan_user_action(" in send
-    assert "ACTION_WEB_RESEARCH" in send
+    assert "self.action_runtime.decide(" in send
+    assert "action_decision.use_web" in send
     assert "ChatWebWorker" in send
     assert "AdaptiveChatWorker" in send
 
@@ -336,15 +337,15 @@ def test_explicit_memory_request_uses_dedicated_background_worker():
 
     source = inspect.getsource(MainWindow._send)
 
-    assert "plan_user_action(" in source
-    assert "action_plan.has(ACTION_MEMORY_WRITE)" in source
+    assert "self.action_runtime.decide(" in source
+    assert "action_decision.route == ROUTE_MEMORY_WRITE" in source
     assert "self.worker = MemoryWriteWorker(" in source
     assert "self.memory_store" in source
     assert "self.generation_chat_id" in source
     assert "self.worker.finished.connect(self._on_memory_finished)" in source
     assert "self.worker.failed.connect(self._on_memory_failed)" in source
-    assert source.index("action_plan.has(ACTION_MEMORY_WRITE)") < source.index(
-        "use_web = action_plan.has(ACTION_WEB_RESEARCH)"
+    assert source.index("action_decision.route == ROUTE_MEMORY_WRITE") < source.index(
+        "use_web = action_decision.use_web"
     )
 
 
@@ -811,7 +812,8 @@ def test_live_stock_forex_and_index_quotes_prefer_multi_asset_extension():
     assert 'find_by_preset_id(' in helper_source
     assert '"multi-asset-market-data"' in helper_source
     assert '"market_quote"' in helper_source
-    assert "is_multi_asset_quote_request(text_for_model)" in send_source
+    assert "multi_asset_market_available=(" in send_source
+    assert "ROUTE_MULTI_ASSET_MARKET" in send_source
     assert "MultiAssetMarketDataWorker(" in send_source
     assert "ChatWebWorker(" in send_source
     assert send_source.index("MultiAssetMarketDataWorker(") < send_source.index(
@@ -824,8 +826,10 @@ def test_crypto_and_multi_asset_structured_routing_remain_separate():
 
     source = inspect.getsource(MainWindow._send)
 
-    assert "is_crypto_quote_request(text_for_model)" in source
-    assert "is_multi_asset_quote_request(text_for_model)" in source
+    assert "crypto_market_available=crypto_market_extension is not None" in source
+    assert "multi_asset_market_available=(" in source
+    assert "ROUTE_CRYPTO_MARKET" in source
+    assert "ROUTE_MULTI_ASSET_MARKET" in source
     assert "MarketDataWorker(" in source
     assert "MultiAssetMarketDataWorker(" in source
 
@@ -965,3 +969,26 @@ def test_right_tool_buttons_force_sidebar_background_inline():
     assert "color:#AAB2BD;" in main_window_module.SIDE_MENU_BUTTON_INLINE_STYLE
     assert "QPushButton:hover" in main_window_module.SIDE_MENU_BUTTON_INLINE_STYLE
     assert "color:#FFFFFF;" in main_window_module.SIDE_MENU_BUTTON_INLINE_STYLE
+
+
+def test_main_window_owns_explicit_action_and_scheduler_runtimes():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow.__init__)
+
+    assert "self.scheduler_runtime = SchedulerRuntime(" in source
+    assert "self.action_runtime = ActionRuntime()" in source
+
+
+def test_scheduler_result_persistence_is_delegated_out_of_main_window():
+    from app.main_window import MainWindow
+
+    success_source = inspect.getsource(MainWindow._scheduled_task_finished)
+    failure_source = inspect.getsource(MainWindow._scheduled_task_failed)
+    chat_source = inspect.getsource(MainWindow._scheduled_task_chat)
+
+    assert "self.scheduler_runtime.complete(" in success_source
+    assert "self.scheduler_runtime.fail(task_id, message)" in failure_source
+    assert "self.scheduler_runtime.ensure_schedule_chat(task)" in chat_source
+    assert "self.store.save(chat)" not in success_source
+    assert "self.scheduler_store.mark_result" not in success_source
