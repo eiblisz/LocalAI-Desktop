@@ -70,7 +70,14 @@ class SchedulerRuntime:
         attempt_id="",
         owner_id="",
     ):
-        task = self.get_task(task_id)
+        if attempt_id or owner_id:
+            task = self.scheduler_store.validate_claim(
+                task_id,
+                attempt_id=attempt_id,
+                owner_id=owner_id,
+            )
+        else:
+            task = self.get_task(task_id)
         chat = self.ensure_schedule_chat(task)
         stamp = self._now_provider().strftime("%Y-%m-%d %H:%M")
         chat["messages"].append(
