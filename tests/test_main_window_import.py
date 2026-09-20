@@ -133,14 +133,16 @@ def test_normal_chat_has_web_auto_and_manual_web_toggle():
 
     build = inspect.getsource(MainWindow._build_chat_panel)
     send = inspect.getsource(MainWindow._send)
+    run = inspect.getsource(MainWindow._run_next_action_contract)
 
     assert 'QPushButton("WEB AUTO")' in build
     assert "setCheckable(True)" in build
     assert "self.web_button.isChecked()" in send
-    assert "self.action_runtime.decide(" in send
-    assert "action_decision.use_web" in send
-    assert "ChatWebWorker" in send
-    assert "AdaptiveChatWorker" in send
+    assert "self.action_runtime.plan_many(" in send
+    assert "self.action_runtime.validate_many(contracts)" in send
+    assert "contract.use_web" in run
+    assert "ChatWebWorker" in run
+    assert "AdaptiveChatWorker" in run
 
 
 def test_web_auto_detects_explicit_search_intent():
@@ -185,7 +187,7 @@ def test_chat_uses_pulsing_thinking_indicator_until_complete():
     from app.main_window import MainWindow
 
     build_source = inspect.getsource(MainWindow._build_chat_panel)
-    send_source = inspect.getsource(MainWindow._send)
+    run_source = inspect.getsource(MainWindow._run_next_action_contract)
     start_source = inspect.getsource(MainWindow._start_thinking_indicator)
     pulse_source = inspect.getsource(MainWindow._pulse_thinking_indicator)
     finished_source = inspect.getsource(MainWindow._on_finished)
@@ -194,7 +196,7 @@ def test_chat_uses_pulsing_thinking_indicator_until_complete():
 
     assert 'self.thinking_label = QLabel("")' in build_source
     assert "setFixedHeight(26)" in build_source
-    assert "_start_thinking_indicator(use_web)" in send_source
+    assert "_start_thinking_indicator(contract.use_web)" in run_source
     assert '"Gondolkodik"' in start_source
     assert '"Keres es gondolkodik"' in start_source
     assert "thinking_timer.start()" in start_source
@@ -329,29 +331,28 @@ def test_memory_context_builder_is_bounded_and_runtime_only():
 def test_send_injects_memory_into_system_prompt_not_saved_chat():
     from app.main_window import MainWindow
 
-    source = inspect.getsource(MainWindow._send)
+    send_source = inspect.getsource(MainWindow._send)
+    messages_source = inspect.getsource(MainWindow._action_messages_for_model)
 
-    assert "memory_context = self._build_memory_context(text)" in source
-    assert 'system_prompt = f"{system_prompt}\\n\\n{memory_context}"' in source
-    assert 'messages_for_model = [{"role": "system", "content": system_prompt}]' in source
-    assert 'self.current_chat["messages"].append({"role": "user", "content": text})' in source
-    assert 'self.current_chat["messages"].append({"role": "system"' not in source
+    assert "memory_context = self._build_memory_context(prompt)" in messages_source
+    assert 'system_prompt = f"{system_prompt}\\n\\n{memory_context}"' in messages_source
+    assert 'messages = [{"role": "system", "content": system_prompt}]' in messages_source
+    assert '{"role": "user", "content": text}' in send_source
+    assert 'self.current_chat["messages"].append({"role": "system"' not in send_source
 
 def test_explicit_memory_request_uses_dedicated_background_worker():
     from app.main_window import MainWindow
 
-    source = inspect.getsource(MainWindow._send)
+    send_source = inspect.getsource(MainWindow._send)
+    run_source = inspect.getsource(MainWindow._run_next_action_contract)
 
-    assert "self.action_runtime.decide(" in source
-    assert "action_decision.route == ROUTE_MEMORY_WRITE" in source
-    assert "self.worker = MemoryWriteWorker(" in source
-    assert "self.memory_store" in source
-    assert "self.generation_chat_id" in source
-    assert "self.worker.finished.connect(self._on_memory_finished)" in source
-    assert "self.worker.failed.connect(self._on_memory_failed)" in source
-    assert source.index("action_decision.route == ROUTE_MEMORY_WRITE") < source.index(
-        "use_web = action_decision.use_web"
-    )
+    assert "self.action_runtime.plan_many(" in send_source
+    assert "contract.route == ROUTE_MEMORY_WRITE" in run_source
+    assert "self.worker = MemoryWriteWorker(" in run_source
+    assert "self.memory_store" in run_source
+    assert "self.generation_chat_id" in run_source
+    assert "self.worker.finished.connect(self._on_memory_finished)" in run_source
+    assert "self.worker.failed.connect(self._on_memory_failed)" in run_source
 
 
 def test_memory_write_completion_is_bound_to_originating_chat():
@@ -743,6 +744,7 @@ def test_live_crypto_quotes_prefer_enabled_market_data_extension():
     from app.main_window import MainWindow
 
     send_source = inspect.getsource(MainWindow._send)
+    run_source = inspect.getsource(MainWindow._run_next_action_contract)
     helper_source = inspect.getsource(MainWindow._crypto_market_extension)
 
     assert "self.extension_authority.resolve_preset(" in helper_source
@@ -750,10 +752,10 @@ def test_live_crypto_quotes_prefer_enabled_market_data_extension():
     assert '"crypto_quote"' in helper_source
     assert "self._chat_extension_context()" in helper_source
     assert "crypto_market_available=crypto_market_extension is not None" in send_source
-    assert "ROUTE_CRYPTO_MARKET" in send_source
-    assert "MarketDataWorker(" in send_source
-    assert "ChatWebWorker(" in send_source
-    assert send_source.index("MarketDataWorker(") < send_source.index("ChatWebWorker(")
+    assert "ROUTE_CRYPTO_MARKET" in run_source
+    assert "MarketDataWorker(" in run_source
+    assert "ChatWebWorker(" in run_source
+    assert run_source.index("MarketDataWorker(") < run_source.index("ChatWebWorker(")
 
 
 def test_discord_bridge_receives_shared_extension_store_for_market_runtime():
@@ -828,6 +830,7 @@ def test_live_stock_forex_and_index_quotes_prefer_multi_asset_extension():
     from app.main_window import MainWindow
 
     send_source = inspect.getsource(MainWindow._send)
+    run_source = inspect.getsource(MainWindow._run_next_action_contract)
     helper_source = inspect.getsource(MainWindow._multi_asset_market_extension)
 
     assert "self.extension_authority.resolve_preset(" in helper_source
@@ -835,10 +838,10 @@ def test_live_stock_forex_and_index_quotes_prefer_multi_asset_extension():
     assert '"market_quote"' in helper_source
     assert "self._chat_extension_context()" in helper_source
     assert "multi_asset_market_available=(" in send_source
-    assert "ROUTE_MULTI_ASSET_MARKET" in send_source
-    assert "MultiAssetMarketDataWorker(" in send_source
-    assert "ChatWebWorker(" in send_source
-    assert send_source.index("MultiAssetMarketDataWorker(") < send_source.index(
+    assert "ROUTE_MULTI_ASSET_MARKET" in run_source
+    assert "MultiAssetMarketDataWorker(" in run_source
+    assert "ChatWebWorker(" in run_source
+    assert run_source.index("MultiAssetMarketDataWorker(") < run_source.index(
         "ChatWebWorker("
     )
 
@@ -846,14 +849,15 @@ def test_live_stock_forex_and_index_quotes_prefer_multi_asset_extension():
 def test_crypto_and_multi_asset_structured_routing_remain_separate():
     from app.main_window import MainWindow
 
-    source = inspect.getsource(MainWindow._send)
+    send_source = inspect.getsource(MainWindow._send)
+    run_source = inspect.getsource(MainWindow._run_next_action_contract)
 
-    assert "crypto_market_available=crypto_market_extension is not None" in source
-    assert "multi_asset_market_available=(" in source
-    assert "ROUTE_CRYPTO_MARKET" in source
-    assert "ROUTE_MULTI_ASSET_MARKET" in source
-    assert "MarketDataWorker(" in source
-    assert "MultiAssetMarketDataWorker(" in source
+    assert "crypto_market_available=crypto_market_extension is not None" in send_source
+    assert "multi_asset_market_available=(" in send_source
+    assert "ROUTE_CRYPTO_MARKET" in run_source
+    assert "ROUTE_MULTI_ASSET_MARKET" in run_source
+    assert "MarketDataWorker(" in run_source
+    assert "MultiAssetMarketDataWorker(" in run_source
 
 
 def test_chat_input_accepts_clipboard_images_as_ollama_image_payloads():
@@ -1091,3 +1095,46 @@ def test_chat_and_artifact_links_share_internal_resource_authority():
     assert "self._open_resource(url.toString())" in artifact_source
     assert "self._open_resource(target)" in artifact_source
     assert "self._open_resource(self._tradingview_workspace_url())" in market_source
+
+
+def test_desktop_executes_validated_multi_action_contracts_in_order():
+    from app.main_window import MainWindow
+
+    init_source = inspect.getsource(MainWindow.__init__)
+    send_source = inspect.getsource(MainWindow._send)
+    run_source = inspect.getsource(MainWindow._run_next_action_contract)
+    cleanup_source = inspect.getsource(MainWindow._cleanup_worker)
+
+    assert "self.pending_action_contracts = []" in init_source
+    assert "self.action_runtime.plan_many(" in send_source
+    assert "self.action_runtime.validate_many(contracts)" in send_source
+    assert "self.pending_action_contracts = list(contracts)" in send_source
+    assert "pop(0)" in run_source
+    assert "self.active_action_contract = contract" in run_source
+    assert "if self.pending_action_contracts:" in cleanup_source
+    assert "self._run_next_action_contract" in cleanup_source
+
+
+def test_desktop_action_units_do_not_reinject_original_multi_task_prompt():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._action_messages_for_model)
+
+    assert "self.pending_action_original_text" in source
+    assert "original_index" in source
+    assert "if index == original_index:" in source
+    assert '"content": prompt + self.pending_action_context_suffix' in source
+
+
+def test_desktop_artifact_action_uses_bounded_artifact_worker():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._run_next_action_contract)
+    finished = inspect.getsource(MainWindow._on_action_artifacts_finished)
+
+    assert "contract.route == ROUTE_ARTIFACT" in source
+    assert "ArtifactActionWorker(" in source
+    assert "contract.artifact_plans" in source
+    assert "use_web=contract.use_web" in source
+    assert '"role": "artifact"' in finished
+    assert "self.last_artifact_path = created[-1]" in finished
