@@ -22,7 +22,7 @@ class SchedulerRuntime:
         self._now_provider = now_provider or datetime.now
 
     def next_due_task_id(self):
-        due = self.scheduler_store.due_tasks()
+        due = self.scheduler_store.due_tasks(self._now_provider())
         if not due:
             return ""
         return str(due[0].get("id") or "")
