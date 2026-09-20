@@ -257,3 +257,40 @@ def test_task_edit_preserves_active_execution_authority(tmp_path: Path):
     assert saved["lease_owner"] == "runner-a"
     assert saved["attempt_id"] == claimed["attempt_id"]
     assert saved["attempt_count"] == 1
+
+
+def test_active_lease_requires_attempt_and_owner_to_record_result(tmp_path: Path):
+    store = ScheduledTaskStore(tmp_path / "tasks.json")
+    task = store.upsert({
+        "name": "Authority required",
+        "prompt": "run",
+        "model": "qwen-test",
+        "frequency": "hourly",
+        "enabled": True,
+    })
+    task["next_run_at"] = "2026-09-20T10:00:00"
+    store.upsert(task)
+
+    claim = store.claim_task(
+        owner_id="runner-a",
+        task_id=task["id"],
+        now=datetime(2026, 9, 20, 11, 0, 0),
+        force=True,
+        lease_seconds=600,
+    )
+
+    with pytest.raises(RuntimeError, match="attempt_id is required"):
+        store.mark_result(
+            task["id"],
+            status="success",
+            now=datetime(2026, 9, 20, 11, 1, 0),
+        )
+
+    updated = store.mark_result(
+        task["id"],
+        status="success",
+        attempt_id=claim["attempt_id"],
+        owner_id="runner-a",
+        now=datetime(2026, 9, 20, 11, 1, 0),
+    )
+    assert updated["last_status"] == "success"
