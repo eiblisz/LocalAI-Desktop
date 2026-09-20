@@ -355,6 +355,14 @@ class ScheduledTaskStore:
             active_attempt = str(task.get("attempt_id") or "")
             active_owner = str(task.get("lease_owner") or "")
 
+            if active_attempt and not attempt_id:
+                raise RuntimeError(
+                    "attempt_id is required to complete an active scheduler lease"
+                )
+            if active_owner and not owner_id:
+                raise RuntimeError(
+                    "owner_id is required to complete an active scheduler lease"
+                )
             if attempt_id and active_attempt != str(attempt_id):
                 raise RuntimeError("stale scheduler attempt cannot record a result")
             if owner_id and active_owner != str(owner_id):
