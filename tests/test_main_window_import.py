@@ -1161,3 +1161,17 @@ def test_desktop_artifact_action_uses_bounded_artifact_worker():
     assert "use_web=contract.use_web" in source
     assert '"role": "artifact"' in finished
     assert "self.last_artifact_path = created[-1]" in finished
+
+
+def test_new_chat_uses_preferred_qwen3_coder_30b_when_available():
+    from app.main_window import MainWindow
+
+    helper_source = inspect.getsource(MainWindow._default_local_model)
+    new_source = inspect.getsource(MainWindow._new_chat)
+    ensure_source = inspect.getsource(MainWindow._ensure_chat)
+
+    assert "self.model_combo.findText(PREFERRED_LOCAL_MODEL)" in helper_source
+    assert "return PREFERRED_LOCAL_MODEL" in helper_source
+    assert "self._default_local_model()" in new_source
+    assert "self.store.new_chat(default_model)" in new_source
+    assert "self._default_local_model()" in ensure_source
