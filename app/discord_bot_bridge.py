@@ -8,6 +8,7 @@ import discord
 import requests
 from PySide6.QtCore import QObject, Signal
 
+from .action_runtime import ActionRuntime
 from .artifact_service import (
     ArtifactPlanItem,
     create_artifact,
@@ -41,7 +42,6 @@ from .web_intent import (
     ACTION_WEB_RESEARCH,
     answer_requires_web_fallback,
     plan_user_action,
-    plan_user_actions,
 )
 from .workers import run_chat_web_request, run_market_web_request
 
@@ -183,6 +183,7 @@ class DiscordBotBridge(QObject):
             if extension_store is not None
             else None
         )
+        self.action_runtime = ActionRuntime()
         self.settings = settings
         self.token = validate_bot_token(token)
         self._thread = None
@@ -263,13 +264,24 @@ class DiscordBotBridge(QObject):
 
             async with request_lock:
                 try:
+                    contracts = self.action_runtime.plan_many(
+                        content,
+                        crypto_market_available=(
+                            self._crypto_market_extension() is not None
+                        ),
+                        multi_asset_market_available=(
+                            self._multi_asset_market_extension() is not None
+                        ),
+                    )
+                    contracts = self.action_runtime.validate_many(contracts)
+
                     last_chat_id = ""
-                    for planned in plan_user_actions(content):
+                    for contract in contracts:
                         async with message.channel.typing():
                             result = await asyncio.to_thread(
                                 self._execute_planned_action,
-                                planned.prompt,
-                                planned.plan,
+                                contract.prompt,
+                                contract.plan,
                             )
 
                         last_chat_id = str(result.get("chat_id", "") or last_chat_id)
