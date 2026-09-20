@@ -174,6 +174,17 @@ class ScheduledTaskStore:
         task.setdefault("last_attempt_id", "")
         return task
 
+    @staticmethod
+    def is_leased(task, now=None):
+        now = now or datetime.now()
+        lease_until = _parse_iso(task.get("lease_until"))
+        return bool(
+            str(task.get("lease_owner") or "").strip()
+            and str(task.get("attempt_id") or "").strip()
+            and lease_until is not None
+            and lease_until > now
+        )
+
     def list_tasks(self):
         return [self._normalize(item) for item in self._load_all()]
 
