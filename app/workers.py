@@ -4,6 +4,12 @@ import unicodedata
 
 from PySide6.QtCore import QObject, Signal, Slot
 
+from .artifact_service import ArtifactPlanItem, create_artifact
+from .document_tools import (
+    build_document_messages,
+    build_excel_messages,
+    build_summary_messages,
+)
 from .computer_status_tool import (
     computer_status_context_text,
     get_computer_status,
@@ -1377,6 +1383,224 @@ class AdaptiveChatWorker(QObject):
             if final:
                 self.token.emit(final)
             self.finished.emit()
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+    def stop(self):
+        self._stop_event.set()
+
+
+def _grounded_artifact_version_tokens(text):
+    return set(
+        re.findall(
+            r"(?i)(?:\bv?\d+(?:\.\d+){1,3}(?:[-+][0-9a-z.-]+)?\b|"
+            r"\b[a-z][a-z0-9_-]*\d+(?:\.\d+){1,3}\b)",
+            str(text or ""),
+        )
+    )
+
+
+def _grounded_artifact_url_tokens(text):
+    return set(
+        re.findall(r"https?://[^\s)\]>]+", str(text or ""))
+    )
+
+
+def _grounded_artifact_risk_tokens(text):
+    value = str(text or "")
+    patterns = (
+        r"(?<!\w)[$€£]\s*\d+(?:[.,]\d+)?(?:\s*(?:usd|eur|gbp|huf))?",
+        r"\b\d+(?:[.,]\d+)?\s*(?:usd|eur|gbp|huf|btc|eth|%)\b",
+        r"\b\d{4}-\d{2}-\d{2}\b",
+        r"\b\d{4}/\d{2}/\d{2}\b",
+        r"\b(?:19|20)\d{2}\b",
+    )
+    tokens = set()
+    for pattern in patterns:
+        tokens.update(re.findall(pattern, value, flags=re.IGNORECASE))
+    return tokens
+
+
+def grounded_artifact_unsupported_tokens(content, authority_text):
+    """
+    Return factual literals introduced by generated artifact content that are
+    absent from the user request + verified grounded source context.
+    """
+    content = str(content or "")
+    authority_text = str(authority_text or "")
+
+    unsupported = set()
+    unsupported.update(
+        _grounded_artifact_version_tokens(content)
+        - _grounded_artifact_version_tokens(authority_text)
+    )
+    unsupported.update(
+        _grounded_artifact_url_tokens(content)
+        - _grounded_artifact_url_tokens(authority_text)
+    )
+    unsupported.update(
+        _grounded_artifact_risk_tokens(content)
+        - _grounded_artifact_risk_tokens(authority_text)
+    )
+    return tuple(sorted(unsupported, key=str.casefold))
+
+
+class ArtifactActionWorker(QObject):
+    finished = Signal(object)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        client: OllamaClient,
+        model: str,
+        messages: list[dict],
+        user_prompt: str,
+        artifact_plans,
+        *,
+        use_web=False,
+    ):
+        super().__init__()
+        self.client = client
+        self.model = model
+        self.messages = [dict(message) for message in messages]
+        self.user_prompt = str(user_prompt or "").strip()
+        self.artifact_plans = tuple(artifact_plans or ())
+        self.use_web = bool(use_web)
+        self._stop_event = threading.Event()
+
+    def _artifact_messages(self, plan, source_context=""):
+        if not isinstance(plan, ArtifactPlanItem):
+            raise TypeError(
+                "artifact_plans must contain ArtifactPlanItem values"
+            )
+
+        prompt = str(plan.prompt or self.user_prompt).strip()
+        if source_context:
+            prompt = (
+                prompt
+                + "\n\nVERIFIED WEB RESEARCH SOURCE:\n"
+                + source_context
+                + "\n\nGROUNDING CONTRACT:\n"
+                + "Use the verified source above as the factual authority. "
+                + "Do not introduce any version number, date, year, price, "
+                + "percentage, currency amount, URL, or other numeric factual "
+                + "literal that is not explicitly present in the verified "
+                + "source or the user request. If a requested fact is absent, "
+                + "state that it is unknown from the verified source. "
+                + "Do not fill gaps from model memory."
+            )
+
+        fmt = plan.request.format
+        if fmt == "xlsx":
+            return build_excel_messages(prompt)
+        if fmt == "summary":
+            return build_summary_messages(prompt)
+        return build_document_messages(prompt)
+
+    @Slot()
+    def run(self):
+        try:
+            if not self.artifact_plans:
+                raise RuntimeError("Artifact action contains no artifact plan.")
+
+            source_context = ""
+            if self.use_web:
+                source_context = run_chat_web_request(
+                    self.client,
+                    self.model,
+                    self.messages,
+                    self.user_prompt,
+                ).strip()
+
+            results = []
+            for plan in self.artifact_plans:
+                if self._stop_event.is_set():
+                    break
+
+                content = self.client.chat_once(
+                    model=self.model,
+                    messages=self._artifact_messages(
+                        plan,
+                        source_context=source_context,
+                    ),
+                ).strip()
+                if not content:
+                    raise RuntimeError(
+                        "The model returned empty artifact content."
+                    )
+
+                if source_context:
+                    authority_text = (
+                        self.user_prompt
+                        + "\n"
+                        + str(plan.prompt or "")
+                        + "\n"
+                        + source_context
+                    )
+                    unsupported = grounded_artifact_unsupported_tokens(
+                        content,
+                        authority_text,
+                    )
+                    if unsupported:
+                        repair_messages = self._artifact_messages(
+                            plan,
+                            source_context=source_context,
+                        )
+                        repair_messages = list(repair_messages) + [
+                            {
+                                "role": "system",
+                                "content": (
+                                    "The previous draft was rejected because it "
+                                    "introduced unsupported factual literals: "
+                                    + ", ".join(unsupported)
+                                    + ". Regenerate the artifact content from "
+                                    "the verified source only. Preserve supported "
+                                    "facts exactly and omit unsupported literals."
+                                ),
+                            }
+                        ]
+                        content = self.client.chat_once(
+                            model=self.model,
+                            messages=repair_messages,
+                        ).strip()
+                        if not content:
+                            raise RuntimeError(
+                                "The grounded artifact repair returned empty content."
+                            )
+
+                        unsupported = grounded_artifact_unsupported_tokens(
+                            content,
+                            authority_text,
+                        )
+                        if unsupported:
+                            raise RuntimeError(
+                                "Grounded artifact rejected unsupported factual "
+                                "literals: " + ", ".join(unsupported)
+                            )
+
+                path = create_artifact(
+                    plan.request.format,
+                    content=content,
+                    title=self.user_prompt[:96] or "Local AI Document",
+                    preset=plan.request.preset,
+                    source_text=(
+                        self.user_prompt
+                        + (
+                            "\n\nVERIFIED WEB RESEARCH SOURCE:\n"
+                            + source_context
+                            if source_context
+                            else ""
+                        )
+                    ),
+                    model_name=self.model,
+                )
+                results.append({
+                    "path": str(path),
+                    "format": plan.request.format,
+                    "preset": plan.request.preset,
+                })
+
+            self.finished.emit(results)
         except Exception as exc:
             self.failed.emit(str(exc))
 

@@ -1129,3 +1129,15 @@ def test_discord_market_extensions_use_remote_host_authority():
     assert '"multi-asset-market-data"' in multi_source
     assert '"market_quote"' in multi_source
     assert "ExtensionExecutionContext.discord_remote()" in multi_source
+
+
+def test_prometheusz_uses_action_planner_v2_contracts_before_execution():
+    source = inspect.getsource(DiscordBotBridge._run)
+    init_source = inspect.getsource(DiscordBotBridge.__init__)
+
+    assert "self.action_runtime = ActionRuntime()" in init_source
+    assert "self.action_runtime.plan_many(" in source
+    assert "self.action_runtime.validate_many(contracts)" in source
+    assert "for contract in contracts:" in source
+    assert "contract.prompt" in source
+    assert "contract.plan" in source
