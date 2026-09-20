@@ -15,6 +15,10 @@ from .artifact_service import (
     infer_artifact_requests,
 )
 from .config import DEFAULT_SYSTEM_PROMPT
+from .extension_authority import (
+    ExtensionAuthority,
+    ExtensionExecutionContext,
+)
 from .crypto_market_data import (
     is_crypto_quote_request,
     run_crypto_market_request,
