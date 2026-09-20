@@ -114,8 +114,7 @@ def test_schedule_click_without_history_is_fail_closed_and_creates_nothing():
 def test_existing_scheduler_completion_still_persists_and_does_not_steal_chat():
     source = inspect.getsource(MainWindow._scheduled_task_finished)
 
-    assert "self.store.save(chat)" in source
-    assert "self.scheduler_store.mark_result" in source
+    assert "self.scheduler_runtime.complete(" in source
     assert "current_id == scheduled_chat_id" in source
     assert "_load_chat_list()" in source
 

@@ -1181,12 +1181,84 @@ def _extract_release_value(item, query=""):
     return ""
 
 
+def _family_generation_key(query, value):
+    identity_terms = _authority_identity_terms(query)
+    clean = str(value or "").strip()
+
+    for term in identity_terms:
+        match = re.fullmatch(
+            rf"{re.escape(term)}\s*[-_]?\s*(\d+(?:\.\d+){{1,3}})",
+            clean,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            continue
+        try:
+            return (
+                term.lower(),
+                tuple(int(part) for part in match.group(1).split(".")),
+            )
+        except ValueError:
+            return None
+    return None
+
+
+def select_authoritative_current_fact(query, facts):
+    """
+    Resolve several first-party current-version facts into one canonical fact.
+
+    Software semver/release tags preserve source ranking order. Named model or
+    product-family generations (for example Nimbus2.5 vs Nimbus3.8) are compared
+    numerically within the same requested family so an older official page does
+    not override a newer official family generation.
+    """
+    candidates = [
+        dict(fact)
+        for fact in (facts or [])
+        if fact and fact.get("kind") == "latest_release"
+    ]
+    if not candidates:
+        return None
+
+    query_qualifiers = (
+        _split_identity_tokens(query) & _ENTITY_SCOPE_QUALIFIERS
+    )
+    if query_qualifiers:
+        return candidates[0]
+
+    family_candidates = []
+    for index, fact in enumerate(candidates):
+        parsed = _family_generation_key(query, fact.get("value", ""))
+        if parsed is None:
+            continue
+        family_name, generation = parsed
+        family_candidates.append(
+            (family_name, generation, -index, fact)
+        )
+
+    if family_candidates:
+        requested_terms = set(_authority_identity_terms(query))
+        matching = [
+            item
+            for item in family_candidates
+            if item[0] in requested_terms
+        ]
+        if matching:
+            return max(
+                matching,
+                key=lambda item: (item[1], item[2]),
+            )[3]
+
+    return candidates[0]
+
+
 def authoritative_current_fact(payload):
     query = str(payload.get("query", "")).strip()
     if not is_current_version_query(query):
         return None
 
     ranked = rank_authoritative_results(query, payload.get("results") or [])
+    candidates = []
     for item in ranked:
         score = _authority_score(query, item)
         if score < 300:
@@ -1198,15 +1270,15 @@ def authoritative_current_fact(payload):
 
         url = _decode_bing_result_url(str(item.get("url", "")).strip())
         title = " ".join(str(item.get("title", "")).split()) or url
-        return {
+        candidates.append({
             "kind": "latest_release",
             "value": value,
             "url": url,
             "title": title,
             "authority": "first_party",
-        }
+        })
 
-    return None
+    return select_authoritative_current_fact(query, candidates)
 
 
 def source_urls(payload, limit=10):

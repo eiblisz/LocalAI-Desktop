@@ -35,6 +35,7 @@ from .web_intent import answer_requires_web_fallback
 from .web_search_tool import (
     authoritative_current_fact,
     build_search_plan,
+    select_authoritative_current_fact,
     is_current_version_query,
     search_web,
     source_entries,
@@ -572,14 +573,21 @@ class ChatWebWorker(QObject):
             f"**{value}**. Source: {source}"
         )
 
+    def _canonical_authoritative_fact(self, facts):
+        return select_authoritative_current_fact(
+            self.user_prompt,
+            facts,
+        )
+
     def _enforce_authoritative_facts(self, answer, facts):
         final = str(answer or "").strip()
-        for fact in facts or []:
-            if fact.get("kind") != "latest_release":
-                continue
-            value = str(fact.get("value", "")).strip()
-            if value and value not in final:
-                return self._authoritative_fact_answer(fact)
+        fact = self._canonical_authoritative_fact(facts)
+        if not fact:
+            return final
+
+        value = str(fact.get("value", "")).strip()
+        if value and value not in final:
+            return self._authoritative_fact_answer(fact)
         return final
 
 
@@ -607,9 +615,9 @@ class ChatWebWorker(QObject):
         if not is_current_version_query(self.user_prompt):
             return final
 
-        for fact in authoritative_facts or []:
-            if fact.get("kind") == "latest_release":
-                return self._authoritative_fact_answer(fact)
+        fact = self._canonical_authoritative_fact(authoritative_facts)
+        if fact:
+            return self._authoritative_fact_answer(fact)
 
         if len(final) <= 700:
             return final

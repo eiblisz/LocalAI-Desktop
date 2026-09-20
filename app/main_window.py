@@ -1,7 +1,6 @@
 import base64
 import html
 import re
-from datetime import datetime
 from pathlib import Path
 
 import markdown
@@ -29,6 +28,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .action_runtime import (
+    ROUTE_CHAT,
+    ROUTE_CRYPTO_MARKET,
+    ROUTE_MARKET_WEB,
+    ROUTE_MEMORY_WRITE,
+    ROUTE_MULTI_ASSET_MARKET,
+    ROUTE_WEB,
+    ActionRuntime,
+)
 from .artifact_service import create_artifact
 from .artifact_utils import (
     artifact_url,
@@ -36,7 +44,6 @@ from .artifact_utils import (
     path_from_artifact_url,
 )
 from .config import APP_NAME, DEFAULT_SYSTEM_PROMPT
-from .crypto_market_data import is_crypto_quote_request
 from .document_tools import (
     build_document_messages,
     build_excel_messages,
@@ -60,19 +67,14 @@ from .language_policy import response_language_instruction
 from .memory_answers import direct_user_memory_answer
 from .memory_extractor import is_explicit_memory_request
 from .memory_store import MemoryStore
-from .multi_asset_market_data import is_multi_asset_quote_request
 from .ollama_client import OllamaClient
 from .resource_monitor import format_resource_summary, get_system_metrics
 from .scheduler_dialog import SchedulerDialog
+from .scheduler_runtime import SchedulerRuntime
 from .scheduler_store import ScheduledTaskStore
 from .secret_store import SecretStore
 from .storage import ChatStore
-from .web_intent import (
-    ACTION_MEMORY_WRITE,
-    ACTION_WEB_RESEARCH,
-    looks_like_web_request,
-    plan_user_action,
-)
+from .web_intent import looks_like_web_request
 from .workers import (
     AdaptiveChatWorker,
     ChatWebWorker,
@@ -332,6 +334,11 @@ class MainWindow(QMainWindow):
         self.active_tool = "PDF"
         self.last_artifact_path = None
         self.scheduler_store = ScheduledTaskStore()
+        self.scheduler_runtime = SchedulerRuntime(
+            self.scheduler_store,
+            self.store,
+        )
+        self.action_runtime = ActionRuntime()
         self.scheduler_dialog = None
         self.extension_store = ExtensionStore()
         self.extensions_dialog = None
@@ -1192,12 +1199,19 @@ class MainWindow(QMainWindow):
         self._load_chat_list()
         self._render_chat()
 
-        action_plan = plan_user_action(
+        crypto_market_extension = self._crypto_market_extension()
+        multi_asset_market_extension = self._multi_asset_market_extension()
+        action_decision = self.action_runtime.decide(
             text,
+            model_text=text_for_model,
             force_web=self.web_button.isChecked(),
+            crypto_market_available=crypto_market_extension is not None,
+            multi_asset_market_available=(
+                multi_asset_market_extension is not None
+            ),
         )
 
-        if action_plan.has(ACTION_MEMORY_WRITE):
+        if action_decision.route == ROUTE_MEMORY_WRITE:
             self.partial_assistant = ""
             self.current_chat_uses_web = False
             self.thread = QThread()
@@ -1250,24 +1264,13 @@ class MainWindow(QMainWindow):
             model_user_message["images"] = image_payloads
         messages_for_model.append(model_user_message)
 
-        use_web = action_plan.has(ACTION_WEB_RESEARCH)
+        use_web = action_decision.use_web
 
         self.partial_assistant = ""
         self.current_chat_uses_web = use_web
         self.thread = QThread()
 
-        crypto_market_extension = (
-            self._crypto_market_extension()
-            if use_web and is_crypto_quote_request(text_for_model)
-            else None
-        )
-        multi_asset_market_extension = (
-            self._multi_asset_market_extension()
-            if use_web and is_multi_asset_quote_request(text_for_model)
-            else None
-        )
-
-        if crypto_market_extension is not None:
+        if action_decision.route == ROUTE_CRYPTO_MARKET:
             self.status.setText("Crypto market data...")
             self.worker = MarketDataWorker(
                 self.client,
@@ -1276,7 +1279,7 @@ class MainWindow(QMainWindow):
                 text_for_model,
                 crypto_market_extension,
             )
-        elif multi_asset_market_extension is not None:
+        elif action_decision.route == ROUTE_MULTI_ASSET_MARKET:
             self.status.setText("Multi-asset market data...")
             self.worker = MultiAssetMarketDataWorker(
                 self.client,
@@ -1285,14 +1288,10 @@ class MainWindow(QMainWindow):
                 text_for_model,
                 multi_asset_market_extension,
             )
-        elif use_web:
-            market_fallback = (
-                is_crypto_quote_request(text_for_model)
-                or is_multi_asset_quote_request(text_for_model)
-            )
+        elif action_decision.route in {ROUTE_WEB, ROUTE_MARKET_WEB}:
             self.status.setText(
                 "Market web fallback..."
-                if market_fallback
+                if action_decision.market_fallback
                 else "Web research..."
             )
             self.worker = ChatWebWorker(
@@ -1300,14 +1299,18 @@ class MainWindow(QMainWindow):
                 model,
                 messages_for_model,
                 text_for_model,
-                compact_market_quote=market_fallback,
+                compact_market_quote=action_decision.market_fallback,
             )
-        else:
+        elif action_decision.route == ROUTE_CHAT:
             self.worker = AdaptiveChatWorker(
                 self.client,
                 model,
                 messages_for_model,
                 text_for_model,
+            )
+        else:
+            raise RuntimeError(
+                f"Unsupported action route: {action_decision.route}"
             )
 
         self.worker.moveToThread(self.thread)
@@ -1870,9 +1873,9 @@ class MainWindow(QMainWindow):
         ):
             return
 
-        due = self.scheduler_store.due_tasks()
-        if due:
-            self._run_scheduled_task(due[0]["id"])
+        task_id = self.scheduler_runtime.next_due_task_id()
+        if task_id:
+            self._run_scheduled_task(task_id)
 
     def _run_scheduled_task(self, task_id):
         if (
@@ -1895,7 +1898,7 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            task = self.scheduler_store.get(task_id)
+            task = self.scheduler_runtime.get_task(task_id)
         except KeyError:
             return
 
@@ -1923,41 +1926,19 @@ class MainWindow(QMainWindow):
         self.scheduled_thread.start()
 
     def _scheduled_task_chat(self, task):
-        chat_id = task.get("chat_id", "")
-        if chat_id:
-            try:
-                return self.store.load(chat_id)
-            except Exception:
-                pass
-
-        chat = self.store.new_chat(task.get("model", ""))
-        chat["title"] = f'[SCHEDULE] {task.get("name", "Scheduled task")}'[:80]
-        chat["model"] = task.get("model", "")
-        self.store.save(chat)
-        return chat
+        return self.scheduler_runtime.ensure_schedule_chat(task)
 
     def _scheduled_task_finished(self, task_id, content):
         try:
-            task = self.scheduler_store.get(task_id)
+            completion = self.scheduler_runtime.complete(
+                task_id,
+                content,
+            )
         except KeyError:
             return
 
-        chat = self._scheduled_task_chat(task)
-        stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-        chat["messages"].append({
-            "role": "assistant",
-            "content": (
-                f"## Scheduled run - {stamp}\n\n"
-                f"**Task:** {task.get('name', 'Scheduled task')}\n\n"
-                f"{content}"
-            ),
-        })
-        self.store.save(chat)
-        self.scheduler_store.mark_result(
-            task_id,
-            status="success",
-            chat_id=chat["id"],
-        )
+        task = completion.task
+        chat = completion.chat
 
         current_id = str((self.current_chat or {}).get("id", ""))
         scheduled_chat_id = str(chat.get("id", ""))
@@ -1981,11 +1962,7 @@ class MainWindow(QMainWindow):
 
     def _scheduled_task_failed(self, task_id, message):
         try:
-            task = self.scheduler_store.mark_result(
-                task_id,
-                status="failed",
-                error=message,
-            )
+            task = self.scheduler_runtime.fail(task_id, message)
             name = task.get("name", "task")
         except Exception:
             name = "task"
