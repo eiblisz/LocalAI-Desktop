@@ -6,6 +6,8 @@ This patch deliberately leaves scheduler execution/storage and chat persistence 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLabel, QListWidget, QListWidgetItem, QPushButton, QVBoxLayout, QFrame
 
+from .ui_theme import COLORS, schedule_status_color
+
 
 def _scheduled_chat_ids(window):
     ids = set()
@@ -178,19 +180,19 @@ def install_sidebar_navigation_patch(main_window_module):
 
             if failed and enabled:
                 dot = "●"
-                color = "#E07A82" if pulse else "#B95A63"
+                color = schedule_status_color("failed", pulse=pulse)
                 suffix = "  ERROR"
             elif running:
                 dot = "●"
-                color = "#8AC89C" if pulse else "#5FAE78"
+                color = schedule_status_color("running", pulse=pulse)
                 suffix = "  RUNNING"
             elif enabled:
                 dot = "●"
-                color = "#86C69A" if pulse else "#65A97A"
+                color = schedule_status_color("enabled", pulse=pulse)
                 suffix = ""
             else:
                 dot = "○"
-                color = "#7F8995"
+                color = schedule_status_color("disabled")
                 suffix = "  DISABLED"
 
             name = str(task.get("name", "Scheduled task")).strip() or "Scheduled task"
@@ -203,7 +205,8 @@ def install_sidebar_navigation_patch(main_window_module):
                 f"padding:3px 4px 3px 8px;color:{color};font-size:13px;"
                 "text-align:left;"
                 "}"
-                "QPushButton:hover {background:#1D2630;color:#FFFFFF;}"
+                f"QPushButton:hover {{background:{COLORS.panel_hover};"
+                f"color:{COLORS.text_bright};}}"
             )
             button.setToolTip(
                 "Open this schedule's saved output/history.\n"
