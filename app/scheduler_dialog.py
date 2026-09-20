@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from .scheduler_store import ScheduledTaskStore
+from .ui_theme import muted_label_style
 
 
 TASK_TYPES = {
@@ -70,7 +71,7 @@ class SchedulerDialog(QDialog):
             "bounded data sources. Custom tasks can optionally use read-only Web Search."
         )
         intro.setWordWrap(True)
-        intro.setStyleSheet("color:#9099A6;")
+        intro.setStyleSheet(muted_label_style())
         right.addWidget(intro)
 
         form = QFormLayout()
@@ -144,7 +145,7 @@ class SchedulerDialog(QDialog):
 
         self.data_access_label = QLabel("")
         self.data_access_label.setWordWrap(True)
-        self.data_access_label.setStyleSheet("color:#9099A6;")
+        self.data_access_label.setStyleSheet(muted_label_style())
         form.addRow("Data access", self.data_access_label)
 
         self.frequency_combo = QComboBox()
@@ -205,7 +206,7 @@ class SchedulerDialog(QDialog):
 
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
-        self.status_label.setStyleSheet("color:#9099A6;")
+        self.status_label.setStyleSheet(muted_label_style())
         right.addWidget(self.status_label)
 
         buttons = QHBoxLayout()
