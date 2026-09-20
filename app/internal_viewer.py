@@ -7,7 +7,6 @@ import re
 import shutil
 import subprocess
 import tempfile
-import webbrowser
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -17,6 +16,13 @@ from openpyxl import load_workbook
 from pypdf import PdfReader
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QPixmap
+from .browser_navigation_authority import (
+    ACTION_EXTERNAL,
+    ACTION_INTERNAL_SAME,
+    ACTION_INTERNAL_TAB,
+    BrowserNavigationAuthority,
+)
+
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -35,8 +41,10 @@ from PySide6.QtWidgets import (
 )
 
 try:
+    from PySide6.QtWebEngineCore import QWebEnginePage
     from PySide6.QtWebEngineWidgets import QWebEngineView
 except Exception:  # pragma: no cover - optional runtime fallback
+    QWebEnginePage = None
     QWebEngineView = None
 
 try:
@@ -45,6 +53,33 @@ try:
 except Exception:  # pragma: no cover - optional runtime fallback
     QPdfDocument = None
     QPdfView = None
+
+
+if QWebEnginePage is not None:
+    class _AuthorityWebPage(QWebEnginePage):
+        def __init__(self, authority, open_resource=None, parent=None):
+            super().__init__(parent)
+            self.authority = authority
+            self.open_resource = open_resource
+
+        def acceptNavigationRequest(self, url, navigation_type, is_main_frame):
+            if not is_main_frame:
+                return True
+
+            decision = self.authority.decide(
+                url.toString(),
+                source="page_link",
+            )
+            if decision.action == ACTION_INTERNAL_SAME:
+                return True
+            if (
+                decision.action == ACTION_INTERNAL_TAB
+                and callable(self.open_resource)
+            ):
+                self.open_resource(decision.target)
+            return False
+else:  # pragma: no cover - optional runtime fallback
+    _AuthorityWebPage = None
 
 
 RESOURCE_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
@@ -331,9 +366,18 @@ def pdf_text_fallback(path, max_pages=30):
 class BrowserView(QWidget):
     title_changed = Signal(str)
 
-    def __init__(self, url, open_resource=None, parent=None):
+    def __init__(
+        self,
+        url,
+        open_resource=None,
+        navigation_authority=None,
+        parent=None,
+    ):
         super().__init__(parent)
         self.open_resource = open_resource
+        self.navigation_authority = (
+            navigation_authority or BrowserNavigationAuthority()
+        )
         self._initial_url = str(url or "").strip()
 
         root = QVBoxLayout(self)
@@ -359,6 +403,14 @@ class BrowserView(QWidget):
 
         if QWebEngineView is not None:
             self.view = QWebEngineView()
+            if _AuthorityWebPage is not None:
+                self.view.setPage(
+                    _AuthorityWebPage(
+                        self.navigation_authority,
+                        open_resource=self.open_resource,
+                        parent=self.view,
+                    )
+                )
             self.back_button.clicked.connect(self.view.back)
             self.forward_button.clicked.connect(self.view.forward)
             self.reload_button.clicked.connect(self.view.reload)
@@ -386,25 +438,40 @@ class BrowserView(QWidget):
             root.addWidget(self.view, 1)
             self.load(self._initial_url)
 
-    def load(self, value):
-        value = str(value or "").strip()
-        if not value:
-            return
-        self.address.setText(value)
-        qurl = QUrl(value)
+    def load(self, value, source="initial_load"):
+        decision = self.navigation_authority.decide(
+            value,
+            source=source,
+        )
+        if not decision.allowed:
+            return False
+
+        if decision.action == ACTION_EXTERNAL:
+            return bool(QDesktopServices.openUrl(QUrl(decision.target)))
+
+        if (
+            decision.action == ACTION_INTERNAL_TAB
+            and callable(self.open_resource)
+        ):
+            self.open_resource(decision.target)
+            return True
+
+        self.address.setText(decision.target)
+        qurl = QUrl(decision.target)
         if not qurl.scheme():
-            qurl = QUrl.fromLocalFile(str(Path(value).resolve()))
+            qurl = QUrl.fromLocalFile(str(Path(decision.target).resolve()))
 
         if QWebEngineView is not None and isinstance(self.view, QWebEngineView):
             self.view.setUrl(qurl)
         else:
             self.view.setSource(qurl)
+        return True
 
     def _navigate_address(self):
-        value = self.address.text().strip()
-        if value and "://" not in value and not Path(value).exists():
-            value = "https://" + value
-        self.load(value)
+        self.load(
+            self.address.text().strip(),
+            source="address_bar",
+        )
 
     def _url_changed(self, qurl):
         self.address.setText(qurl.toString())
@@ -416,19 +483,40 @@ class BrowserView(QWidget):
 
     def _new_window_requested(self, request):
         qurl = request.requestedUrl()
-        if qurl.isValid() and callable(self.open_resource):
-            self.open_resource(qurl.toString())
+        if not qurl.isValid():
+            return
+        decision = self.navigation_authority.decide(
+            qurl.toString(),
+            source="new_window",
+        )
+        if (
+            decision.action == ACTION_INTERNAL_TAB
+            and callable(self.open_resource)
+        ):
+            self.open_resource(decision.target)
+        elif decision.action == ACTION_INTERNAL_SAME:
+            self.load(decision.target, source="page_link")
 
     def _fallback_link_clicked(self, qurl):
-        if callable(self.open_resource):
-            self.open_resource(qurl.toString())
-        else:
-            self.load(qurl.toString())
+        decision = self.navigation_authority.decide(
+            qurl.toString(),
+            source="page_link",
+        )
+        if decision.action == ACTION_INTERNAL_SAME:
+            self.load(decision.target, source="page_link")
+        elif (
+            decision.action == ACTION_INTERNAL_TAB
+            and callable(self.open_resource)
+        ):
+            self.open_resource(decision.target)
 
     def _open_external(self):
-        value = self.address.text().strip()
-        if value:
-            QDesktopServices.openUrl(QUrl(value))
+        decision = self.navigation_authority.decide(
+            self.address.text().strip(),
+            source="external_button",
+        )
+        if decision.action == ACTION_EXTERNAL:
+            QDesktopServices.openUrl(QUrl(decision.target))
 
 
 class PdfViewWidget(QWidget):
@@ -692,18 +780,33 @@ class UnsupportedView(QWidget):
         root.addWidget(message, 1)
 
 
-def create_resource_view(target, open_resource=None, parent=None):
+def create_resource_view(
+    target,
+    open_resource=None,
+    navigation_authority=None,
+    parent=None,
+):
     kind = classify_resource(target)
 
     if kind == "browser":
-        return BrowserView(target, open_resource=open_resource, parent=parent)
+        return BrowserView(
+            target,
+            open_resource=open_resource,
+            navigation_authority=navigation_authority,
+            parent=parent,
+        )
 
     path = Path(target).resolve()
     if not path.exists() or not path.is_file():
         raise FileNotFoundError(str(path))
 
     if kind == "html":
-        return BrowserView(path.as_uri(), open_resource=open_resource, parent=parent)
+        return BrowserView(
+            path.as_uri(),
+            open_resource=open_resource,
+            navigation_authority=navigation_authority,
+            parent=parent,
+        )
     if kind == "pdf":
         return PdfViewWidget(path, parent=parent)
     if kind == "docx":
