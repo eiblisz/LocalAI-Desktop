@@ -437,17 +437,12 @@ def test_memory_context_enforces_user_second_person_perspective():
 def test_direct_personal_memory_answers_bypass_model_generation():
     from app.main_window import MainWindow
 
-    source = inspect.getsource(MainWindow._send)
+    source = inspect.getsource(MainWindow._run_next_action_contract)
 
-    assert "direct_memory_answer = self._direct_user_memory_answer(text)" in source
+    assert "self._direct_user_memory_answer(prompt)" in source
     assert '{"role": "assistant", "content": direct_memory_answer}' in source
     assert 'self.status.setText("Memory answer")' in source
-
-    direct_index = source.index(
-        "direct_memory_answer = self._direct_user_memory_answer(text)"
-    )
-    worker_index = source.index("self.thread = QThread()", direct_index)
-    assert direct_index < worker_index
+    assert "QTimer.singleShot(0, self._run_next_action_contract)" in source
 
 
 def test_direct_user_memory_answer_reads_only_active_user_profile_memories():
@@ -475,15 +470,12 @@ def test_memory_context_marks_person_relations_as_not_user_relations():
 def test_normal_chat_system_prompt_enforces_current_user_language():
     from app.main_window import MainWindow
 
-    source = inspect.getsource(MainWindow._send)
+    source = inspect.getsource(MainWindow._action_messages_for_model)
 
-    assert "response_language_instruction(text)" in source
-    assert (
-        'f"{DEFAULT_SYSTEM_PROMPT}\\n\\n{response_language_instruction(text)}"'
-        in source
-    )
-    assert source.index("response_language_instruction(text)") < source.index(
-        "messages_for_model ="
+    assert "response_language_instruction(prompt)" in source
+    assert "DEFAULT_SYSTEM_PROMPT" in source
+    assert source.index("response_language_instruction(prompt)") < source.index(
+        'messages = [{"role": "system", "content": system_prompt}]'
     )
 
 
@@ -865,6 +857,7 @@ def test_chat_input_accepts_clipboard_images_as_ollama_image_payloads():
 
     build_source = inspect.getsource(MainWindow._build_chat_panel)
     send_source = inspect.getsource(MainWindow._send)
+    messages_source = inspect.getsource(MainWindow._action_messages_for_model)
     paste_source = inspect.getsource(PasteAwareTextEdit.insertFromMimeData)
     attach_source = inspect.getsource(MainWindow._attach_clipboard_image)
 
@@ -874,7 +867,8 @@ def test_chat_input_accepts_clipboard_images_as_ollama_image_payloads():
     assert "self.imagePasted.emit(image)" in paste_source
     assert "_qimage_to_png_base64(image)" in attach_source
     assert 'attachment.get("kind") == "image"' in send_source
-    assert 'model_user_message["images"] = image_payloads' in send_source
+    assert "self.pending_action_images = list(image_payloads)" in send_source
+    assert 'user_message["images"] = list(self.pending_action_images)' in messages_source
 
 
 def test_attach_file_supports_common_image_formats():
