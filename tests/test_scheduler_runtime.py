@@ -124,3 +124,49 @@ def test_scheduler_runtime_failure_is_persisted(tmp_path):
 
     assert updated["last_status"] == "failed"
     assert updated["last_error"] == "provider unavailable"
+
+
+def test_stale_completion_cannot_append_to_schedule_chat(tmp_path):
+    runtime, scheduler_store, chat_store = _runtime(tmp_path)
+
+    task = scheduler_store.upsert({
+        "name": "Protected",
+        "prompt": "run",
+        "model": "qwen-test",
+        "frequency": "hourly",
+        "enabled": True,
+    })
+    task["next_run_at"] = "2026-09-20T10:00:00"
+    scheduler_store.upsert(task)
+
+    first = scheduler_store.claim_task(
+        owner_id="runner-a",
+        task_id=task["id"],
+        now=datetime(2026, 9, 20, 11, 0, 0),
+        force=True,
+        lease_seconds=60,
+    )
+    second = scheduler_store.claim_task(
+        owner_id="runner-b",
+        task_id=task["id"],
+        now=datetime(2026, 9, 20, 11, 2, 0),
+        force=True,
+        lease_seconds=600,
+    )
+
+    try:
+        runtime.complete(
+            task["id"],
+            "stale output",
+            attempt_id=first["attempt_id"],
+            owner_id="runner-a",
+        )
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("stale completion should be rejected")
+
+    current = scheduler_store.get(task["id"])
+    assert current["attempt_id"] == second["attempt_id"]
+    assert not current["chat_id"]
+    assert chat_store.list_chats(include_closed=True) == []
