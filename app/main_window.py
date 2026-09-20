@@ -4,9 +4,10 @@ import os
 import re
 import uuid
 from pathlib import Path
+from urllib.parse import urlparse
 
 import markdown
-from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QThread, QTimer, Qt, Signal
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QThread, QTimer, Qt, Signal, QUrl
 from PySide6.QtGui import QTextOption
 from PySide6.QtWidgets import (
     QComboBox,
@@ -54,6 +55,7 @@ from .document_tools import (
     topic_title,
 )
 from .artifact_themes import document_preset_labels, workbook_preset_labels
+from .browser_navigation_authority import BrowserNavigationAuthority
 from .chat_extensions_dialog import ChatExtensionsDialog
 from .discord_bot_bridge import DiscordBotBridge, DiscordBotSettings
 from .extension_authority import (
@@ -349,6 +351,7 @@ class MainWindow(QMainWindow):
         self.scheduler_dialog = None
         self.extension_store = ExtensionStore()
         self.extension_authority = ExtensionAuthority(self.extension_store)
+        self.browser_navigation_authority = BrowserNavigationAuthority()
         self.extensions_dialog = None
         self.memory_dialog = None
         self.secret_store = SecretStore()
@@ -536,6 +539,28 @@ class MainWindow(QMainWindow):
 
     def _open_resource(self, target):
         try:
+            value = str(target or "").strip()
+            if not value:
+                return None
+
+            local_candidate = Path(value).expanduser()
+            if not local_candidate.exists():
+                parsed = urlparse(value)
+                if parsed.scheme:
+                    decision = self.browser_navigation_authority.decide(
+                        value,
+                        source="resource_open",
+                    )
+                    if not decision.allowed:
+                        self.status.setText("Navigation blocked")
+                        self.status.setToolTip(decision.reason)
+                        return None
+                    if parsed.scheme.lower() == "file":
+                        local_path = QUrl(decision.target).toLocalFile()
+                        target = Path(local_path)
+                    else:
+                        target = decision.target
+
             resource_key = resource_identity(target)
             for index in range(self.workspace_tabs.count()):
                 existing = self.workspace_tabs.widget(index)
@@ -549,6 +574,7 @@ class MainWindow(QMainWindow):
             widget = create_resource_view(
                 target,
                 open_resource=self._open_resource,
+                navigation_authority=self.browser_navigation_authority,
                 parent=self.workspace_tabs,
             )
             widget.setProperty("resource_target", resource_key)
