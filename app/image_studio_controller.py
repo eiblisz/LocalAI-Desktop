@@ -8,6 +8,8 @@ from pathlib import Path
 from PySide6.QtCore import QTimer, QUrl
 from PySide6.QtWidgets import QMessageBox, QPushButton
 
+from .ui_theme import SIDE_MENU_BUTTON_STYLE
+
 COMFYUI_URL = "http://127.0.0.1:8188/"
 DEFAULT_COMFYUI_LAUNCHER = Path(
     r"C:\ComicNewsAI\comfyui\ComfyUI_windows_portable\run_nvidia_gpu.bat"
@@ -158,7 +160,7 @@ class ImageStudioController:
         button = QPushButton("IMAGE")
         button.setObjectName("sideMenuButton")
         button.setFixedHeight(34)
-        button.setStyleSheet(window.SIDE_MENU_BUTTON_INLINE_STYLE if hasattr(window, "SIDE_MENU_BUTTON_INLINE_STYLE") else "")
+        button.setStyleSheet(SIDE_MENU_BUTTON_STYLE)
         button.setToolTip(
             "Open Image Studio powered by the local ComfyUI service."
         )
