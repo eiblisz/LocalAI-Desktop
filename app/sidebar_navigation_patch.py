@@ -170,7 +170,10 @@ def install_sidebar_navigation_patch(main_window_module):
         for task in tasks:
             enabled = bool(task.get("enabled", True))
             failed = task.get("last_status") == "failed"
-            running = task.get("id") == running_id
+            running = (
+                task.get("id") == running_id
+                or self.scheduler_store.is_leased(task)
+            )
             pulse = self.schedule_pulse_on
 
             if failed and enabled:
