@@ -30,6 +30,7 @@ from .language_policy import (
     response_language_matches,
 )
 from .ollama_client import OllamaClient
+from .scheduled_task_executor import ScheduledTaskExecutor
 from .weather_tool import get_weather, weather_context_text
 from .web_intent import answer_requires_web_fallback
 from .web_search_tool import (
@@ -1419,149 +1420,33 @@ class ScheduledTaskWorker(QObject):
         self.effective_query = ""
 
     def _generate_search_query(self, prompt, model):
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "Convert the user's scheduled research task into one concise web "
-                    "search query. Preserve product/model/proper names. Prefer English "
-                    "search terms when that improves international web results. "
-                    "Return ONLY the search query, no explanation, no quotes."
-                ),
-            },
-            {
-                "role": "user",
-                "content": prompt,
-            },
-        ]
-        query = self.client.chat_once(
-            model=model,
-            messages=messages,
-        ).strip()
-        query = " ".join(query.splitlines()[0].strip().strip('\"\'').split())
-        return query[:180] or prompt[:180]
+        executor = ScheduledTaskExecutor(self.client)
+        return executor._generate_search_query(prompt, model)
 
-    def _build_context(self, model):
-        task_type = str(self.task.get("task_type", "weather")).strip().lower()
-
-        if task_type == "weather":
-            location = str(self.task.get("location", "")).strip()
-            if not location:
-                raise RuntimeError("Weather task requires a location.")
-            weather = get_weather(location)
-            return weather_context_text(weather)
-
-        if task_type == "ebay":
-            query = str(self.task.get("ebay_query", "")).strip()
-            prompt_query = str(self.task.get("prompt", "")).strip()
-            if not query or query.lower() in {"ebay", "ebay.de"}:
-                query = prompt_query
-            if not query:
-                raise RuntimeError("eBay Search task requires a query or prompt.")
-            payload = search_ebay(
-                query,
-                max_results=int(self.task.get("ebay_max_results", 8) or 8),
-            )
-            self.source_urls = [
-                str(item.get("url", "")).strip()
-                for item in payload.get("results") or []
-                if str(item.get("url", "")).strip()
-            ]
-            self.effective_query = query
-            return ebay_context_text(payload)
-
-        if task_type == "computer":
-            return computer_status_context_text(get_computer_status())
-
-        if task_type == "custom":
-            if not bool(self.task.get("web_search_enabled", False)):
-                return ""
-
-            query = str(self.task.get("web_query", "")).strip()
-            if not query:
-                query = self._generate_search_query(
-                    str(self.task.get("prompt", "")).strip(),
-                    model,
-                )
-
-            payload = search_web(
-                query,
-                max_results=int(self.task.get("web_max_results", 6) or 6),
-                fetch_pages=bool(self.task.get("web_fetch_pages", True)),
-            )
-            self.source_urls = source_urls(payload)
-            self.effective_query = query
-            return web_search_context_text(payload)
-
-        raise RuntimeError(f"Unsupported scheduled task type: {task_type}")
+    def _executor(self):
+        # Inject the module-level tool functions so existing worker tests and
+        # runtime monkeypatches continue to exercise the same authorities.
+        return ScheduledTaskExecutor(
+            self.client,
+            query_generator=self._generate_search_query,
+            get_weather_fn=get_weather,
+            weather_context_text_fn=weather_context_text,
+            search_ebay_fn=search_ebay,
+            ebay_context_text_fn=ebay_context_text,
+            get_computer_status_fn=get_computer_status,
+            computer_status_context_text_fn=computer_status_context_text,
+            search_web_fn=search_web,
+            web_search_context_text_fn=web_search_context_text,
+            source_urls_fn=source_urls,
+        )
 
     @Slot()
     def run(self):
         task_id = self.task.get("id", "")
         try:
-            prompt = str(self.task.get("prompt", "")).strip()
-            model = str(self.task.get("model", "")).strip()
-            task_type = str(self.task.get("task_type", "weather")).strip().lower()
-
-            if not prompt:
-                raise RuntimeError("Scheduled task prompt is empty.")
-            if not model:
-                raise RuntimeError("Scheduled task model is not set.")
-
-            tool_context = self._build_context(model)
-
-            if tool_context:
-                user_content = (
-                    f"SCHEDULED TASK TYPE: {task_type}\n"
-                    f"SCHEDULED TASK:\n{prompt}\n\n"
-                    f"AUTHORIZED TOOL DATA:\n{tool_context}"
-                )
-                system_content = (
-                    "You are running a scheduled local-assistant task. "
-                    "For current or external facts, use ONLY the AUTHORIZED TOOL DATA "
-                    "in the user message. Do not use memory or prior knowledge to fill "
-                    "missing facts. If the supplied sources are irrelevant or do not "
-                    "support the requested topic, explicitly say that no relevant "
-                    "sources were found instead of answering a different topic. "
-                    "Never invent scores, ratings, prices, specifications, dates, "
-                    "comparisons, or recommendations. Keep the answer concise unless "
-                    "the task asks for detail."
-                )
-            else:
-                user_content = (
-                    f"SCHEDULED TASK TYPE: custom\n"
-                    f"SCHEDULED TASK:\n{prompt}"
-                )
-                system_content = (
-                    "You are running a scheduled local-assistant task. "
-                    "No live external data source is attached to this task. "
-                    "Do not claim that you checked current internet data."
-                )
-
-            messages = [
-                {"role": "system", "content": system_content},
-                {"role": "user", "content": user_content},
-            ]
-
-            content = self.client.chat_once(
-                model=model,
-                messages=messages,
-            )
-            if not content.strip():
-                raise RuntimeError("The model returned an empty scheduled result.")
-
-            final_content = content.strip()
-            if self.source_urls:
-                source_lines = "\n".join(
-                    f"- {url}" for url in self.source_urls[:10]
-                )
-                final_content += (
-                    "\n\n---\n"
-                    f"Search query: {self.effective_query}\n"
-                    "Sources:\n"
-                    f"{source_lines}"
-                )
-
-            self.finished.emit(task_id, final_content)
+            result = self._executor().execute(self.task)
+            self.source_urls = list(result.source_urls)
+            self.effective_query = result.effective_query
+            self.finished.emit(task_id, result.content)
         except Exception as exc:
             self.failed.emit(task_id, str(exc))
