@@ -332,6 +332,7 @@ class MainWindow(QMainWindow):
         self.pending_action_contracts = []
         self.active_action_contract = None
         self.pending_action_model = ""
+        self.pending_action_original_text = ""
         self.pending_action_context_suffix = ""
         self.pending_action_images = []
         self.show_closed = False
@@ -1273,6 +1274,7 @@ class MainWindow(QMainWindow):
 
         self.pending_action_contracts = list(contracts)
         self.pending_action_model = model
+        self.pending_action_original_text = text
         self.pending_action_context_suffix = context_suffix
         self.pending_action_images = list(image_payloads)
         self._run_next_action_contract()
@@ -1289,10 +1291,20 @@ class MainWindow(QMainWindow):
 
         messages = [{"role": "system", "content": system_prompt}]
         chat_messages = list((self.current_chat or {}).get("messages", []))
-        if chat_messages:
-            chat_messages = chat_messages[:-1]
+        original_index = -1
+        for index in range(len(chat_messages) - 1, -1, -1):
+            message = chat_messages[index]
+            if (
+                message.get("role") == "user"
+                and str(message.get("content") or "").strip()
+                == self.pending_action_original_text
+            ):
+                original_index = index
+                break
 
-        for message in chat_messages:
+        for index, message in enumerate(chat_messages):
+            if index == original_index:
+                continue
             if message.get("role") in {"user", "assistant"}:
                 messages.append(message)
 
@@ -1312,6 +1324,7 @@ class MainWindow(QMainWindow):
         if not self.pending_action_contracts:
             self.active_action_contract = None
             self.pending_action_model = ""
+            self.pending_action_original_text = ""
             self.pending_action_context_suffix = ""
             self.pending_action_images = []
             self.status.setText("Ollama connected")
@@ -1622,6 +1635,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self._run_next_action_contract)
         else:
             self.pending_action_model = ""
+            self.pending_action_original_text = ""
             self.pending_action_context_suffix = ""
             self.pending_action_images = []
             QTimer.singleShot(0, self._run_pending_scheduled_task)
