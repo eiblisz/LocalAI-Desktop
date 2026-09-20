@@ -87,7 +87,7 @@ class ChatExtensionsDialog(QDialog):
             item.setToolTip(
                 "Capabilities: {capabilities}\n"
                 "Connection status: {status}\n"
-                "Chat runtime execution: not enabled yet".format(
+                "Runtime execution requires enabled state, declared capability, chat attachment, and host permission.".format(
                     capabilities=", ".join(extension.get("capabilities") or []) or "none",
                     status=extension.get("last_status", "never"),
                 )
