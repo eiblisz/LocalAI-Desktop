@@ -877,21 +877,17 @@ class MainWindow(QMainWindow):
         if chats:
             self.current_chat = chats[0]
             saved_model = str(self.current_chat.get("model") or "").strip()
-            preferred = saved_model or PREFERRED_LOCAL_MODEL
-            if preferred:
-                index = self.model_combo.findText(preferred)
-                if index >= 0:
-                    self.model_combo.blockSignals(True)
-                    self.model_combo.setCurrentIndex(index)
-                    self.model_combo.blockSignals(False)
-                elif not saved_model:
-                    preferred_index = self.model_combo.findText(
-                        PREFERRED_LOCAL_MODEL
-                    )
-                    if preferred_index >= 0:
-                        self.model_combo.blockSignals(True)
-                        self.model_combo.setCurrentIndex(preferred_index)
-                        self.model_combo.blockSignals(False)
+            index = (
+                self.model_combo.findText(saved_model)
+                if saved_model
+                else -1
+            )
+            if index < 0:
+                index = self.model_combo.findText(PREFERRED_LOCAL_MODEL)
+            if index >= 0:
+                self.model_combo.blockSignals(True)
+                self.model_combo.setCurrentIndex(index)
+                self.model_combo.blockSignals(False)
         else:
             self.current_chat = self.store.new_chat(
                 self.model_combo.currentText()
