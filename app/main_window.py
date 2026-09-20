@@ -65,6 +65,7 @@ from .internal_viewer import (
 )
 from .language_policy import response_language_instruction
 from .memory_answers import direct_user_memory_answer
+from .memory_dialog import MemoryDialog
 from .memory_extractor import is_explicit_memory_request
 from .memory_store import MemoryStore
 from .ollama_client import OllamaClient
@@ -342,6 +343,7 @@ class MainWindow(QMainWindow):
         self.scheduler_dialog = None
         self.extension_store = ExtensionStore()
         self.extensions_dialog = None
+        self.memory_dialog = None
         self.secret_store = SecretStore()
         self.discord_bot_bridge = None
         self.scheduled_thread = None
@@ -1642,6 +1644,19 @@ class MainWindow(QMainWindow):
         self.extensions_dialog.show()
         self.extensions_dialog.raise_()
         self.extensions_dialog.activateWindow()
+
+    def _open_memory(self):
+        if self.memory_dialog is None:
+            self.memory_dialog = MemoryDialog(
+                self.memory_store,
+                parent=self,
+            )
+        else:
+            self.memory_dialog.refresh()
+
+        self.memory_dialog.show()
+        self.memory_dialog.raise_()
+        self.memory_dialog.activateWindow()
 
     def _tradingview_workspace_url(self):
         default_url = "https://www.tradingview.com/markets/"
