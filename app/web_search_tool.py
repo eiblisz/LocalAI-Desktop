@@ -1220,6 +1220,12 @@ def select_authoritative_current_fact(query, facts):
     if not candidates:
         return None
 
+    query_qualifiers = (
+        _split_identity_tokens(query) & _ENTITY_SCOPE_QUALIFIERS
+    )
+    if query_qualifiers:
+        return candidates[0]
+
     family_candidates = []
     for index, fact in enumerate(candidates):
         parsed = _family_generation_key(query, fact.get("value", ""))
