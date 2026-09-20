@@ -505,6 +505,139 @@ class MemoryStore:
                 raise KeyError(memory_id)
         return self.get_memory(memory_id)
 
+    def set_importance(self, memory_id, importance):
+        importance = _clean(importance).upper()
+        self._validate_enum("importance", importance, ALLOWED_IMPORTANCE)
+        now = _now()
+        with self._connect() as db:
+            cursor = db.execute(
+                "UPDATE memories SET importance = ?, updated_at = ? WHERE id = ?",
+                (importance, now, memory_id),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(memory_id)
+        return self.get_memory(memory_id)
+
+    def revise_memory(
+        self,
+        memory_id,
+        *,
+        category=None,
+        scope=None,
+        subject=None,
+        key=None,
+        value=None,
+        importance=None,
+        confidence=None,
+        source_type="memory_ui",
+        source_ref=None,
+        source_excerpt=None,
+    ):
+        current = self.get_memory(memory_id)
+        if current.get("status") != "active":
+            raise ValueError("only active memories can be revised")
+
+        next_category = (
+            _clean(category).upper()
+            if category is not None
+            else current["category"]
+        )
+        next_scope = _clean(scope) if scope is not None else current["scope"]
+        next_subject = (
+            _clean(subject) if subject is not None else current["subject"]
+        )
+        next_key = _clean(key) if key is not None else current["key"]
+        next_value = _clean(value) if value is not None else current["value"]
+        next_importance = (
+            _clean(importance).upper()
+            if importance is not None
+            else current["importance"]
+        )
+        next_confidence = (
+            float(confidence)
+            if confidence is not None
+            else float(current["confidence"])
+        )
+
+        comparable = {
+            "category": next_category,
+            "scope": next_scope,
+            "subject": next_subject,
+            "key": next_key,
+            "value": next_value,
+            "importance": next_importance,
+            "confidence": next_confidence,
+        }
+        if all(
+            comparable[field] == (
+                float(current[field])
+                if field == "confidence"
+                else current[field]
+            )
+            for field in comparable
+        ):
+            return current
+
+        revised = self.add_memory(
+            category=next_category,
+            scope=next_scope,
+            subject=next_subject,
+            key=next_key,
+            value=next_value,
+            importance=next_importance,
+            confidence=next_confidence,
+            source_chat_id=current.get("source_chat_id"),
+            supersedes_id=memory_id,
+        )
+        self._record_source(
+            revised["id"],
+            source_type=source_type,
+            source_ref=source_ref or memory_id,
+            excerpt=source_excerpt or "Revised from Memory UI",
+        )
+        return revised
+
+    def memory_lineage(self, memory_id):
+        current = self.get_memory(memory_id)
+
+        ancestors = []
+        seen = {current["id"]}
+        cursor = current
+        while cursor.get("supersedes_id"):
+            previous_id = cursor["supersedes_id"]
+            if previous_id in seen:
+                break
+            previous = self.get_memory(previous_id)
+            ancestors.append(previous)
+            seen.add(previous_id)
+            cursor = previous
+        ancestors.reverse()
+
+        descendants = []
+        cursor_id = current["id"]
+        while True:
+            with self._connect() as db:
+                row = db.execute(
+                    """
+                    SELECT *
+                    FROM memories
+                    WHERE supersedes_id = ?
+                    ORDER BY created_at ASC
+                    LIMIT 1
+                    """,
+                    (cursor_id,),
+                ).fetchone()
+            if row is None:
+                break
+            item = self._row_to_dict(row)
+            if item["id"] in seen:
+                break
+            descendants.append(item)
+            seen.add(item["id"])
+            cursor_id = item["id"]
+
+        return ancestors + [current] + descendants
+
     def mark_used(self, memory_id):
         now = _now()
         with self._connect() as db:

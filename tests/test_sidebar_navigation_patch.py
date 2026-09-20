@@ -145,3 +145,11 @@ def test_sidebar_controls_and_chat_list_share_side_menu_geometry():
     assert 'button.setObjectName("sideMenuButton")' in source
     assert 'self.chat_list.setObjectName("sideChatList")' in source
     assert "ScrollBarAlwaysOff" in source
+
+
+def test_memory_navigation_is_enabled_and_opens_canonical_dialog():
+    source = inspect.getsource(MainWindow._build_sidebar)
+
+    assert 'elif text == "MEMORY":' in source
+    assert 'button.clicked.connect(self._open_memory)' in source
+    assert '"Review, revise, pin, archive and delete persistent memories."' in source

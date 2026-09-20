@@ -373,3 +373,73 @@ def test_remember_explicit_still_rejects_secrets(tmp_path):
             key="password",
             value="do-not-store-this",
         )
+
+
+def test_memory_ui_revision_preserves_superseded_history_and_provenance(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    original = store.remember_explicit(
+        category="PREFERENCE",
+        scope="USER",
+        subject="Shell",
+        key="preferred",
+        value="CMD",
+        source_chat_id="chat-a",
+        source_excerpt="Remember CMD.",
+    )
+
+    revised = store.revise_memory(
+        original["id"],
+        value="PowerShell",
+        source_type="memory_ui",
+        source_ref=original["id"],
+        source_excerpt="Manual revision from Memory UI",
+    )
+
+    assert revised["id"] != original["id"]
+    assert store.get_memory(original["id"])["status"] == "superseded"
+    assert revised["status"] == "active"
+    assert revised["supersedes_id"] == original["id"]
+    assert revised["value"] == "PowerShell"
+
+    sources = store.list_memory_sources(revised["id"])
+    assert len(sources) == 1
+    assert sources[0]["source_type"] == "memory_ui"
+    assert sources[0]["source_ref"] == original["id"]
+
+    lineage = store.memory_lineage(revised["id"])
+    assert [item["id"] for item in lineage] == [original["id"], revised["id"]]
+
+
+def test_memory_ui_revision_rejects_inactive_records(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    memory = store.add_memory(
+        category="PREFERENCE",
+        scope="USER",
+        subject="Theme",
+        key="style",
+        value="dark",
+    )
+    store.archive_memory(memory["id"])
+
+    with pytest.raises(ValueError, match="only active memories can be revised"):
+        store.revise_memory(memory["id"], value="light")
+
+
+def test_memory_pin_importance_updates_without_rewriting_fact(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    memory = store.add_memory(
+        category="RULE",
+        scope="USER",
+        subject="Output",
+        key="style",
+        value="concise",
+        importance="IMPORTANT",
+    )
+
+    pinned = store.set_importance(memory["id"], "PINNED")
+    assert pinned["id"] == memory["id"]
+    assert pinned["importance"] == "PINNED"
+    assert pinned["value"] == "concise"
+
+    unpinned = store.set_importance(memory["id"], "IMPORTANT")
+    assert unpinned["importance"] == "IMPORTANT"
