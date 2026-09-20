@@ -1,7 +1,6 @@
 import base64
 import html
 import re
-from datetime import datetime
 from pathlib import Path
 
 import markdown
@@ -29,6 +28,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .action_runtime import (
+    ROUTE_CHAT,
+    ROUTE_CRYPTO_MARKET,
+    ROUTE_MARKET_WEB,
+    ROUTE_MEMORY_WRITE,
+    ROUTE_MULTI_ASSET_MARKET,
+    ROUTE_WEB,
+    ActionRuntime,
+)
 from .artifact_service import create_artifact
 from .artifact_utils import (
     artifact_url,
@@ -36,7 +44,6 @@ from .artifact_utils import (
     path_from_artifact_url,
 )
 from .config import APP_NAME, DEFAULT_SYSTEM_PROMPT
-from .crypto_market_data import is_crypto_quote_request
 from .document_tools import (
     build_document_messages,
     build_excel_messages,
@@ -60,19 +67,14 @@ from .language_policy import response_language_instruction
 from .memory_answers import direct_user_memory_answer
 from .memory_extractor import is_explicit_memory_request
 from .memory_store import MemoryStore
-from .multi_asset_market_data import is_multi_asset_quote_request
 from .ollama_client import OllamaClient
 from .resource_monitor import format_resource_summary, get_system_metrics
 from .scheduler_dialog import SchedulerDialog
+from .scheduler_runtime import SchedulerRuntime
 from .scheduler_store import ScheduledTaskStore
 from .secret_store import SecretStore
 from .storage import ChatStore
-from .web_intent import (
-    ACTION_MEMORY_WRITE,
-    ACTION_WEB_RESEARCH,
-    looks_like_web_request,
-    plan_user_action,
-)
+from .web_intent import looks_like_web_request
 from .workers import (
     AdaptiveChatWorker,
     ChatWebWorker,
@@ -332,6 +334,11 @@ class MainWindow(QMainWindow):
         self.active_tool = "PDF"
         self.last_artifact_path = None
         self.scheduler_store = ScheduledTaskStore()
+        self.scheduler_runtime = SchedulerRuntime(
+            self.scheduler_store,
+            self.store,
+        )
+        self.action_runtime = ActionRuntime()
         self.scheduler_dialog = None
         self.extension_store = ExtensionStore()
         self.extensions_dialog = None
