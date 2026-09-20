@@ -128,3 +128,21 @@ def test_browser_sidebar_opens_tradingview_inside_workspace():
     assert 'button.setEnabled(True)' in source
     assert 'button.clicked.connect(self._open_market_browser)' in source
     assert "self._open_resource(self._tradingview_workspace_url())" in open_source
+
+
+def test_sidebar_primary_and_navigation_buttons_share_compact_height():
+    source = inspect.getsource(MainWindow._build_sidebar)
+
+    assert 'new_chat.setFixedHeight(34)' in source
+    assert 'self.schedule_button.setFixedHeight(34)' in source
+    assert 'button.setFixedHeight(34)' in source
+
+
+def test_sidebar_controls_and_chat_list_share_side_menu_geometry():
+    source = inspect.getsource(MainWindow._build_sidebar)
+
+    assert 'new_chat.setObjectName("sideMenuButton")' in source
+    assert 'self.schedule_button.setObjectName("sideMenuButton")' in source
+    assert 'button.setObjectName("sideMenuButton")' in source
+    assert 'self.chat_list.setObjectName("sideChatList")' in source
+    assert "ScrollBarAlwaysOff" in source

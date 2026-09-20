@@ -60,18 +60,22 @@ def install_sidebar_navigation_patch(main_window_module):
         layout.setSpacing(6)
 
         new_chat = QPushButton("+  NEW CHAT")
+        new_chat.setObjectName("sideMenuButton")
+        new_chat.setFixedHeight(34)
         new_chat.clicked.connect(self._new_chat)
         layout.addWidget(new_chat)
 
         self.schedule_button = QPushButton("SCHEDULE")
-        self.schedule_button.setObjectName("toolButton")
+        self.schedule_button.setObjectName("sideMenuButton")
+        self.schedule_button.setFixedHeight(34)
         self.schedule_button.clicked.connect(self._open_scheduler)
         layout.addWidget(self.schedule_button)
 
         self.sidebar_navigation_buttons = {}
         for text in ["PROJECTS", "BROWSER", "MEMORY", "EXTENSIONS", "SETTINGS"]:
             button = QPushButton(text)
-            button.setObjectName("subtleButton")
+            button.setObjectName("sideMenuButton")
+            button.setFixedHeight(34)
             if text == "BROWSER":
                 button.setEnabled(True)
                 button.setToolTip(
@@ -106,6 +110,10 @@ def install_sidebar_navigation_patch(main_window_module):
         layout.addWidget(chats_label)
 
         self.chat_list = QListWidget()
+        self.chat_list.setObjectName("sideChatList")
+        self.chat_list.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         self.chat_list.itemClicked.connect(self._chat_selected)
         self.chat_list.itemDoubleClicked.connect(self._rename_chat_item)
         self.chat_list.setContextMenuPolicy(Qt.CustomContextMenu)

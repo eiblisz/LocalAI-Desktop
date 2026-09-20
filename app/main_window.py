@@ -85,6 +85,28 @@ from .workers import (
 )
 
 
+SIDE_MENU_BUTTON_INLINE_STYLE = (
+    "QPushButton {"
+    "background:#141A20;"
+    "border:1px solid #2D3742;"
+    "border-radius:10px;"
+    "padding:5px 10px;"
+    "color:#AAB2BD;"
+    "font-weight:600;"
+    "min-height:32px;"
+    "max-height:34px;"
+    "}"
+    "QPushButton:hover {"
+    "background:#1D2630;"
+    "border-color:#35414D;"
+    "color:#FFFFFF;"
+    "}"
+    "QPushButton:pressed {"
+    "background:#27323E;"
+    "color:#FFFFFF;"
+    "}"
+)
+
 STYLE = """
 QMainWindow, QWidget {
     background: #101419;
@@ -126,14 +148,66 @@ QPushButton#primary {
 QPushButton#primary:hover {
     background: #D24A57;
 }
+QPushButton#sideMenuButton {
+    background: #141A20;
+    border: 1px solid #2D3742;
+    border-radius: 10px;
+    min-height: 32px;
+    max-height: 34px;
+    padding: 5px 10px;
+    color: #AAB2BD;
+    font-weight: 600;
+}
+QPushButton#sideMenuButton:hover {
+    background: #1D2630;
+    border-color: #35414D;
+    color: #FFFFFF;
+}
+QPushButton#sideMenuButton:pressed {
+    background: #27323E;
+    color: #FFFFFF;
+}
+QPushButton#sideMenuButton:disabled {
+    background: #141A20;
+    border-color: #25303A;
+    color: #6F7884;
+}
 QPushButton#toolButton {
-    min-height: 44px;
+    min-height: 32px;
+    max-height: 34px;
+    padding: 5px 10px;
     font-weight: 700;
 }
 QPushButton#subtleButton {
     background: transparent;
     border: 1px solid #2D3742;
     color: #AAB2BD;
+}
+QListWidget#sideChatList {
+    background: transparent;
+    border: none;
+    outline: none;
+    padding: 0px;
+}
+QListWidget#sideChatList::item {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    color: #AAB2BD;
+    padding: 7px 10px;
+    margin: 2px 1px;
+}
+QListWidget#sideChatList::item:hover {
+    background: #1D2630;
+    border-color: #35414D;
+    color: #FFFFFF;
+}
+QListWidget#sideChatList::item:selected,
+QListWidget#sideChatList::item:selected:active,
+QListWidget#sideChatList::item:selected:!active {
+    background: #27323E;
+    border-color: #35414D;
+    color: #FFFFFF;
 }
 QComboBox {
     background: #171D24;
@@ -301,7 +375,8 @@ class MainWindow(QMainWindow):
         top = QFrame()
         top.setObjectName("topbar")
         top_layout = QHBoxLayout(top)
-        top_layout.setContentsMargins(18, 10, 18, 10)
+        top_layout.setContentsMargins(18, 6, 18, 6)
+        top_layout.setSpacing(8)
 
         brand_box = QVBoxLayout()
         brand = QLabel(APP_NAME)
@@ -319,37 +394,36 @@ class MainWindow(QMainWindow):
         top_layout.addWidget(self.resource_label, 1)
         top_layout.addStretch()
 
-        model_box = QVBoxLayout()
-        model_header = QHBoxLayout()
         self.model_label = QLabel("LOCAL MODELS")
         self.model_label.setObjectName("muted")
-        model_header.addWidget(self.model_label)
-        model_header.addStretch()
-        self.model_count_label = QLabel("0")
-        self.model_count_label.setObjectName("muted")
-        model_header.addWidget(self.model_count_label)
-        model_box.addLayout(model_header)
+        self.model_label.setAlignment(
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight
+        )
+        self.model_label.setMinimumWidth(108)
+        top_layout.addWidget(self.model_label)
 
-        model_row = QHBoxLayout()
+        self.model_count_label = QLabel("0")
+        self.model_count_label.hide()
+
         self.model_combo = QComboBox()
         self.model_combo.setMinimumWidth(300)
+        self.model_combo.setFixedHeight(34)
         self.model_combo.setMaxVisibleItems(24)
         self.model_combo.setToolTip(
             "All local models currently installed in Ollama. "
             "The selected model is saved per chat."
         )
         self.model_combo.currentTextChanged.connect(self._model_changed)
-        model_row.addWidget(self.model_combo, 1)
+        top_layout.addWidget(self.model_combo)
 
         self.refresh_models_button = QPushButton("REFRESH")
         self.refresh_models_button.setObjectName("subtleButton")
+        self.refresh_models_button.setFixedHeight(34)
         self.refresh_models_button.setToolTip(
             "Refresh the list of locally installed Ollama models."
         )
         self.refresh_models_button.clicked.connect(self._load_models)
-        model_row.addWidget(self.refresh_models_button)
-        model_box.addLayout(model_row)
-        top_layout.addLayout(model_box)
+        top_layout.addWidget(self.refresh_models_button)
 
         self.status = QLabel("Ollama: checking...")
         self.status.setObjectName("muted")
@@ -580,7 +654,9 @@ class MainWindow(QMainWindow):
         self.tool_buttons = {}
         for text in ["PDF", "DOCX", "EXCEL", "HTML", "SUMMARY"]:
             button = QPushButton(text)
-            button.setObjectName("toolButton")
+            button.setObjectName("sideMenuButton")
+            button.setFixedHeight(34)
+            button.setStyleSheet(SIDE_MENU_BUTTON_INLINE_STYLE)
             button.clicked.connect(
                 lambda _checked=False, name=text: self._select_tool(name)
             )
@@ -989,7 +1065,7 @@ class MainWindow(QMainWindow):
                 "background:#315A43;"
                 "border:1px solid #5F9C73;"
                 "border-radius:10px;"
-                "padding:9px 13px;"
+                "padding:5px 10px;"
                 "color:#F4F6F8;"
                 "font-weight:700;"
                 "}"
@@ -1719,23 +1795,12 @@ class MainWindow(QMainWindow):
             return
 
         self.schedule_button.setText("SCHEDULE")
+        self.schedule_button.setObjectName("sideMenuButton")
         self.schedule_button.setToolTip(
             "Open the scheduler and manage saved automations."
         )
-        self.schedule_button.setStyleSheet(
-            "QPushButton {"
-            "background:#202730;"
-            "border:1px solid #323C48;"
-            "border-radius:10px;"
-            "padding:9px 13px;"
-            "color:#F4F6F8;"
-            "font-weight:700;"
-            "min-height:44px;"
-            "}"
-            "QPushButton:hover {"
-            "background:#29323D;"
-            "}"
-        )
+        self.schedule_button.setStyleSheet("")
+        self.schedule_button.setFixedHeight(34)
 
     def _clear_schedule_task_labels(self):
         if not hasattr(self, "schedule_task_status_layout"):

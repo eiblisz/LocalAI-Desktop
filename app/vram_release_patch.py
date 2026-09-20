@@ -67,6 +67,7 @@ def install_vram_release_patch(main_window_module):
             "Use this before starting a VRAM-heavy image model."
         )
         button.setMaximumWidth(105)
+        button.setFixedHeight(34)
         button.clicked.connect(self._release_vram)
         self.vram_release_button = button
 

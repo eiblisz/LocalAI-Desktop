@@ -76,6 +76,7 @@ def test_pending_schedule_runs_after_worker_cleanup():
 
 
 def test_schedule_button_stays_neutral_and_task_rows_carry_health():
+    import app.main_window as main_window_module
     from app.main_window import MainWindow
 
     sidebar_source = inspect.getsource(MainWindow._build_sidebar)
@@ -83,7 +84,9 @@ def test_schedule_button_stays_neutral_and_task_rows_carry_health():
     task_source = inspect.getsource(MainWindow._refresh_schedule_task_labels)
 
     assert 'self.schedule_button = QPushButton("SCHEDULE")' in sidebar_source
-    assert "background:#202730" in button_source
+    assert 'self.schedule_button.setObjectName("sideMenuButton")' in button_source
+    assert 'self.schedule_button.setStyleSheet("")' in button_source
+    assert "QPushButton#sideMenuButton" in main_window_module.STYLE
     assert "#315A43" not in button_source
     assert "#6A3035" not in button_source
     assert "#86C69A" in task_source
@@ -888,3 +891,77 @@ def test_model_refresh_preserves_saved_or_current_chat_model():
     assert "preferred = saved or previous" in source
     assert "self.model_combo.findText(preferred)" in source
     assert "self.model_combo.setCurrentIndex(index)" in source
+
+
+def test_topbar_model_controls_share_one_compact_baseline():
+    import app.main_window as main_window_module
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._build_ui)
+
+    assert "model_box = QVBoxLayout()" not in source
+    assert "model_header = QHBoxLayout()" not in source
+    assert "self.model_combo.setFixedHeight(34)" in source
+    assert "self.refresh_models_button.setFixedHeight(34)" in source
+    assert "Qt.AlignmentFlag.AlignVCenter" in source
+    assert "top_layout.setContentsMargins(18, 6, 18, 6)" in source
+    assert "max-height: 34px" in main_window_module.STYLE
+
+
+def test_schedule_style_no_longer_reintroduces_large_button_height():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._apply_schedule_button_style)
+
+    assert 'self.schedule_button.setObjectName("sideMenuButton")' in source
+    assert 'self.schedule_button.setStyleSheet("")' in source
+    assert "self.schedule_button.setFixedHeight(34)" in source
+    assert '"min-height:44px;"' not in source
+
+
+def test_left_and_right_side_controls_share_one_visual_family():
+    import app.main_window as main_window_module
+    from app.main_window import MainWindow
+
+    tools_source = inspect.getsource(MainWindow._build_tools_panel)
+
+    assert 'button.setObjectName("sideMenuButton")' in tools_source
+    assert "QPushButton#sideMenuButton" in main_window_module.STYLE
+    assert "QPushButton#sideMenuButton:hover" in main_window_module.STYLE
+    assert "color: #AAB2BD;" in main_window_module.STYLE
+    assert "color: #FFFFFF;" in main_window_module.STYLE
+
+
+def test_side_chat_list_matches_menu_width_and_hover_language():
+    import app.main_window as main_window_module
+
+    assert "QListWidget#sideChatList" in main_window_module.STYLE
+    assert "QListWidget#sideChatList::item" in main_window_module.STYLE
+    assert "margin: 2px 1px;" in main_window_module.STYLE
+    assert "border-radius: 10px;" in main_window_module.STYLE
+    assert "QListWidget#sideChatList::item:hover" in main_window_module.STYLE
+
+
+def test_side_menu_uses_explicit_shared_base_background():
+    import app.main_window as main_window_module
+
+    style = main_window_module.STYLE
+
+    assert "QPushButton#sideMenuButton {" in style
+    assert "background: #141A20;" in style
+    assert "QPushButton#sideMenuButton:hover" in style
+    assert "background: #1D2630;" in style
+    assert "color: #FFFFFF;" in style
+
+
+def test_right_tool_buttons_force_sidebar_background_inline():
+    import app.main_window as main_window_module
+    from app.main_window import MainWindow
+
+    tools_source = inspect.getsource(MainWindow._build_tools_panel)
+
+    assert "SIDE_MENU_BUTTON_INLINE_STYLE" in tools_source
+    assert "background:#141A20;" in main_window_module.SIDE_MENU_BUTTON_INLINE_STYLE
+    assert "color:#AAB2BD;" in main_window_module.SIDE_MENU_BUTTON_INLINE_STYLE
+    assert "QPushButton:hover" in main_window_module.SIDE_MENU_BUTTON_INLINE_STYLE
+    assert "color:#FFFFFF;" in main_window_module.SIDE_MENU_BUTTON_INLINE_STYLE
