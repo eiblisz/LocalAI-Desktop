@@ -734,7 +734,8 @@ def test_live_crypto_quotes_prefer_enabled_market_data_extension():
 
     assert 'find_by_preset_id("crypto-market-data")' in helper_source
     assert '"crypto_quote"' in helper_source
-    assert "is_crypto_quote_request(text_for_model)" in send_source
+    assert "crypto_market_available=crypto_market_extension is not None" in send_source
+    assert "ROUTE_CRYPTO_MARKET" in send_source
     assert "MarketDataWorker(" in send_source
     assert "ChatWebWorker(" in send_source
     assert send_source.index("MarketDataWorker(") < send_source.index("ChatWebWorker(")
