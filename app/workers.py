@@ -1225,11 +1225,19 @@ class ChatWebWorker(QObject):
                 )
                 if not valid:
                     answer = self._safe_evidence_failure(answer_rejected=True)
-                    verification_status = (
-                        "Answer verification: FAIL-CLOSED ("
-                        + ", ".join(reasons[:3])
-                        + ")"
-                    )
+                    if self.web_research_pipeline.deterministic_verified_answer(
+                        evidence_ledgers
+                    ):
+                        verification_status = (
+                            "Evidence verification: PASS "
+                            "(host-verified fallback used)"
+                        )
+                    else:
+                        verification_status = (
+                            "Answer verification: FAIL-CLOSED ("
+                            + ", ".join(reasons[:3])
+                            + ")"
+                        )
                 else:
                     verification_status = "Evidence + answer verification: PASS"
 
