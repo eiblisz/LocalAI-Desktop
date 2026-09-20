@@ -856,7 +856,6 @@ class ChatWebWorker(QObject):
             "specifications are not shown."
         )
 
-    @staticmethod
     def _safe_evidence_failure(self, answer_rejected=False):
         return self.web_research_pipeline.safe_evidence_failure(
             answer_rejected=answer_rejected,
@@ -864,7 +863,7 @@ class ChatWebWorker(QObject):
             legacy_failure=self._safe_evidence_failure_base,
         )
 
-
+    @staticmethod
     def _evidence_diagnostic(ledgers, limit=6):
         lines = []
         for index, ledger in enumerate(list(ledgers or [])[:limit], start=1):
