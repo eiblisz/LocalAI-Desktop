@@ -24,11 +24,15 @@ def test_chat_render_uses_deferred_scroll_to_bottom():
     from app.main_window import MainWindow
 
     render_source = inspect.getsource(MainWindow._render_chat)
+    bottom_source = inspect.getsource(MainWindow._scroll_chat_to_bottom)
     schedule_source = inspect.getsource(MainWindow._schedule_scroll_to_bottom)
 
+    assert 'name="localai-chat-end"' in render_source
     assert "_schedule_scroll_to_bottom()" in render_source
-    assert "QTimer.singleShot(0" in schedule_source
-    assert "QTimer.singleShot(60" in schedule_source
+    assert 'scrollToAnchor("localai-chat-end")' in bottom_source
+    assert "self._scroll_chat_to_bottom()" in schedule_source
+    assert "(0, 60, 180, 320)" in schedule_source
+    assert "_restore_chat_input_focus" in schedule_source
 
 
 def test_tool_panel_uses_shared_theme_lists():
