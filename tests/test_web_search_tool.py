@@ -1023,3 +1023,55 @@ def test_explicit_qwen_code_query_still_uses_tool_release():
     assert fact["value"] == "v0.24.1"
     assert "qwen-code" in fact["url"]
 
+
+
+def test_authoritative_family_resolution_chooses_newest_official_generation():
+    payload = {
+        "query": "Qwen latest version release",
+        "results": [
+            {
+                "title": "Qwen legacy official site",
+                "url": "https://qwenlm.github.io/",
+                "snippet": "Official Qwen model family",
+                "page_text": "The current model generation is Qwen2.5.",
+            },
+            {
+                "title": "Qwen",
+                "url": "https://qwen.ai/blog?id=qwen3.8",
+                "snippet": "Official Qwen model family update",
+                "page_text": "Qwen3.8 is the latest Qwen model family release.",
+            },
+        ],
+    }
+
+    fact = web_search_tool.authoritative_current_fact(payload)
+
+    assert fact is not None
+    assert fact["value"].lower() == "qwen3.8"
+    assert fact["url"] == "https://qwen.ai/blog?id=qwen3.8"
+
+
+def test_authoritative_fact_selector_preserves_ranked_semver_release_order():
+    facts = [
+        {
+            "kind": "latest_release",
+            "value": "v0.34.2",
+            "url": "https://github.com/ollama/ollama/releases",
+            "title": "Ollama releases",
+            "authority": "first_party",
+        },
+        {
+            "kind": "latest_release",
+            "value": "v0.35.0-rc1",
+            "url": "https://example.com/prerelease",
+            "title": "Pre-release",
+            "authority": "first_party",
+        },
+    ]
+
+    fact = web_search_tool.select_authoritative_current_fact(
+        "Ollama latest version release",
+        facts,
+    )
+
+    assert fact["value"] == "v0.34.2"
