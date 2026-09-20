@@ -56,5 +56,5 @@ def test_rejected_model_answer_is_replaced_by_verified_host_fallback(monkeypatch
     assert "608 EUR" not in combined
     assert "606.90 EUR" in combined
     assert "https://shop.example.de/crucial-64gb" in combined
-    assert "host altal VERIFIED" in combined
-    assert "Answer verification: FAIL-CLOSED" in combined
+    assert "Az ellenorzott forrasok alapjan:" in combined
+    assert "Evidence verification: PASS (host-verified fallback used)" in combined
