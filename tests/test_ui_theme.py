@@ -1,46 +1,14 @@
 import os
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PySide6.QtCore import QEvent, Qt
-from PySide6.QtGui import QImage, QPainter
-from PySide6.QtWidgets import QApplication, QPushButton
+import subprocess
+import sys
+import textwrap
 
 from app.ui_theme import (
     COLORS,
-    MAIN_STYLESHEET,
     SIDE_MENU_BUTTON_STYLE,
     muted_label_style,
     schedule_status_color,
 )
-
-
-def _app():
-    return QApplication.instance() or QApplication([])
-
-
-def _render_center_color(button):
-    app = _app()
-    button.resize(160, 40)
-    button.show()
-    button.ensurePolished()
-    app.processEvents()
-
-    image = QImage(
-        button.size(),
-        QImage.Format.Format_ARGB32,
-    )
-    image.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(image)
-    button.render(painter)
-    painter.end()
-
-    color = image.pixelColor(
-        button.width() // 2,
-        button.height() // 2,
-    )
-    button.hide()
-    return color.name().upper()
 
 
 def test_canonical_theme_preserves_accepted_sidebar_visual_tokens():
@@ -55,20 +23,66 @@ def test_canonical_theme_preserves_accepted_sidebar_visual_tokens():
     assert f"background:{COLORS.panel_pressed};" in SIDE_MENU_BUTTON_STYLE
 
 
-def test_rendered_side_menu_button_uses_canonical_panel_background():
-    button = QPushButton("")
-    button.setObjectName("sideMenuButton")
-    button.setStyleSheet(MAIN_STYLESHEET)
+def test_rendered_buttons_match_canonical_theme_in_isolated_qt_process():
+    script = textwrap.dedent(
+        """
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QImage, QPainter
+        from PySide6.QtWidgets import QApplication, QPushButton
 
-    assert _render_center_color(button) == COLORS.panel_bg.upper()
+        from app.ui_theme import COLORS, MAIN_STYLESHEET
 
+        app = QApplication([])
 
-def test_rendered_primary_button_uses_canonical_accent_background():
-    button = QPushButton("")
-    button.setObjectName("primary")
-    button.setStyleSheet(MAIN_STYLESHEET)
+        def rendered_center(object_name):
+            button = QPushButton("")
+            button.setObjectName(object_name)
+            button.setStyleSheet(MAIN_STYLESHEET)
+            button.resize(160, 40)
+            button.show()
+            button.ensurePolished()
+            app.processEvents()
 
-    assert _render_center_color(button) == COLORS.accent.upper()
+            image = QImage(
+                button.size(),
+                QImage.Format.Format_ARGB32,
+            )
+            image.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(image)
+            button.render(painter)
+            painter.end()
+            color = image.pixelColor(
+                button.width() // 2,
+                button.height() // 2,
+            ).name().upper()
+            button.close()
+            button.deleteLater()
+            app.processEvents()
+            return color
+
+        assert rendered_center("sideMenuButton") == COLORS.panel_bg.upper()
+        assert rendered_center("primary") == COLORS.accent.upper()
+
+        app.quit()
+        """
+    )
+
+    env = dict(os.environ)
+    env["QT_QPA_PLATFORM"] = "minimal"
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=os.getcwd(),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, (
+        "isolated Qt render check failed\n"
+        f"stdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
 
 
 def test_schedule_status_colors_are_centralized_and_stable():
