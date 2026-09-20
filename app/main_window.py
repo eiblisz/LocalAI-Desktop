@@ -47,7 +47,7 @@ from .artifact_utils import (
     open_folder,
     path_from_artifact_url,
 )
-from .config import APP_NAME, DEFAULT_SYSTEM_PROMPT
+from .config import APP_NAME, DEFAULT_SYSTEM_PROMPT, PREFERRED_LOCAL_MODEL
 from .document_tools import (
     build_document_messages,
     build_excel_messages,
@@ -810,11 +810,12 @@ class MainWindow(QMainWindow):
             self.model_combo.clear()
             self.model_combo.addItems(models)
 
-            preferred = saved or previous
-            if preferred:
-                index = self.model_combo.findText(preferred)
-                if index >= 0:
-                    self.model_combo.setCurrentIndex(index)
+            preferred = saved or previous or PREFERRED_LOCAL_MODEL
+            index = self.model_combo.findText(preferred) if preferred else -1
+            if index < 0 and PREFERRED_LOCAL_MODEL:
+                index = self.model_combo.findText(PREFERRED_LOCAL_MODEL)
+            if index >= 0:
+                self.model_combo.setCurrentIndex(index)
 
             self.model_combo.blockSignals(False)
             self.model_count_label.setText(str(len(models)))
@@ -875,8 +876,26 @@ class MainWindow(QMainWindow):
         chats = self.store.list_chats()
         if chats:
             self.current_chat = chats[0]
+            saved_model = str(self.current_chat.get("model") or "").strip()
+            preferred = saved_model or PREFERRED_LOCAL_MODEL
+            if preferred:
+                index = self.model_combo.findText(preferred)
+                if index >= 0:
+                    self.model_combo.blockSignals(True)
+                    self.model_combo.setCurrentIndex(index)
+                    self.model_combo.blockSignals(False)
+                elif not saved_model:
+                    preferred_index = self.model_combo.findText(
+                        PREFERRED_LOCAL_MODEL
+                    )
+                    if preferred_index >= 0:
+                        self.model_combo.blockSignals(True)
+                        self.model_combo.setCurrentIndex(preferred_index)
+                        self.model_combo.blockSignals(False)
         else:
-            self.current_chat = self.store.new_chat(self.model_combo.currentText())
+            self.current_chat = self.store.new_chat(
+                self.model_combo.currentText()
+            )
         self._render_chat()
         self._load_chat_list()
 
