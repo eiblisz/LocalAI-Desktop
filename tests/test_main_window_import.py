@@ -95,8 +95,8 @@ def test_schedule_button_stays_neutral_and_task_rows_carry_health():
     assert "QPushButton#sideMenuButton" in main_window_module.STYLE
     assert "#315A43" not in button_source
     assert "#6A3035" not in button_source
-    assert "#86C69A" in task_source
-    assert "#E07A82" in task_source
+    assert 'schedule_status_color("enabled", pulse=pulse)' in task_source
+    assert 'schedule_status_color("failed", pulse=pulse)' in task_source
     assert "RUNNING" in task_source
     assert "DISABLED" in task_source
 
@@ -1175,3 +1175,27 @@ def test_new_chat_uses_preferred_qwen3_coder_30b_when_available():
     assert "self._default_local_model()" in new_source
     assert "self.store.new_chat(default_model)" in new_source
     assert "self._default_local_model()" in ensure_source
+
+
+def test_main_window_style_comes_from_canonical_theme_module():
+    import app.main_window as main_window_module
+    import app.ui_theme as ui_theme
+
+    assert main_window_module.STYLE == ui_theme.MAIN_STYLESHEET
+    assert (
+        main_window_module.SIDE_MENU_BUTTON_INLINE_STYLE
+        == ui_theme.SIDE_MENU_BUTTON_STYLE
+    )
+
+
+def test_sidebar_schedule_statuses_use_canonical_theme_tokens():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._refresh_schedule_task_labels)
+
+    assert 'schedule_status_color("failed", pulse=pulse)' in source
+    assert 'schedule_status_color("running", pulse=pulse)' in source
+    assert 'schedule_status_color("enabled", pulse=pulse)' in source
+    assert 'schedule_status_color("disabled")' in source
+    assert "COLORS.panel_hover" in source
+    assert "COLORS.text_bright" in source
