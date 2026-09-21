@@ -1269,3 +1269,14 @@ def test_action_messages_bind_parent_task_constraints_before_worker_execution():
     assert "task_constraints_instruction(" in source
     assert "current_subtask=prompt" in source
     assert "contract.constraints" in run_source
+
+
+
+def test_action_workers_receive_task_constraints_for_response_guard():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._run_next_action_contract)
+
+    assert "constraints=contract.constraints" in source
+    assert "ArtifactActionWorker(" in source
+    assert "AdaptiveChatWorker(" in source

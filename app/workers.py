@@ -36,6 +36,7 @@ from .language_policy import (
     response_language_matches,
 )
 from .ollama_client import OllamaClient
+from .response_guard import guard_response
 from .scheduled_task_executor import ScheduledTaskExecutor
 from .weather_tool import get_weather, weather_context_text
 from .web_intent import answer_requires_web_fallback
@@ -1368,6 +1369,7 @@ class AdaptiveChatWorker(QObject):
         user_prompt: str,
         *,
         allow_web_fallback: bool = True,
+        constraints=None,
     ):
         super().__init__()
         self.client = client
@@ -1375,6 +1377,7 @@ class AdaptiveChatWorker(QObject):
         self.messages = [dict(message) for message in messages]
         self.user_prompt = str(user_prompt or "").strip()
         self.allow_web_fallback = bool(allow_web_fallback)
+        self.constraints = constraints
         self._stop_event = threading.Event()
         self.used_web_fallback = False
 
@@ -1404,6 +1407,15 @@ class AdaptiveChatWorker(QObject):
                 ).strip()
             else:
                 final = draft
+
+            if self.constraints is not None:
+                final = guard_response(
+                    self.client,
+                    self.model,
+                    self.user_prompt,
+                    final,
+                    constraints=self.constraints,
+                )
 
             if self._stop_event.is_set():
                 self.finished.emit()
@@ -1487,6 +1499,7 @@ class ArtifactActionWorker(QObject):
         artifact_plans,
         *,
         use_web=False,
+        constraints=None,
     ):
         super().__init__()
         self.client = client
@@ -1495,6 +1508,7 @@ class ArtifactActionWorker(QObject):
         self.user_prompt = str(user_prompt or "").strip()
         self.artifact_plans = tuple(artifact_plans or ())
         self.use_web = bool(use_web)
+        self.constraints = constraints
         self._stop_event = threading.Event()
 
     def _artifact_messages(self, plan, source_context=""):
@@ -1606,6 +1620,15 @@ class ArtifactActionWorker(QObject):
                                 "Grounded artifact rejected unsupported factual "
                                 "literals: " + ", ".join(unsupported)
                             )
+
+                if self.constraints is not None:
+                    content = guard_response(
+                        self.client,
+                        self.model,
+                        str(plan.prompt or self.user_prompt),
+                        content,
+                        constraints=self.constraints,
+                    )
 
                 path = create_artifact(
                     plan.request.format,
