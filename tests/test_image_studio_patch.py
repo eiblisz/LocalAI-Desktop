@@ -74,3 +74,14 @@ def test_image_tool_matches_compact_tool_button_height_and_theme():
     assert "button.setFixedHeight(34)" in source
     assert 'button.setObjectName("sideMenuButton")' in source
     assert "SIDE_MENU_BUTTON_STYLE" in source
+
+
+
+def test_image_studio_does_not_launch_when_shared_ollama_release_is_blocked():
+    source = inspect.getsource(ImageStudioController.open)
+
+    assert "if window._release_vram() is False:" in source
+    assert "shared Ollama resource is busy" in source
+    release_index = source.index("if window._release_vram() is False:")
+    launch_index = source.index("launch_comfyui(launcher)")
+    assert release_index < launch_index
