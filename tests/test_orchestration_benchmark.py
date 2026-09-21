@@ -22,3 +22,13 @@ def test_benchmark_report_is_machine_readable():
     assert report["total"] == 5
     assert len(report["results"]) == 5
     assert all("name" in item and "passed" in item for item in report["results"])
+
+
+
+def test_benchmark_cli_bootstraps_repo_root_for_direct_execution():
+    from pathlib import Path
+
+    script = Path("scripts/run_orchestration_benchmark.py").read_text(encoding="utf-8")
+
+    assert "REPO_ROOT = Path(__file__).resolve().parents[1]" in script
+    assert "sys.path.insert(0, str(REPO_ROOT))" in script
