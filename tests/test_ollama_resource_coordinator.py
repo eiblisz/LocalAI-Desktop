@@ -213,3 +213,16 @@ def test_dead_owner_is_reconciled_to_stale(tmp_path, monkeypatch):
 
     assert leases[0]["state"] == STATE_STALE
     assert "owner process no longer exists" in leases[0]["detail"]
+
+
+
+def test_shared_lease_path_can_be_overridden_for_cross_app_coordination(tmp_path):
+    from app.ollama_resource_coordinator import (
+        RESOURCE_LEASE_ENV_VAR,
+        default_lease_path,
+    )
+
+    target = tmp_path / "shared-ollama-leases.json"
+    resolved = default_lease_path({RESOURCE_LEASE_ENV_VAR: str(target)})
+
+    assert resolved == target
