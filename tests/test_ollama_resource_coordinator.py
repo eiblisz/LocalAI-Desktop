@@ -1,3 +1,4 @@
+import os
 from app.ollama_resource_coordinator import (
     OWNER_EINSTEIN,
     OWNER_LOCALAI_DESKTOP,
@@ -71,7 +72,7 @@ def test_idle_desktop_lease_is_control_authority_for_same_owner(tmp_path):
         owner_id="desktop:test",
         model="qwen3-coder:30b-a3b-q8_0",
         state=STATE_IDLE,
-        owner_pid=100,
+        owner_pid=os.getpid(),
         model_pid=200,
         request_id="req-1",
     )
@@ -96,7 +97,7 @@ def test_active_inference_is_not_free_vram_authority(tmp_path):
         owner_id="desktop:test",
         model="qwen3-coder:30b-a3b-q8_0",
         state=STATE_INFERENCE_ACTIVE,
-        owner_pid=100,
+        owner_pid=os.getpid(),
         model_pid=200,
     )
 
@@ -124,7 +125,7 @@ def test_foreign_active_lease_is_reported(tmp_path):
         owner_id="einstein:1",
         model="qwen3-coder:30b-a3b-q8_0",
         state=STATE_INFERENCE_ACTIVE,
-        owner_pid=300,
+        owner_pid=None,
         model_pid=400,
     )
 
@@ -144,7 +145,7 @@ def test_reconciliation_marks_stale_without_kill_authority(tmp_path):
         owner_id="desktop:test",
         model="qwen3-coder:30b-a3b-q8_0",
         state=STATE_IDLE,
-        owner_pid=100,
+        owner_pid=os.getpid(),
         model_pid=200,
     )
 
