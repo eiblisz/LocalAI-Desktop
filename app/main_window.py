@@ -79,6 +79,7 @@ from .memory_dialog import MemoryDialog
 from .memory_extractor import is_explicit_memory_request
 from .memory_store import MemoryStore
 from .ollama_client import OllamaClient
+from .ollama_resource_coordinator import OWNER_LOCALAI_DESKTOP
 from .resource_monitor import format_resource_summary, get_system_metrics
 from .scheduler_dialog import SchedulerDialog
 from .sidebar_controller import SidebarController
@@ -137,7 +138,14 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("LocalAI Desktop")
         self.resize(1420, 900)
 
-        self.client = OllamaClient(auto_prepare_model=True)
+        self.ollama_owner_id = (
+            f"desktop:{os.getpid()}:{uuid.uuid4().hex[:8]}"
+        )
+        self.client = OllamaClient(
+            auto_prepare_model=True,
+            owner_type=OWNER_LOCALAI_DESKTOP,
+            owner_id=self.ollama_owner_id,
+        )
         self.store = ChatStore()
         self.memory_store = MemoryStore()
         self.current_chat = None
