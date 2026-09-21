@@ -137,7 +137,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("LocalAI Desktop")
         self.resize(1420, 900)
 
-        self.client = OllamaClient()
+        self.client = OllamaClient(auto_prepare_model=True)
         self.store = ChatStore()
         self.memory_store = MemoryStore()
         self.current_chat = None
@@ -192,6 +192,7 @@ class MainWindow(QMainWindow):
         self.pending_scheduled_force = False
         self.schedule_indicator_state = "idle"
         self.schedule_pulse_on = False
+        self._startup_model_selection = True
         self.vram_controller = VramController(self)
         self.sidebar_controller = SidebarController(self)
         self.image_studio_controller = ImageStudioController(self)
@@ -273,9 +274,10 @@ class MainWindow(QMainWindow):
         self.refresh_models_button.setObjectName("subtleButton")
         self.refresh_models_button.setFixedHeight(34)
         self.refresh_models_button.setToolTip(
-            "Refresh the list of locally installed Ollama models."
+            "Refresh the full Desktop state: Ollama models, current chat, "
+            "sidebar, schedules and resource counters."
         )
-        self.refresh_models_button.clicked.connect(self._load_models)
+        self.refresh_models_button.clicked.connect(self._refresh_desktop)
         top_layout.addWidget(self.refresh_models_button)
 
         self.status = QLabel("Ollama: checking...")
@@ -591,7 +593,7 @@ class MainWindow(QMainWindow):
             models = sorted(
                 {
                     str(model).strip()
-                    for model in self.client.list_models()
+                    for model in self.client.list_models(timeout=2.5)
                     if str(model).strip()
                 },
                 key=str.casefold,
@@ -600,7 +602,10 @@ class MainWindow(QMainWindow):
             self.model_combo.clear()
             self.model_combo.addItems(models)
 
-            preferred = saved or previous or PREFERRED_LOCAL_MODEL
+            if self._startup_model_selection and PREFERRED_LOCAL_MODEL:
+                preferred = PREFERRED_LOCAL_MODEL
+            else:
+                preferred = saved or previous or PREFERRED_LOCAL_MODEL
             index = self.model_combo.findText(preferred) if preferred else -1
             if index < 0 and PREFERRED_LOCAL_MODEL:
                 index = self.model_combo.findText(PREFERRED_LOCAL_MODEL)
@@ -630,7 +635,49 @@ class MainWindow(QMainWindow):
 
     def _load_models(self):
         self._refresh_local_model_hub()
-        self.vram_controller.ensure_button()
+        self.vram_controller.ensure_controls()
+
+    def _refresh_desktop(self):
+        current_id = (
+            str(self.current_chat.get("id") or "").strip()
+            if self.current_chat
+            else ""
+        )
+        self.status.setText("Refreshing Desktop...")
+        self._load_models()
+
+        if current_id:
+            try:
+                self.current_chat = self.store.load(current_id)
+            except Exception:
+                pass
+
+        self._load_chat_list()
+        if self.current_chat is not None:
+            self._render_chat()
+        self._refresh_resources()
+        self._refresh_schedule_indicator()
+        self._refresh_chat_extensions_button()
+
+        if self.scheduler_dialog is not None:
+            refresh = getattr(self.scheduler_dialog, "_refresh_list", None)
+            if callable(refresh):
+                refresh()
+        if self.memory_dialog is not None:
+            refresh = getattr(self.memory_dialog, "refresh", None)
+            if callable(refresh):
+                refresh()
+        if self.extensions_dialog is not None:
+            refresh = getattr(self.extensions_dialog, "refresh", None)
+            if callable(refresh):
+                refresh()
+
+        selected = self.model_combo.currentText().strip()
+        if selected and not selected.startswith("No Ollama"):
+            self.status.setText(f"Desktop refreshed | Model: {selected}")
+            self.status.setToolTip("")
+        else:
+            self.status.setText("Desktop refreshed | Ollama offline")
 
     def _release_vram(self):
         return self.vram_controller.release()
@@ -651,9 +698,18 @@ class MainWindow(QMainWindow):
         if chats:
             self.current_chat = chats[0]
             saved_model = str(self.current_chat.get("model") or "").strip()
+
+            if (
+                self._startup_model_selection
+                and self.model_combo.findText(PREFERRED_LOCAL_MODEL) >= 0
+            ):
+                selected_model = PREFERRED_LOCAL_MODEL
+            else:
+                selected_model = saved_model or self._default_local_model()
+
             index = (
-                self.model_combo.findText(saved_model)
-                if saved_model
+                self.model_combo.findText(selected_model)
+                if selected_model
                 else -1
             )
             if index < 0:
@@ -662,12 +718,23 @@ class MainWindow(QMainWindow):
                 self.model_combo.blockSignals(True)
                 self.model_combo.setCurrentIndex(index)
                 self.model_combo.blockSignals(False)
+                actual_model = self.model_combo.currentText().strip()
+                if (
+                    actual_model
+                    and not actual_model.startswith("No Ollama")
+                    and self.current_chat.get("model") != actual_model
+                ):
+                    self.current_chat["model"] = actual_model
+                    self.store.save(self.current_chat)
         else:
             self.current_chat = self.store.new_chat(
                 self._default_local_model()
             )
+
+        self._startup_model_selection = False
         self._render_chat()
         self._load_chat_list()
+
 
     def _new_chat(self):
         self.show_closed = False
