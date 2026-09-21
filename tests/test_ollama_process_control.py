@@ -129,3 +129,26 @@ def test_restart_ollama_kills_then_starts(monkeypatch):
 
     assert events == ["kill", "start"]
     assert result == {"killed": [1, 2], "started_pid": 909}
+
+
+
+def test_direct_http_consumer_is_other_and_current_pid_can_be_excluded(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(control.os, "name", "nt", raising=False)
+
+    def fake_run(command, **kwargs):
+        captured["script"] = command[-1]
+        return SimpleNamespace(
+            returncode=0,
+            stdout='{"ProcessId":701,"Name":"python.exe","CommandLine":"python C:\\\\OtherAI\\\\client.py"}',
+            stderr="",
+        )
+
+    monkeypatch.setattr(control.subprocess, "run", fake_run)
+
+    rows = control.list_external_ollama_consumers()
+    assert rows[0]["owner"] == "OTHER"
+    assert "Get-NetTCPConnection -RemotePort 11434" in captured["script"]
+
+    excluded = control.list_external_ollama_consumers(exclude_pids=[701])
+    assert excluded == []
