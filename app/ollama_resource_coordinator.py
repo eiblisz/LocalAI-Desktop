@@ -1,6 +1,8 @@
 import json
 import os
 import uuid
+
+import psutil
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -137,7 +139,24 @@ class ResourceLeaseStore:
 
     def list_leases(self):
         with self._exclusive_lock():
-            return [self._normalize(item) for item in self._load_all()]
+            items = [self._normalize(item) for item in self._load_all()]
+            changed = False
+            now = self._now()
+            for item in items:
+                pid = item.get("owner_pid")
+                if (
+                    isinstance(pid, int)
+                    and pid > 0
+                    and item.get("state") != STATE_STALE
+                    and not psutil.pid_exists(pid)
+                ):
+                    item["state"] = STATE_STALE
+                    item["last_heartbeat"] = now
+                    item["detail"] = "owner process no longer exists"
+                    changed = True
+            if changed:
+                self._save_all(items)
+            return items
 
     def leases_for_model(self, model):
         model = str(model or "").strip()
@@ -311,11 +330,36 @@ class ResourceLeaseStore:
         )[0]
 
     def can_control_model(self, *, owner, owner_id, model, allow_active=False):
-        lease = self.find_owned(owner=owner, owner_id=owner_id, model=model)
+        owner = str(owner or "").strip().upper()
+        owner_id = str(owner_id or "").strip()
+        model = str(model or "").strip()
+        leases = self.leases_for_model(model)
+        lease = next(
+            (
+                item
+                for item in leases
+                if item.get("owner") == owner
+                and item.get("owner_id") == owner_id
+            ),
+            None,
+        )
         if lease is None:
             return False, self.ownership(model)
         if lease.get("state") == STATE_STALE:
             return False, lease
+
+        foreign = [
+            item
+            for item in leases
+            if item.get("state") != STATE_STALE
+            and not (
+                item.get("owner") == owner
+                and item.get("owner_id") == owner_id
+            )
+        ]
+        if foreign:
+            return False, self.ownership(model)
+
         if lease.get("state") == STATE_INFERENCE_ACTIVE and not allow_active:
             return False, lease
         return True, lease
