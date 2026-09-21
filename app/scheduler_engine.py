@@ -117,3 +117,10 @@ class SchedulerEngine:
                 attempt_id=attempt_id,
                 message=message,
             )
+        finally:
+            release = getattr(self.client, "release_owned_models", None)
+            if callable(release):
+                try:
+                    release(timeout=5.0)
+                except Exception:
+                    pass
