@@ -156,4 +156,5 @@ def test_reconciliation_marks_stale_without_kill_authority(tmp_path):
     assert changed
     ownership = store.ownership("qwen3-coder:30b-a3b-q8_0")
     assert ownership["owner"] == OWNER_UNKNOWN
-    assert ownership["state"] == STATE_IDLE
+    assert ownership["state"] == STATE_STALE
+    assert "no runner process" in ownership["detail"]
