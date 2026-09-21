@@ -159,3 +159,57 @@ def test_reconciliation_marks_stale_without_kill_authority(tmp_path):
     assert ownership["owner"] == OWNER_UNKNOWN
     assert ownership["state"] == STATE_STALE
     assert "no runner process" in ownership["detail"]
+
+
+
+def test_foreign_nonstale_claim_blocks_destructive_control_even_with_own_idle_lease(tmp_path):
+    store = ResourceLeaseStore(tmp_path / "leases-exclusive.json")
+    store.upsert(
+        owner=OWNER_LOCALAI_DESKTOP,
+        owner_id="desktop:test",
+        model="qwen3-coder:30b-a3b-q8_0",
+        state=STATE_IDLE,
+        owner_pid=os.getpid(),
+        model_pid=200,
+    )
+    store.upsert(
+        owner=OWNER_EINSTEIN,
+        owner_id="einstein:test",
+        model="qwen3-coder:30b-a3b-q8_0",
+        state=STATE_INFERENCE_ACTIVE,
+        owner_pid=None,
+        model_pid=201,
+    )
+
+    allowed, ownership = store.can_control_model(
+        owner=OWNER_LOCALAI_DESKTOP,
+        owner_id="desktop:test",
+        model="qwen3-coder:30b-a3b-q8_0",
+        allow_active=True,
+    )
+
+    assert allowed is False
+    assert ownership["owner"] == OWNER_UNKNOWN
+    assert ownership["state"] == STATE_ERROR
+
+
+def test_dead_owner_is_reconciled_to_stale(tmp_path, monkeypatch):
+    store = ResourceLeaseStore(tmp_path / "leases-dead.json")
+    store.upsert(
+        owner=OWNER_LOCALAI_DESKTOP,
+        owner_id="desktop:dead",
+        model="gemma4:26b",
+        state=STATE_IDLE,
+        owner_pid=424242,
+        model_pid=303,
+    )
+
+    monkeypatch.setattr(
+        "app.ollama_resource_coordinator.psutil.pid_exists",
+        lambda pid: False,
+    )
+
+    leases = store.list_leases()
+
+    assert leases[0]["state"] == STATE_STALE
+    assert "owner process no longer exists" in leases[0]["detail"]
