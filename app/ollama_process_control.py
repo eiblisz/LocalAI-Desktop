@@ -101,15 +101,11 @@ def start_ollama(timeout=8.0):
         stdin=subprocess.DEVNULL,
         creationflags=_creation_flags(),
     )
-    deadline = time.monotonic() + float(timeout)
-    while time.monotonic() < deadline:
-        if process.poll() is not None:
-            raise OllamaProcessControlError(
-                f"Ollama exited immediately with code {process.returncode}."
-            )
-        time.sleep(0.1)
-        if time.monotonic() + 0.4 >= deadline:
-            break
+    time.sleep(min(0.6, max(0.0, float(timeout))))
+    if process.poll() is not None:
+        raise OllamaProcessControlError(
+            f"Ollama exited immediately with code {process.returncode}."
+        )
     return process.pid
 
 
