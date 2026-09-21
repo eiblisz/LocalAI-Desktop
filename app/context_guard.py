@@ -35,8 +35,9 @@ def extract_entity_anchors(text):
     text = str(text or "")
     anchors = set()
 
-    for token in re.findall(r"\b[A-Za-z][A-Za-z0-9_.:+/-]*\d[A-Za-z0-9_.:+/-]*\b", text):
-        anchors.add(token)
+    for token in re.findall(r"\b[A-Za-z0-9][A-Za-z0-9_.:+/-]*\b", text):
+        if re.search(r"[A-Za-z]", token) and re.search(r"\d", token):
+            anchors.add(token)
 
     for token in re.findall(r"\b[A-ZÁÉÍÓÖŐÚÜŰ][A-Za-zÁÉÍÓÖŐÚÜŰáéíóöőúüű0-9_-]{2,}\b", text):
         if token not in _COMMON_CAPITALIZED:
