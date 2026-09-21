@@ -83,6 +83,7 @@ from .ollama_resource_coordinator import OWNER_LOCALAI_DESKTOP, OWNER_SCHEDULER
 from .resource_monitor import format_resource_summary, get_system_metrics
 from .scheduler_dialog import SchedulerDialog
 from .sidebar_controller import SidebarController
+from .task_constraints import task_constraints_instruction
 from .scheduler_runtime import SchedulerRuntime
 from .scheduler_store import ScheduledTaskStore
 from .secret_store import SecretStore
@@ -1189,12 +1190,18 @@ class MainWindow(QMainWindow):
         self.pending_action_images = list(image_payloads)
         self._run_next_action_contract()
 
-    def _action_messages_for_model(self, prompt):
+    def _action_messages_for_model(self, prompt, constraints=None):
         prompt = str(prompt or "").strip()
         system_prompt = (
             f"{DEFAULT_SYSTEM_PROMPT}\n\n"
             f"{response_language_instruction(prompt)}"
         )
+        constraint_instruction = task_constraints_instruction(
+            constraints,
+            current_subtask=prompt,
+        )
+        if constraint_instruction:
+            system_prompt = f"{system_prompt}\n\n{constraint_instruction}"
         memory_context = self._build_memory_context(prompt)
         if memory_context:
             system_prompt = f"{system_prompt}\n\n{memory_context}"
@@ -1266,7 +1273,10 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self._run_next_action_contract)
             return
 
-        messages_for_model = self._action_messages_for_model(prompt)
+        messages_for_model = self._action_messages_for_model(
+            prompt,
+            contract.constraints,
+        )
         execution_text = prompt + self.pending_action_context_suffix
 
         self.partial_assistant = ""
