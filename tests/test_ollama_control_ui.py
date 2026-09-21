@@ -77,3 +77,15 @@ def test_desktop_refresh_button_calls_full_refresh():
     assert "self._load_chat_list()" in refresh_source
     assert "self._refresh_resources()" in refresh_source
     assert "self._refresh_schedule_indicator()" in refresh_source
+
+
+
+def test_in_desktop_scheduler_uses_distinct_scheduler_ollama_owner():
+    init_source = inspect.getsource(MainWindow.__init__)
+    run_source = inspect.getsource(MainWindow._run_scheduled_task)
+
+    assert 'f"scheduler:{os.getpid()}:{uuid.uuid4().hex[:8]}"' in init_source
+    assert "self.scheduler_client = OllamaClient(" in init_source
+    assert "owner_type=OWNER_SCHEDULER" in init_source
+    assert "resource_store=self.client.resource_store" in init_source
+    assert "ScheduledTaskWorker(self.scheduler_client, task)" in run_source
