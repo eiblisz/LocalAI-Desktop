@@ -593,7 +593,7 @@ class MainWindow(QMainWindow):
             models = sorted(
                 {
                     str(model).strip()
-                    for model in self.client.list_models()
+                    for model in self.client.list_models(timeout=2.5)
                     if str(model).strip()
                 },
                 key=str.casefold,
