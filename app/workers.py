@@ -37,6 +37,7 @@ from .language_policy import (
 )
 from .ollama_client import OllamaClient
 from .response_guard import guard_response
+from .runtime_control import ExecutionBudget, ExecutionControl
 from .scheduled_task_executor import ScheduledTaskExecutor
 from .weather_tool import get_weather, weather_context_text
 from .web_intent import answer_requires_web_fallback
@@ -1379,6 +1380,7 @@ class AdaptiveChatWorker(QObject):
         self.allow_web_fallback = bool(allow_web_fallback)
         self.constraints = constraints
         self._stop_event = threading.Event()
+        self.execution_control = ExecutionControl()
         self.used_web_fallback = False
 
     @Slot()
@@ -1388,10 +1390,21 @@ class AdaptiveChatWorker(QObject):
                 self.finished.emit()
                 return
 
-            draft = self.client.chat_once(
-                model=self.model,
-                messages=self.messages,
-            ).strip()
+            if isinstance(self.client, OllamaClient):
+                draft_parts = []
+                self.client.chat_stream(
+                    model=self.model,
+                    messages=self.messages,
+                    on_token=draft_parts.append,
+                    should_stop=self._stop_event.is_set,
+                    control=self.execution_control,
+                )
+                draft = "".join(draft_parts).strip()
+            else:
+                draft = self.client.chat_once(
+                    model=self.model,
+                    messages=self.messages,
+                ).strip()
 
             if (
                 self.allow_web_fallback
@@ -1415,6 +1428,7 @@ class AdaptiveChatWorker(QObject):
                     self.user_prompt,
                     final,
                     constraints=self.constraints,
+                    control=self.execution_control,
                 )
 
             if self._stop_event.is_set():
@@ -1429,6 +1443,7 @@ class AdaptiveChatWorker(QObject):
 
     def stop(self):
         self._stop_event.set()
+        self.execution_control.cancellation.cancel()
 
 
 def _grounded_artifact_version_tokens(text):
@@ -1510,6 +1525,12 @@ class ArtifactActionWorker(QObject):
         self.use_web = bool(use_web)
         self.constraints = constraints
         self._stop_event = threading.Event()
+        self.execution_control = ExecutionControl(
+            budget=ExecutionBudget(
+                timeout_seconds=300.0,
+                max_model_calls=max(4, len(self.artifact_plans) * 3),
+            )
+        )
 
     def _artifact_messages(self, plan, source_context=""):
         if not isinstance(plan, ArtifactPlanItem):
@@ -1560,13 +1581,23 @@ class ArtifactActionWorker(QObject):
                 if self._stop_event.is_set():
                     break
 
-                content = self.client.chat_once(
-                    model=self.model,
-                    messages=self._artifact_messages(
-                        plan,
-                        source_context=source_context,
-                    ),
-                ).strip()
+                if isinstance(self.client, OllamaClient):
+                    content = self.client.chat_once(
+                        model=self.model,
+                        messages=self._artifact_messages(
+                            plan,
+                            source_context=source_context,
+                        ),
+                        control=self.execution_control,
+                    ).strip()
+                else:
+                    content = self.client.chat_once(
+                        model=self.model,
+                        messages=self._artifact_messages(
+                            plan,
+                            source_context=source_context,
+                        ),
+                    ).strip()
                 if not content:
                     raise RuntimeError(
                         "The model returned empty artifact content."
@@ -1602,10 +1633,17 @@ class ArtifactActionWorker(QObject):
                                 ),
                             }
                         ]
-                        content = self.client.chat_once(
-                            model=self.model,
-                            messages=repair_messages,
-                        ).strip()
+                        if isinstance(self.client, OllamaClient):
+                            content = self.client.chat_once(
+                                model=self.model,
+                                messages=repair_messages,
+                                control=self.execution_control,
+                            ).strip()
+                        else:
+                            content = self.client.chat_once(
+                                model=self.model,
+                                messages=repair_messages,
+                            ).strip()
                         if not content:
                             raise RuntimeError(
                                 "The grounded artifact repair returned empty content."
@@ -1628,6 +1666,7 @@ class ArtifactActionWorker(QObject):
                         str(plan.prompt or self.user_prompt),
                         content,
                         constraints=self.constraints,
+                        control=self.execution_control,
                     )
 
                 path = create_artifact(
@@ -1658,6 +1697,7 @@ class ArtifactActionWorker(QObject):
 
     def stop(self):
         self._stop_event.set()
+        self.execution_control.cancellation.cancel()
 
 
 class DocumentWorker(QObject):

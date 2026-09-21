@@ -135,6 +135,7 @@ def guard_response(
     response_text,
     *,
     constraints=None,
+    control=None,
 ):
     """
     Validate one final model response and perform at most one bounded repair.
@@ -153,15 +154,31 @@ def guard_response(
     if validation.valid:
         return draft
 
-    repaired = client.chat_once(
-        model=model,
-        messages=_repair_messages(
-            user_text,
-            draft,
-            validation,
-            constraints=constraints,
-        ),
-    ).strip()
+    repair_messages = _repair_messages(
+        user_text,
+        draft,
+        validation,
+        constraints=constraints,
+    )
+    if control is not None:
+        try:
+            repaired = client.chat_once(
+                model=model,
+                messages=repair_messages,
+                control=control,
+            ).strip()
+        except TypeError as exc:
+            if "control" not in str(exc):
+                raise
+            repaired = client.chat_once(
+                model=model,
+                messages=repair_messages,
+            ).strip()
+    else:
+        repaired = client.chat_once(
+            model=model,
+            messages=repair_messages,
+        ).strip()
 
     repaired_validation = validate_response(
         user_text,
