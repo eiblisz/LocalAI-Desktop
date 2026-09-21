@@ -82,6 +82,8 @@ class OllamaClient:
         return processes[0].get("pid")
 
     def _set_request_state(self, model, request_id, state, detail=""):
+        if self.owner_type == OWNER_UNKNOWN:
+            return None
         return self.resource_store.upsert(
             owner=self.owner_type,
             owner_id=self.owner_id,
@@ -361,14 +363,15 @@ class OllamaClient:
                     chunk = item.get("message", {}).get("content", "")
                     if chunk:
                         on_token(chunk)
-                        self.resource_store.heartbeat(
-                            owner=self.owner_type,
-                            owner_id=self.owner_id,
-                            model=model,
-                            state=STATE_INFERENCE_ACTIVE,
-                            model_pid=self._observed_model_pid(),
-                            request_id=request_id,
-                        )
+                        if self.owner_type != OWNER_UNKNOWN:
+                            self.resource_store.heartbeat(
+                                owner=self.owner_type,
+                                owner_id=self.owner_id,
+                                model=model,
+                                state=STATE_INFERENCE_ACTIVE,
+                                model_pid=self._observed_model_pid(),
+                                request_id=request_id,
+                            )
                     if item.get("done"):
                         break
         except Exception as exc:
