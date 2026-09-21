@@ -1257,3 +1257,15 @@ def test_refresh_reloads_desktop_state_not_only_model_list():
     assert "self._refresh_resources()" in source
     assert "self._refresh_schedule_indicator()" in source
     assert "self._refresh_chat_extensions_button()" in source
+
+
+
+def test_action_messages_bind_parent_task_constraints_before_worker_execution():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._action_messages_for_model)
+    run_source = inspect.getsource(MainWindow._run_next_action_contract)
+
+    assert "task_constraints_instruction(" in source
+    assert "current_subtask=prompt" in source
+    assert "contract.constraints" in run_source
