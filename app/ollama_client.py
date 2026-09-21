@@ -43,6 +43,12 @@ class OllamaClient:
                 timeout=min(float(timeout), 2.5),
             )
         except requests.RequestException:
+            try:
+                kill_ollama_model_processes(
+                    timeout=min(float(timeout), 8.0)
+                )
+            except Exception:
+                pass
             loaded = []
 
         stale = [name for name in loaded if name and name != target]
