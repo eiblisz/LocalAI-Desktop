@@ -194,8 +194,11 @@ def _answer_part(part, profiles):
             for marker in (
                 "mi a nevem",
                 "hogy hivnak",
+                "ki vagyok",
+                "ki vagyok en",
                 "what is my name",
                 "whats my name",
+                "who am i",
             )
         )
         asks_about_saved_name = bool(
