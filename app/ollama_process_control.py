@@ -75,40 +75,73 @@ $targets = Get-CimInstance Win32_Process | Where-Object {
     ]
 
 
-def list_external_ollama_consumers(timeout=5.0):
-    """
-    Best-effort local client discovery.
+def _classify_ollama_consumer(name, command_line):
+    name = str(name or "").lower()
+    lowered = str(command_line or "").lower()
+    if "einsteinai" in lowered:
+        return "EINSTEIN"
+    if "localai-desktop" in lowered and "scheduler" in lowered:
+        return "SCHEDULER"
+    if "localai-desktop" in lowered:
+        return "LOCALAI_DESKTOP"
+    if name == "ollama.exe" and " run " in f" {lowered} ":
+        return "MANUAL"
+    return "OTHER"
 
-    This is not ownership proof. It is an additional safety signal used to block
-    destructive operations when a known external Local AI client is visible.
+
+def list_external_ollama_consumers(timeout=5.0, exclude_pids=None):
+    """
+    Best-effort active Ollama client discovery.
+
+    In addition to known command-line clients, inspect established local TCP
+    connections whose remote port is the Ollama API port. This catches direct
+    HTTP clients that do not participate in the lease protocol.
     """
     script = r"""
-$targets = Get-CimInstance Win32_Process | Where-Object {
+$direct = Get-CimInstance Win32_Process | Where-Object {
     ($_.Name -ieq 'ollama.exe' -and $_.CommandLine -match '(?i)(^|\s)run(\s|$)') -or
     (($_.Name -ieq 'python.exe' -or $_.Name -ieq 'pythonw.exe') -and
         $_.CommandLine -match '(?i)EinsteinAI')
 } | Select-Object ProcessId,Name,CommandLine
-@($targets) | ConvertTo-Json -Compress
+
+$connectionPids = @(
+    Get-NetTCPConnection -RemotePort 11434 -State Established -ErrorAction SilentlyContinue |
+        Select-Object -ExpandProperty OwningProcess -Unique
+)
+$connected = foreach ($pidValue in $connectionPids) {
+    Get-CimInstance Win32_Process -Filter "ProcessId=$pidValue" -ErrorAction SilentlyContinue |
+        Select-Object ProcessId,Name,CommandLine
+}
+
+$targets = @($direct) + @($connected)
+$unique = @($targets | Where-Object { $_.ProcessId } | Sort-Object ProcessId -Unique)
+$unique | ConvertTo-Json -Compress
 """
+    excluded = {
+        int(pid)
+        for pid in (exclude_pids or [])
+        if str(pid).isdigit() and int(pid) > 0
+    }
     rows = _parse_json_rows(_run_powershell(script, timeout=timeout))
     result = []
     for row in rows:
         pid = row.get("ProcessId")
         if not str(pid or "").isdigit():
             continue
+        pid = int(pid)
+        if pid in excluded:
+            continue
+        name = str(row.get("Name") or "")
         command_line = str(row.get("CommandLine") or "")
-        lowered = command_line.lower()
-        owner = "EINSTEIN" if "einsteinai" in lowered else "MANUAL"
         result.append(
             {
-                "pid": int(pid),
-                "name": str(row.get("Name") or ""),
+                "pid": pid,
+                "name": name,
                 "command_line": command_line,
-                "owner": owner,
+                "owner": _classify_ollama_consumer(name, command_line),
             }
         )
     return result
-
 
 def kill_ollama_model_processes(pids=None, timeout=8.0):
     """
