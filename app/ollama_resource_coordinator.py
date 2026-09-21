@@ -261,12 +261,29 @@ class ResourceLeaseStore:
         )[0]
 
     def ownership(self, model):
+        all_leases = self.leases_for_model(model)
         leases = [
             item
-            for item in self.leases_for_model(model)
+            for item in all_leases
             if item.get("state") != STATE_STALE
         ]
         if not leases:
+            stale = [
+                item for item in all_leases
+                if item.get("state") == STATE_STALE
+            ]
+            if stale:
+                latest = dict(
+                    sorted(
+                        stale,
+                        key=lambda item: item.get("last_heartbeat", ""),
+                        reverse=True,
+                    )[0]
+                )
+                latest["owner"] = OWNER_UNKNOWN
+                latest["owner_id"] = ""
+                latest["model_pid"] = None
+                return latest
             return {
                 "owner": OWNER_UNKNOWN,
                 "owner_id": "",
