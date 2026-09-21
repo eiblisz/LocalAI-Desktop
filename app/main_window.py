@@ -79,6 +79,7 @@ from .memory_dialog import MemoryDialog
 from .memory_extractor import is_explicit_memory_request
 from .memory_store import MemoryStore
 from .ollama_client import OllamaClient
+from .ollama_resource_coordinator import OWNER_LOCALAI_DESKTOP, OWNER_SCHEDULER
 from .resource_monitor import format_resource_summary, get_system_metrics
 from .scheduler_dialog import SchedulerDialog
 from .sidebar_controller import SidebarController
@@ -137,7 +138,14 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("LocalAI Desktop")
         self.resize(1420, 900)
 
-        self.client = OllamaClient(auto_prepare_model=True)
+        self.ollama_owner_id = (
+            f"desktop:{os.getpid()}:{uuid.uuid4().hex[:8]}"
+        )
+        self.client = OllamaClient(
+            auto_prepare_model=True,
+            owner_type=OWNER_LOCALAI_DESKTOP,
+            owner_id=self.ollama_owner_id,
+        )
         self.store = ChatStore()
         self.memory_store = MemoryStore()
         self.current_chat = None
@@ -185,7 +193,13 @@ class MainWindow(QMainWindow):
         self.scheduled_thread = None
         self.scheduled_worker = None
         self.scheduler_owner_id = (
-            f"desktop:{os.getpid()}:{uuid.uuid4().hex[:8]}"
+            f"scheduler:{os.getpid()}:{uuid.uuid4().hex[:8]}"
+        )
+        self.scheduler_client = OllamaClient(
+            auto_prepare_model=True,
+            owner_type=OWNER_SCHEDULER,
+            owner_id=self.scheduler_owner_id,
+            resource_store=self.client.resource_store,
         )
         self.scheduled_attempt_id = ""
         self.pending_scheduled_task_id = ""
@@ -1992,7 +2006,7 @@ class MainWindow(QMainWindow):
             )
 
         self.scheduled_thread = QThread()
-        self.scheduled_worker = ScheduledTaskWorker(self.client, task)
+        self.scheduled_worker = ScheduledTaskWorker(self.scheduler_client, task)
         self.scheduled_worker.moveToThread(self.scheduled_thread)
 
         self.scheduled_thread.started.connect(self.scheduled_worker.run)

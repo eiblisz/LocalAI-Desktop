@@ -121,7 +121,9 @@ class ImageStudioController:
             return
 
         try:
-            window._release_vram()
+            if window._release_vram() is False:
+                window.status.setText("Image Studio: shared Ollama resource is busy")
+                return
             launch_comfyui(launcher)
         except Exception as exc:
             QMessageBox.critical(window, "Image Studio", str(exc))

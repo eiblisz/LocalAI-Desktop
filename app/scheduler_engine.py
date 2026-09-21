@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from .ollama_client import OllamaClient
+from .ollama_resource_coordinator import OWNER_SCHEDULER
 from .scheduled_task_executor import ScheduledTaskExecutor
 from .scheduler_runtime import SchedulerRuntime
 from .scheduler_store import ScheduledTaskStore
@@ -40,10 +41,14 @@ class SchedulerEngine:
     ):
         self.scheduler_store = scheduler_store or ScheduledTaskStore()
         self.chat_store = chat_store or ChatStore()
-        self.client = client or OllamaClient(auto_prepare_model=True)
         self._now_provider = now_provider or datetime.now
         self.lease_seconds = max(60, int(lease_seconds or 3600))
         self.owner_id = owner_id or self.default_owner_id()
+        self.client = client or OllamaClient(
+            auto_prepare_model=True,
+            owner_type=OWNER_SCHEDULER,
+            owner_id=self.owner_id,
+        )
         self.runtime = SchedulerRuntime(
             self.scheduler_store,
             self.chat_store,
@@ -112,3 +117,10 @@ class SchedulerEngine:
                 attempt_id=attempt_id,
                 message=message,
             )
+        finally:
+            release = getattr(self.client, "release_owned_models", None)
+            if callable(release):
+                try:
+                    release(timeout=5.0)
+                except Exception:
+                    pass
