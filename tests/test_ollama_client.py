@@ -1,3 +1,4 @@
+import os
 import pytest
 
 from app.ollama_client import OllamaClient
@@ -90,7 +91,7 @@ def test_prepare_model_unloads_only_proven_desktop_owned_idle_model(
         owner_id="desktop:test",
         model="gemma4:26b",
         state=STATE_IDLE,
-        owner_pid=123,
+        owner_pid=os.getpid(),
         model_pid=777,
     )
 
@@ -125,7 +126,7 @@ def test_prepare_model_blocks_foreign_active_owner(monkeypatch, tmp_path):
         owner_id="einstein:test",
         model="qwen3-coder:30b-a3b-q8_0",
         state=STATE_INFERENCE_ACTIVE,
-        owner_pid=456,
+        owner_pid=None,
         model_pid=888,
     )
 
@@ -183,7 +184,7 @@ def test_prepare_model_reconciles_stopping_without_process_kill(
         owner_id="desktop:test",
         model="qwen3-coder:30b-a3b-q8_0",
         state=STATE_IDLE,
-        owner_pid=123,
+        owner_pid=os.getpid(),
         model_pid=777,
     )
     monkeypatch.setattr(
@@ -214,7 +215,7 @@ def test_prepare_model_blocks_when_external_consumer_is_visible(
         owner_id="desktop:test",
         model="qwen3-coder:30b-a3b-q8_0",
         state=STATE_IDLE,
-        owner_pid=123,
+        owner_pid=os.getpid(),
         model_pid=777,
     )
     monkeypatch.setattr(
