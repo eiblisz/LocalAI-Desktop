@@ -4,11 +4,19 @@ from typing import Callable
 import requests
 
 from .config import OLLAMA_BASE_URL
+from .ollama_process_control import kill_ollama_model_processes
+from .vram_release import loaded_ollama_models, unload_ollama_model
 
 
 class OllamaClient:
-    def __init__(self, base_url: str = OLLAMA_BASE_URL):
+    def __init__(
+        self,
+        base_url: str = OLLAMA_BASE_URL,
+        *,
+        auto_prepare_model: bool = False,
+    ):
         self.base_url = base_url.rstrip("/")
+        self.auto_prepare_model = bool(auto_prepare_model)
 
     def is_available(self, timeout: float = 2.0) -> bool:
         try:
@@ -23,6 +31,45 @@ class OllamaClient:
         payload = response.json()
         return [item["name"] for item in payload.get("models", []) if item.get("name")]
 
+    def prepare_model(self, model: str, timeout: float = 6.0) -> list[str]:
+        """Unload stale models before a request; recover a stuck runner if needed."""
+        target = str(model or "").strip()
+        if not target:
+            raise ValueError("A target Ollama model is required.")
+
+        try:
+            loaded = loaded_ollama_models(
+                self,
+                timeout=min(float(timeout), 2.5),
+            )
+        except requests.RequestException:
+            try:
+                kill_ollama_model_processes(
+                    timeout=min(float(timeout), 8.0)
+                )
+            except Exception:
+                pass
+            loaded = []
+
+        stale = [name for name in loaded if name and name != target]
+        if not stale:
+            return []
+
+        released = []
+        try:
+            for name in stale:
+                unload_ollama_model(
+                    self,
+                    name,
+                    timeout=min(float(timeout), 5.0),
+                )
+                released.append(name)
+        except requests.RequestException:
+            # A wedged model runner can make keep_alive=0 unresponsive.
+            # Kill only runner processes; keep the Ollama server alive.
+            kill_ollama_model_processes(timeout=min(float(timeout), 8.0))
+        return released
+
     def chat_once(
         self,
         model: str,
@@ -30,6 +77,8 @@ class OllamaClient:
         timeout: float = 600.0,
         response_format=None,
     ) -> str:
+        if self.auto_prepare_model:
+            self.prepare_model(model)
         payload = {
             "model": model,
             "messages": messages,
@@ -56,6 +105,8 @@ class OllamaClient:
         should_stop: Callable[[], bool],
         timeout: float = 600.0,
     ) -> None:
+        if self.auto_prepare_model:
+            self.prepare_model(model)
         payload = {
             "model": model,
             "messages": messages,
