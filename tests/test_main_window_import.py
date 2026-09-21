@@ -901,7 +901,7 @@ def test_local_model_hub_lists_all_ollama_models_and_supports_refresh():
     assert 'QPushButton("REFRESH")' in build_source
     assert "self.refresh_models_button.clicked.connect(self._refresh_desktop)" in build_source
 
-    assert "self.client.list_models()" in load_source
+    assert "self.client.list_models(timeout=2.5)" in load_source
     assert "self.model_combo.addItems(models)" in load_source
     assert 'self.model_label.setText(' in load_source
     assert "LOCAL MODELS (" in load_source
