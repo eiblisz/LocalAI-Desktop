@@ -99,7 +99,8 @@ class OllamaClient:
         should_stop: Callable[[], bool],
         timeout: float = 600.0,
     ) -> None:
-        self.prepare_model(model)
+        if self.auto_prepare_model:
+            self.prepare_model(model)
         payload = {
             "model": model,
             "messages": messages,
