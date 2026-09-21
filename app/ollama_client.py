@@ -71,7 +71,10 @@ class OllamaClient:
 
     def _external_consumers(self):
         try:
-            return list_external_ollama_consumers(timeout=3.0)
+            return list_external_ollama_consumers(
+                timeout=3.0,
+                exclude_pids=[os.getpid()],
+            )
         except Exception:
             return None
 
