@@ -81,7 +81,15 @@ class OllamaClient:
             return None
         return processes[0].get("pid")
 
-    def _set_request_state(self, model, request_id, state, detail=""):
+    def _set_request_state(
+        self,
+        model,
+        request_id,
+        state,
+        detail="",
+        *,
+        observe_pid=False,
+    ):
         if self.owner_type == OWNER_UNKNOWN:
             return None
         return self.resource_store.upsert(
@@ -90,7 +98,7 @@ class OllamaClient:
             model=model,
             state=state,
             owner_pid=os.getpid(),
-            model_pid=self._observed_model_pid(),
+            model_pid=(self._observed_model_pid() if observe_pid else None),
             request_id=request_id,
             detail=detail,
         )
@@ -320,10 +328,16 @@ class OllamaClient:
                 request_id,
                 STATE_ERROR,
                 detail=str(exc),
+                observe_pid=True,
             )
             raise
         else:
-            self._set_request_state(model, request_id, STATE_IDLE)
+            self._set_request_state(
+                model,
+                request_id,
+                STATE_IDLE,
+                observe_pid=True,
+            )
             return result
 
     def chat_stream(
@@ -347,6 +361,7 @@ class OllamaClient:
 
         try:
             self._set_request_state(model, request_id, STATE_INFERENCE_ACTIVE)
+            pid_observed = False
             with requests.post(
                 f"{self.base_url}/api/chat",
                 json=payload,
@@ -364,12 +379,16 @@ class OllamaClient:
                     if chunk:
                         on_token(chunk)
                         if self.owner_type != OWNER_UNKNOWN:
+                            model_pid = None
+                            if not pid_observed:
+                                model_pid = self._observed_model_pid()
+                                pid_observed = True
                             self.resource_store.heartbeat(
                                 owner=self.owner_type,
                                 owner_id=self.owner_id,
                                 model=model,
                                 state=STATE_INFERENCE_ACTIVE,
-                                model_pid=self._observed_model_pid(),
+                                model_pid=model_pid,
                                 request_id=request_id,
                             )
                     if item.get("done"):
@@ -380,7 +399,13 @@ class OllamaClient:
                 request_id,
                 STATE_ERROR,
                 detail=str(exc),
+                observe_pid=True,
             )
             raise
         else:
-            self._set_request_state(model, request_id, STATE_IDLE)
+            self._set_request_state(
+                model,
+                request_id,
+                STATE_IDLE,
+                observe_pid=True,
+            )
