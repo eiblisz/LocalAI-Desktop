@@ -22,7 +22,7 @@ def test_web_on_forces_stable_chat_to_web():
     runtime = ActionRuntime()
 
     contracts = runtime.plan_many(
-        "Magyarazd el roviden, mi az a TCP.",
+        "Irj egy rovid verset az oszrol.",
         force_web=True,
     )
 
