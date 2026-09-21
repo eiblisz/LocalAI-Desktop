@@ -137,7 +137,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("LocalAI Desktop")
         self.resize(1420, 900)
 
-        self.client = OllamaClient()
+        self.client = OllamaClient(auto_prepare_model=True)
         self.store = ChatStore()
         self.memory_store = MemoryStore()
         self.current_chat = None
