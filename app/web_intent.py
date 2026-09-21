@@ -360,7 +360,7 @@ def answer_requires_web_fallback(user_text, answer):
     return any(marker in normalized for marker in markers)
 
 
-def plan_user_action(text, *, force_web=False):
+def plan_user_action(text, *, force_web=False, disable_web=False):
     """
     Build one interface-neutral plan for memory, web, artifacts and normal chat.
 
@@ -379,9 +379,13 @@ def plan_user_action(text, *, force_web=False):
 
     artifacts = tuple(infer_artifact_requests(clean))
     needs_web = (
-        bool(force_web)
-        or looks_like_web_request(clean)
-        or is_freshness_sensitive_request(clean)
+        False
+        if bool(disable_web)
+        else (
+            bool(force_web)
+            or looks_like_web_request(clean)
+            or is_freshness_sensitive_request(clean)
+        )
     )
 
     steps = []
@@ -438,7 +442,7 @@ def split_user_action_units(text):
     return units or [raw]
 
 
-def plan_user_actions(text, *, force_web=False):
+def plan_user_actions(text, *, force_web=False, disable_web=False):
     """
     Produce independent plans for an explicit numbered/bulleted multi-task request.
 
@@ -448,7 +452,11 @@ def plan_user_actions(text, *, force_web=False):
     return tuple(
         PlannedAction(
             prompt=unit,
-            plan=plan_user_action(unit, force_web=force_web),
+            plan=plan_user_action(
+                unit,
+                force_web=force_web,
+                disable_web=disable_web,
+            ),
         )
         for unit in split_user_action_units(text)
         if str(unit).strip()

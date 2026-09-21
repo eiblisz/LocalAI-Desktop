@@ -154,6 +154,7 @@ class MainWindow(QMainWindow):
         self.worker = None
         self.partial_assistant = ""
         self.current_chat_uses_web = False
+        self.web_mode = "AUTO"
         self.generation_chat_id = ""
         self.pending_action_contracts = []
         self.active_action_contract = None
@@ -464,12 +465,9 @@ class MainWindow(QMainWindow):
         input_row.addWidget(self.chat_extensions_button)
 
         self.web_button = QPushButton("WEB AUTO")
-        self.web_button.setCheckable(True)
-        self.web_button.setToolTip(
-            "WEB AUTO searches only when the message clearly asks for current web information. "
-            "Toggle to WEB ON to force read-only web research."
-        )
-        self.web_button.toggled.connect(self._web_button_toggled)
+        self.web_button.setCheckable(False)
+        self.web_button.clicked.connect(self._cycle_web_mode)
+        self._apply_web_mode_ui()
         input_row.addWidget(self.web_button)
 
         self.input = PasteAwareTextEdit()
@@ -991,9 +989,24 @@ class MainWindow(QMainWindow):
             encoded,
         )
 
-    def _web_button_toggled(self, checked):
-        self.web_button.setText("WEB ON" if checked else "WEB AUTO")
-        if checked:
+    def _cycle_web_mode(self):
+        modes = ("AUTO", "ON", "OFF")
+        current = str(getattr(self, "web_mode", "AUTO") or "AUTO").upper()
+        try:
+            index = modes.index(current)
+        except ValueError:
+            index = 0
+        self.web_mode = modes[(index + 1) % len(modes)]
+        self._apply_web_mode_ui()
+
+    def _apply_web_mode_ui(self):
+        mode = str(getattr(self, "web_mode", "AUTO") or "AUTO").upper()
+        if mode not in {"AUTO", "ON", "OFF"}:
+            mode = "AUTO"
+            self.web_mode = mode
+
+        if mode == "ON":
+            self.web_button.setText("WEB ON")
             self.web_button.setStyleSheet(
                 "QPushButton {"
                 "background:#315A43;"
@@ -1005,14 +1018,34 @@ class MainWindow(QMainWindow):
                 "}"
             )
             self.web_button.setToolTip(
-                "WEB ON: the next chat messages use read-only web research."
+                "WEB ON: every eligible chat request uses read-only web research."
             )
-        else:
-            self.web_button.setStyleSheet("")
+            return
+
+        if mode == "OFF":
+            self.web_button.setText("WEB OFF")
+            self.web_button.setStyleSheet(
+                "QPushButton {"
+                "background:#3A2327;"
+                "border:1px solid #7A4149;"
+                "border-radius:10px;"
+                "padding:5px 10px;"
+                "color:#F4F6F8;"
+                "font-weight:700;"
+                "}"
+            )
             self.web_button.setToolTip(
-                "WEB AUTO searches only when the message clearly asks for current web information. "
-                "Toggle to WEB ON to force read-only web research."
+                "WEB OFF / LOCAL ONLY: no web research and no automatic web fallback. "
+                "Only the selected local model is used."
             )
+            return
+
+        self.web_button.setText("WEB AUTO")
+        self.web_button.setStyleSheet("")
+        self.web_button.setToolTip(
+            "WEB AUTO: orchestration decides when current or external information "
+            "requires read-only web research."
+        )
 
     def _looks_like_web_request(self, text):
         return looks_like_web_request(text)
@@ -1135,7 +1168,8 @@ class MainWindow(QMainWindow):
         contracts = self.action_runtime.plan_many(
             text,
             model_context_suffix=context_suffix,
-            force_web=self.web_button.isChecked(),
+            force_web=self.web_mode == "ON",
+            disable_web=self.web_mode == "OFF",
             crypto_market_available=crypto_market_extension is not None,
             multi_asset_market_available=(
                 multi_asset_market_extension is not None
@@ -1325,6 +1359,7 @@ class MainWindow(QMainWindow):
                 model,
                 messages_for_model,
                 execution_text,
+                allow_web_fallback=self.web_mode != "OFF",
             )
         else:
             self.thread = None

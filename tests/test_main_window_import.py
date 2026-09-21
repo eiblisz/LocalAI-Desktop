@@ -134,21 +134,33 @@ def test_sidebar_lists_only_saved_tasks_not_predeclared_categories():
 
 
 
-def test_normal_chat_has_web_auto_and_manual_web_toggle():
+def test_normal_chat_has_web_auto_on_off_modes():
     from app.main_window import MainWindow
 
+    init_source = inspect.getsource(MainWindow.__init__)
     build = inspect.getsource(MainWindow._build_chat_panel)
+    cycle = inspect.getsource(MainWindow._cycle_web_mode)
+    apply_source = inspect.getsource(MainWindow._apply_web_mode_ui)
     send = inspect.getsource(MainWindow._send)
     run = inspect.getsource(MainWindow._run_next_action_contract)
 
+    assert 'self.web_mode = "AUTO"' in init_source
     assert 'QPushButton("WEB AUTO")' in build
-    assert "setCheckable(True)" in build
-    assert "self.web_button.isChecked()" in send
+    assert "setCheckable(False)" in build
+    assert "clicked.connect(self._cycle_web_mode)" in build
+    assert 'modes = ("AUTO", "ON", "OFF")' in cycle
+    assert 'self.web_button.setText("WEB AUTO")' in apply_source
+    assert 'self.web_button.setText("WEB ON")' in apply_source
+    assert 'self.web_button.setText("WEB OFF")' in apply_source
+    assert "LOCAL ONLY" in apply_source
+    assert 'force_web=self.web_mode == "ON"' in send
+    assert 'disable_web=self.web_mode == "OFF"' in send
     assert "self.action_runtime.plan_many(" in send
     assert "self.action_runtime.validate_many(contracts)" in send
     assert "contract.use_web" in run
     assert "ChatWebWorker" in run
     assert "AdaptiveChatWorker" in run
+    assert 'allow_web_fallback=self.web_mode != "OFF"' in run
 
 
 def test_web_auto_detects_explicit_search_intent():

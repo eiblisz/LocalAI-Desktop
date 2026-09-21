@@ -164,6 +164,7 @@ class ActionRuntime:
         *,
         model_text=None,
         force_web=False,
+        disable_web=False,
         crypto_market_available=False,
         multi_asset_market_available=False,
     ):
@@ -177,6 +178,7 @@ class ActionRuntime:
         plan = plan_user_action(
             user_text,
             force_web=bool(force_web),
+            disable_web=bool(disable_web),
         )
         return self._decision_from_plan(
             plan,
@@ -191,6 +193,7 @@ class ActionRuntime:
         *,
         model_context_suffix="",
         force_web=False,
+        disable_web=False,
         crypto_market_available=False,
         multi_asset_market_available=False,
     ):
@@ -204,6 +207,7 @@ class ActionRuntime:
         planned = plan_user_actions(
             user_text,
             force_web=bool(force_web),
+            disable_web=bool(disable_web),
         )
         suffix = str(model_context_suffix or "")
 
