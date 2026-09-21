@@ -78,6 +78,34 @@ class OllamaClient:
         except Exception:
             return None
 
+    def _assert_external_switch_safe(self, target):
+        external = self._external_consumers()
+        if external is None:
+            raise OllamaResourceBusyError(
+                "Could not verify external Ollama consumers; model switch is blocked."
+            )
+
+        conflicts = []
+        for item in external:
+            owner = str(item.get("owner") or OWNER_UNKNOWN)
+            model = str(item.get("model") or "").strip()
+
+            # Sharing the exact same model with a visible manual CLI is not a
+            # destructive switch. Any different or unknown external use blocks.
+            if owner == "MANUAL" and model and model == target:
+                continue
+            conflicts.append(item)
+
+        if conflicts:
+            first = conflicts[0]
+            owner = str(first.get("owner") or OWNER_UNKNOWN)
+            model = str(first.get("model") or "").strip() or "unknown model"
+            raise OllamaResourceBusyError(
+                f"Ollama is in use by another local owner ({owner}, {model}); "
+                "model switch is blocked rather than stopping shared runtime state."
+            )
+        return external
+
     def _observed_model_pid(self):
         processes = self._runner_processes()
         if processes is None or len(processes) != 1:
@@ -117,6 +145,11 @@ class OllamaClient:
         if not target:
             raise ValueError("A target Ollama model is required.")
 
+        # Check external consumers before trusting /api/ps. A manual
+        # "ollama run" session may be visible as a client even while its model
+        # is not momentarily reported as resident.
+        self._assert_external_switch_safe(target)
+
         try:
             loaded = loaded_ollama_models(
                 self,
@@ -145,17 +178,9 @@ class OllamaClient:
                 "Could not verify Ollama runner ownership; model switch is blocked."
             )
 
-        external = self._external_consumers()
-        if external is None:
-            raise OllamaResourceBusyError(
-                "Could not verify external Ollama consumers; model switch is blocked."
-            )
-        if external:
-            owner = external[0].get("owner", OWNER_UNKNOWN)
-            raise OllamaResourceBusyError(
-                f"Ollama is in use by another local owner ({owner}); "
-                "model switch is waiting rather than stopping it."
-            )
+        # Re-check immediately before any unload to close the race between
+        # runtime inspection and destructive preparation.
+        self._assert_external_switch_safe(target)
 
         released = []
         for name in stale:
