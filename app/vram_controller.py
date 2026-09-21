@@ -143,7 +143,7 @@ class VramController:
                 "VRAM is in use",
                 "FREE VRAM is blocked while LocalAI Desktop has an active job.",
             )
-            return
+            return False
 
         window.ollama_action_button.setEnabled(False)
         window.status.setText("Checking Ollama ownership...")
@@ -153,6 +153,7 @@ class VramController:
             QMessageBox.critical(window, "VRAM release error", str(exc))
             window.status.setText("VRAM release blocked")
             window.status.setToolTip(str(exc))
+            return False
         else:
             released = list(result.get("released") or [])
             blocked = list(result.get("blocked") or [])
@@ -168,6 +169,7 @@ class VramController:
                 )
                 window.status.setText("FREE VRAM blocked: shared/unknown owner")
                 window.status.setToolTip(detail)
+                return False
             elif released:
                 window.status.setText("VRAM released")
                 window.status.setToolTip(
@@ -186,6 +188,7 @@ class VramController:
             window._refresh_resources()
             QTimer.singleShot(750, window._refresh_resources)
             QTimer.singleShot(1500, window._refresh_desktop)
+            return True
         finally:
             window.ollama_action_button.setEnabled(True)
 
