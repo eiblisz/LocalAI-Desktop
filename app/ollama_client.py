@@ -324,7 +324,12 @@ class OllamaClient:
         messages: list[dict],
         timeout: float = 600.0,
         response_format=None,
+        control=None,
     ) -> str:
+        if control is not None:
+            control.claim_model_call()
+            timeout = control.request_timeout(timeout)
+
         if self.auto_prepare_model:
             self.prepare_model(model)
 
@@ -375,7 +380,12 @@ class OllamaClient:
         on_token: Callable[[str], None],
         should_stop: Callable[[], bool],
         timeout: float = 600.0,
+        control=None,
     ) -> None:
+        if control is not None:
+            control.claim_model_call()
+            timeout = control.request_timeout(timeout)
+
         if self.auto_prepare_model:
             self.prepare_model(model)
 
@@ -396,8 +406,15 @@ class OllamaClient:
                 stream=True,
                 timeout=timeout,
             ) as response:
+                close_callback = response.close
+                if control is not None:
+                    control.cancellation.register(close_callback)
+                    if control.cancellation.is_cancelled():
+                        return
                 response.raise_for_status()
                 for raw_line in response.iter_lines():
+                    if control is not None:
+                        control.check()
                     if should_stop():
                         break
                     if not raw_line:
@@ -421,6 +438,8 @@ class OllamaClient:
                             )
                     if item.get("done"):
                         break
+                if control is not None:
+                    control.cancellation.unregister(close_callback)
         except Exception as exc:
             self._set_request_state(
                 model,
