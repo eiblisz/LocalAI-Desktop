@@ -43,6 +43,11 @@ The local lease ledger records owner, owner identity, model, owner PID,
 model/runner PID when it can be proven, request identity, start time, last
 heartbeat, state, and diagnostic detail.
 
+The canonical ledger path is the LocalAI Desktop runtime root
+(`%LOCALAPPDATA%\\LocalAI-Desktop\\ollama_resource_leases.json` on the
+normal Windows installation). Cooperating local applications may point to a
+shared alternate path with `LOCALAI_OLLAMA_RESOURCE_LEASE_PATH`.
+
 ## Model switching
 
 Automatic model preparation may gracefully unload a different loaded model only
