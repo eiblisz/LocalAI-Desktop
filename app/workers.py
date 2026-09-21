@@ -37,7 +37,7 @@ from .language_policy import (
 )
 from .ollama_client import OllamaClient
 from .response_guard import guard_response
-from .runtime_control import ExecutionControl
+from .runtime_control import ExecutionBudget, ExecutionControl
 from .scheduled_task_executor import ScheduledTaskExecutor
 from .weather_tool import get_weather, weather_context_text
 from .web_intent import answer_requires_web_fallback
@@ -1526,7 +1526,7 @@ class ArtifactActionWorker(QObject):
         self.constraints = constraints
         self._stop_event = threading.Event()
         self.execution_control = ExecutionControl(
-            budget=__import__("app.runtime_control", fromlist=["ExecutionBudget"]).ExecutionBudget(
+            budget=ExecutionBudget(
                 timeout_seconds=300.0,
                 max_model_calls=max(4, len(self.artifact_plans) * 3),
             )
