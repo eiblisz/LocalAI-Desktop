@@ -187,6 +187,7 @@ def test_prepare_model_reconciles_stopping_without_process_kill(
         owner_pid=os.getpid(),
         model_pid=777,
     )
+    monkeypatch.setattr(client, "_external_consumers", lambda: [])
     monkeypatch.setattr(
         "app.ollama_client.loaded_ollama_models",
         lambda _client, timeout: ["qwen3-coder:30b-a3b-q8_0"],
