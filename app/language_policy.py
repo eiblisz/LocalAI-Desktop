@@ -38,6 +38,22 @@ _HUNGARIAN_WORDS = {
     "alatt",
     "kaphato",
     "kapható",
+    "valaszolj",
+    "válaszolj",
+    "magyarul",
+    "irj",
+    "írj",
+    "keszits",
+    "készíts",
+    "rovid",
+    "rövid",
+    "reszletes",
+    "részletes",
+    "osszefoglalot",
+    "összefoglalót",
+    "elemezd",
+    "hasonlitsd",
+    "hasonlítsd",
 }
 
 _STRONG_HUNGARIAN_CHARS = set("őű")
@@ -85,7 +101,21 @@ def detect_user_language(text):
 
     if marker_hits >= 1 and any(
         _fold(token) in folded_tokens
-        for token in ("ki", "mi", "nekem", "hogy", "jegyezd", "keress", "nezd")
+        for token in (
+            "ki",
+            "mi",
+            "nekem",
+            "hogy",
+            "jegyezd",
+            "keress",
+            "nezd",
+            "valaszolj",
+            "magyarul",
+            "irj",
+            "keszits",
+            "elemezd",
+            "hasonlitsd",
+        )
     ):
         return "hu"
 

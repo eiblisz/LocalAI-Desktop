@@ -55,3 +55,17 @@ def test_hungarian_response_language_accepts_hungarian_answer():
         "Ellenőrzött termékszintű találatok. Csak olyan árat mutatok, amely igazolt.",
     )
 
+
+
+
+def test_detects_general_hungarian_instruction_prompt():
+    assert (
+        detect_user_language(
+            "Válaszolj magyarul egy rövid összefoglalóban az AI Desktop munkanapjáról."
+        )
+        == "hu"
+    )
+
+
+def test_detects_hungarian_command_without_special_oo_uu_markers():
+    assert detect_user_language("Irj magyarul reszletes elemzest.") == "hu"

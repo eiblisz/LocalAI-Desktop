@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 from .crypto_market_data import is_crypto_quote_request
 from .multi_asset_market_data import is_multi_asset_quote_request
+from .task_constraints import build_task_constraints
 from .web_intent import (
     ACTION_ARTIFACT,
     ACTION_MEMORY_WRITE,
@@ -50,6 +51,7 @@ class ActionContract:
     use_web: bool
     market_fallback: bool
     required_authorities: tuple[str, ...]
+    constraints: object
 
     @property
     def artifact_plans(self):
@@ -210,6 +212,7 @@ class ActionRuntime:
             disable_web=bool(disable_web),
         )
         suffix = str(model_context_suffix or "")
+        constraints = build_task_constraints(user_text)
 
         contracts = []
         for index, item in enumerate(planned):
@@ -232,6 +235,7 @@ class ActionRuntime:
                         decision.route,
                         use_web=decision.use_web,
                     ),
+                    constraints=constraints,
                 )
             )
 
