@@ -1699,3 +1699,10 @@ class ScheduledTaskWorker(QObject):
             self.finished.emit(task_id, result.content)
         except Exception as exc:
             self.failed.emit(task_id, str(exc))
+        finally:
+            release = getattr(self.client, "release_owned_models", None)
+            if callable(release):
+                try:
+                    release(timeout=5.0)
+                except Exception:
+                    pass
