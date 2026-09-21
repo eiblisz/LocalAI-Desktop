@@ -262,3 +262,16 @@ def test_auto_prepare_model_is_opt_in_for_chat_once(monkeypatch):
         messages=[{"role": "user", "content": "test"}],
     )
     assert captured["prepared"] == ["qwen-test"]
+
+
+
+def test_automatic_model_prepare_has_no_process_kill_or_server_restart_path():
+    import inspect
+
+    source = inspect.getsource(OllamaClient.prepare_model)
+
+    assert "kill_ollama" not in source
+    assert "kill_ollama_model_processes" not in source
+    assert "restart_ollama" not in source
+    assert "unload_ollama_model" in source
+    assert "can_control_model" in source
