@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import subprocess
@@ -45,17 +46,101 @@ def _run_powershell(script, timeout=8.0):
     return (completed.stdout or "").strip()
 
 
-def kill_ollama_model_processes(timeout=8.0):
-    """Force-stop Ollama runner/model processes without killing the server."""
+def _parse_json_rows(output):
+    if not str(output or "").strip():
+        return []
+    payload = json.loads(output)
+    if isinstance(payload, dict):
+        payload = [payload]
+    return payload if isinstance(payload, list) else []
+
+
+def list_ollama_model_processes(timeout=5.0):
+    """Return runner/model processes without mutating the shared runtime."""
     script = r"""
 $targets = Get-CimInstance Win32_Process | Where-Object {
     ($_.Name -ieq 'ollama.exe' -and $_.CommandLine -match '(?i)(^|\s)runner(\s|$)') -or
     ($_.Name -ieq 'ollama_llama_server.exe')
-}
+} | Select-Object ProcessId,Name,CommandLine
+@($targets) | ConvertTo-Json -Compress
+"""
+    return [
+        {
+            "pid": int(row.get("ProcessId")),
+            "name": str(row.get("Name") or ""),
+            "command_line": str(row.get("CommandLine") or ""),
+        }
+        for row in _parse_json_rows(_run_powershell(script, timeout=timeout))
+        if str(row.get("ProcessId") or "").isdigit()
+    ]
+
+
+def list_external_ollama_consumers(timeout=5.0):
+    """
+    Best-effort local client discovery.
+
+    This is not ownership proof. It is an additional safety signal used to block
+    destructive operations when a known external Local AI client is visible.
+    """
+    script = r"""
+$targets = Get-CimInstance Win32_Process | Where-Object {
+    ($_.Name -ieq 'ollama.exe' -and $_.CommandLine -match '(?i)(^|\s)run(\s|$)') -or
+    (($_.Name -ieq 'python.exe' -or $_.Name -ieq 'pythonw.exe') -and
+        $_.CommandLine -match '(?i)EinsteinAI')
+} | Select-Object ProcessId,Name,CommandLine
+@($targets) | ConvertTo-Json -Compress
+"""
+    rows = _parse_json_rows(_run_powershell(script, timeout=timeout))
+    result = []
+    for row in rows:
+        pid = row.get("ProcessId")
+        if not str(pid or "").isdigit():
+            continue
+        command_line = str(row.get("CommandLine") or "")
+        lowered = command_line.lower()
+        owner = "EINSTEIN" if "einsteinai" in lowered else "MANUAL"
+        result.append(
+            {
+                "pid": int(pid),
+                "name": str(row.get("Name") or ""),
+                "command_line": command_line,
+                "owner": owner,
+            }
+        )
+    return result
+
+
+def kill_ollama_model_processes(pids=None, timeout=8.0):
+    """
+    Force-stop only explicitly authorized runner PIDs.
+
+    Global runner discovery is intentionally not used as kill authority.
+    """
+    authorized = sorted(
+        {
+            int(pid)
+            for pid in (pids or [])
+            if str(pid).isdigit() and int(pid) > 0
+        }
+    )
+    if not authorized:
+        raise OllamaProcessControlError(
+            "Model process kill blocked: no ownership-authorized PID was supplied."
+        )
+
+    pid_literal = ",".join(str(pid) for pid in authorized)
+    script = rf"""
+$authorized = @({pid_literal})
+$targets = Get-CimInstance Win32_Process | Where-Object {{
+    $authorized -contains [int]$_.ProcessId -and (
+        ($_.Name -ieq 'ollama.exe' -and $_.CommandLine -match '(?i)(^|\s)runner(\s|$)') -or
+        ($_.Name -ieq 'ollama_llama_server.exe')
+    )
+}}
 $ids = @($targets | Select-Object -ExpandProperty ProcessId)
-foreach ($pidValue in $ids) {
+foreach ($pidValue in $ids) {{
     Stop-Process -Id $pidValue -Force -ErrorAction SilentlyContinue
-}
+}}
 $ids -join ','
 """
     output = _run_powershell(script, timeout=timeout)
@@ -67,7 +152,7 @@ $ids -join ','
 
 
 def kill_ollama(timeout=8.0):
-    """Force-stop Ollama server and runner processes."""
+    """Emergency global stop for Ollama server and runner processes."""
     script = r"""
 $names = @('ollama.exe', 'ollama_llama_server.exe', 'ollama app.exe')
 $targets = Get-CimInstance Win32_Process | Where-Object {
