@@ -332,3 +332,112 @@ def test_prepare_model_allows_visible_manual_client_only_for_same_target(
     )
 
     assert client.prepare_model("qwen3-coder:30b-a3b-q8_0") == []
+
+
+
+def test_controlled_chat_once_uses_streaming_and_honors_budget(monkeypatch):
+    import json
+
+    from app.runtime_control import ExecutionBudget, ExecutionControl
+
+    captured = {}
+
+    class StreamResponse:
+        def __init__(self):
+            self.closed = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.close()
+
+        def close(self):
+            self.closed = True
+
+        def raise_for_status(self):
+            return None
+
+        def iter_lines(self):
+            yield json.dumps({
+                "message": {"content": "hello "},
+                "done": False,
+            }).encode("utf-8")
+            yield json.dumps({
+                "message": {"content": "world"},
+                "done": True,
+            }).encode("utf-8")
+
+    response = StreamResponse()
+
+    def fake_post(url, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return response
+
+    monkeypatch.setattr("app.ollama_client.requests.post", fake_post)
+    control = ExecutionControl(
+        budget=ExecutionBudget(timeout_seconds=60, max_model_calls=2)
+    )
+
+    result = OllamaClient().chat_once(
+        model="qwen-test",
+        messages=[{"role": "user", "content": "test"}],
+        control=control,
+    )
+
+    assert result == "hello world"
+    assert captured["json"]["stream"] is True
+    assert captured["stream"] is True
+    assert control.budget.model_calls == 1
+
+
+def test_controlled_chat_once_closes_active_response_on_cancel(monkeypatch):
+    import json
+
+    from app.runtime_control import ExecutionControl
+
+    control = ExecutionControl()
+
+    class StreamResponse:
+        def __init__(self):
+            self.closed = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.close()
+
+        def close(self):
+            self.closed = True
+
+        def raise_for_status(self):
+            return None
+
+        def iter_lines(self):
+            yield json.dumps({
+                "message": {"content": "partial"},
+                "done": False,
+            }).encode("utf-8")
+            control.cancellation.cancel()
+            if not self.closed:
+                yield json.dumps({
+                    "message": {"content": "should-not-continue"},
+                    "done": True,
+                }).encode("utf-8")
+
+    response = StreamResponse()
+    monkeypatch.setattr(
+        "app.ollama_client.requests.post",
+        lambda *args, **kwargs: response,
+    )
+
+    result = OllamaClient().chat_once(
+        model="qwen-test",
+        messages=[{"role": "user", "content": "test"}],
+        control=control,
+    )
+
+    assert response.closed is True
+    assert "should-not-continue" not in result
