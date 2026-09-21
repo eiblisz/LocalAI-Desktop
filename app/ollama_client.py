@@ -338,7 +338,7 @@ class OllamaClient:
         payload = {
             "model": model,
             "messages": messages,
-            "stream": False,
+            "stream": bool(control is not None),
         }
         if response_format is not None:
             if not isinstance(response_format, (str, dict)):
@@ -347,14 +347,42 @@ class OllamaClient:
 
         try:
             self._set_request_state(model, request_id, STATE_INFERENCE_ACTIVE)
-            response = requests.post(
-                f"{self.base_url}/api/chat",
-                json=payload,
-                timeout=timeout,
-            )
-            response.raise_for_status()
-            item = response.json()
-            result = item.get("message", {}).get("content", "")
+            if control is None:
+                response = requests.post(
+                    f"{self.base_url}/api/chat",
+                    json=payload,
+                    timeout=timeout,
+                )
+                response.raise_for_status()
+                item = response.json()
+                result = item.get("message", {}).get("content", "")
+            else:
+                parts = []
+                with requests.post(
+                    f"{self.base_url}/api/chat",
+                    json=payload,
+                    stream=True,
+                    timeout=timeout,
+                ) as response:
+                    close_callback = response.close
+                    control.cancellation.register(close_callback)
+                    if control.cancellation.is_cancelled():
+                        return ""
+                    response.raise_for_status()
+                    try:
+                        for raw_line in response.iter_lines():
+                            control.check()
+                            if not raw_line:
+                                continue
+                            item = json.loads(raw_line.decode("utf-8"))
+                            chunk = item.get("message", {}).get("content", "")
+                            if chunk:
+                                parts.append(chunk)
+                            if item.get("done"):
+                                break
+                    finally:
+                        control.cancellation.unregister(close_callback)
+                result = "".join(parts)
         except Exception as exc:
             self._set_request_state(
                 model,
