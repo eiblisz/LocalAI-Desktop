@@ -1408,13 +1408,14 @@ class AdaptiveChatWorker(QObject):
             else:
                 final = draft
 
-            final = guard_response(
-                self.client,
-                self.model,
-                self.user_prompt,
-                final,
-                constraints=self.constraints,
-            )
+            if self.constraints is not None:
+                final = guard_response(
+                    self.client,
+                    self.model,
+                    self.user_prompt,
+                    final,
+                    constraints=self.constraints,
+                )
 
             if self._stop_event.is_set():
                 self.finished.emit()
@@ -1620,13 +1621,14 @@ class ArtifactActionWorker(QObject):
                                 "literals: " + ", ".join(unsupported)
                             )
 
-                content = guard_response(
-                    self.client,
-                    self.model,
-                    str(plan.prompt or self.user_prompt),
-                    content,
-                    constraints=self.constraints,
-                )
+                if self.constraints is not None:
+                    content = guard_response(
+                        self.client,
+                        self.model,
+                        str(plan.prompt or self.user_prompt),
+                        content,
+                        constraints=self.constraints,
+                    )
 
                 path = create_artifact(
                     plan.request.format,
