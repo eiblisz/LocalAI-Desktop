@@ -899,9 +899,9 @@ def test_local_model_hub_lists_all_ollama_models_and_supports_refresh():
     assert "self.model_combo.setMinimumWidth(300)" in build_source
     assert "self.model_combo.setMaxVisibleItems(24)" in build_source
     assert 'QPushButton("REFRESH")' in build_source
-    assert "self.refresh_models_button.clicked.connect(self._load_models)" in build_source
+    assert "self.refresh_models_button.clicked.connect(self._refresh_desktop)" in build_source
 
-    assert "self.client.list_models()" in load_source
+    assert "self.client.list_models(timeout=2.5)" in load_source
     assert "self.model_combo.addItems(models)" in load_source
     assert 'self.model_label.setText(' in load_source
     assert "LOCAL MODELS (" in load_source
@@ -912,12 +912,14 @@ def test_local_model_hub_lists_all_ollama_models_and_supports_refresh():
     assert 'self.status.setText(f"Model: {model}")' in changed_source
 
 
-def test_model_refresh_preserves_saved_or_current_chat_model():
+def test_model_refresh_prefers_qwen30b_at_startup_then_preserves_chat_selection():
     from app.main_window import MainWindow
 
     source = inspect.getsource(MainWindow._refresh_local_model_hub)
 
     assert 'saved = str(self.current_chat.get("model") or "").strip()' in source
+    assert "self._startup_model_selection and PREFERRED_LOCAL_MODEL" in source
+    assert "preferred = PREFERRED_LOCAL_MODEL" in source
     assert "preferred = saved or previous or PREFERRED_LOCAL_MODEL" in source
     assert "self.model_combo.findText(preferred)" in source
     assert "self.model_combo.setCurrentIndex(index)" in source
@@ -939,17 +941,20 @@ def test_startup_prefers_qwen3_coder_30b_over_alphabetical_first_model():
     assert "self.model_combo.findText(PREFERRED_LOCAL_MODEL)" in source
 
 
-def test_existing_chat_restores_saved_model_or_qwen30b_fallback():
+def test_existing_chat_forces_qwen30b_on_startup_then_keeps_explicit_model():
     from app.main_window import MainWindow
 
     source = inspect.getsource(MainWindow._ensure_chat)
 
     assert 'saved_model = str(self.current_chat.get("model") or "").strip()' in source
-    assert "self.model_combo.findText(saved_model)" in source
+    assert "self._startup_model_selection" in source
+    assert "selected_model = PREFERRED_LOCAL_MODEL" in source
+    assert "selected_model = saved_model or self._default_local_model()" in source
     assert "self.model_combo.findText(PREFERRED_LOCAL_MODEL)" in source
     assert "self.model_combo.blockSignals(True)" in source
     assert "self.model_combo.setCurrentIndex(index)" in source
     assert "self.model_combo.blockSignals(False)" in source
+    assert "self._startup_model_selection = False" in source
 
 
 def test_topbar_model_controls_share_one_compact_baseline():
@@ -1218,11 +1223,25 @@ def test_main_window_owns_explicit_ui_controllers():
     assert "self.image_studio_controller = ImageStudioController(self)" in source
 
 
-def test_vram_release_is_explicit_controller_delegation():
+def test_ollama_controls_are_explicit_controller_delegation():
     from app.main_window import MainWindow
 
     load_source = inspect.getsource(MainWindow._load_models)
     release_source = inspect.getsource(MainWindow._release_vram)
 
-    assert "self.vram_controller.ensure_button()" in load_source
+    assert "self.vram_controller.ensure_controls()" in load_source
     assert "self.vram_controller.release()" in release_source
+
+
+def test_refresh_reloads_desktop_state_not_only_model_list():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._refresh_desktop)
+
+    assert "self._load_models()" in source
+    assert "self.store.load(current_id)" in source
+    assert "self._load_chat_list()" in source
+    assert "self._render_chat()" in source
+    assert "self._refresh_resources()" in source
+    assert "self._refresh_schedule_indicator()" in source
+    assert "self._refresh_chat_extensions_button()" in source
