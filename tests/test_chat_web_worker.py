@@ -1552,3 +1552,37 @@ def test_adaptive_chat_worker_local_only_never_uses_web_fallback(monkeypatch):
     assert not failed
     assert tokens == ["Nincs friss informaciom errol a kiadasrol."]
     assert worker.used_web_fallback is False
+
+
+
+def test_adaptive_chat_repairs_accidental_hangul_with_parent_constraints():
+    from app.task_constraints import build_task_constraints
+
+    class RepairingClient:
+        def __init__(self):
+            self.responses = [
+                "Ez egy magyar válasz 잘못 beszúrással.",
+                "Ez egy javított magyar válasz.",
+            ]
+
+        def chat_once(self, model, messages, timeout=600.0):
+            return self.responses.pop(0)
+
+    prompt = "Válaszolj magyarul röviden."
+    tokens = []
+    errors = []
+    worker = workers.AdaptiveChatWorker(
+        RepairingClient(),
+        "qwen-test",
+        [{"role": "user", "content": prompt}],
+        prompt,
+        allow_web_fallback=False,
+        constraints=build_task_constraints(prompt),
+    )
+    worker.token.connect(tokens.append)
+    worker.failed.connect(errors.append)
+
+    worker.run()
+
+    assert errors == []
+    assert tokens == ["Ez egy javított magyar válasz."]
