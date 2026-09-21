@@ -9,8 +9,14 @@ from .vram_release import loaded_ollama_models, unload_ollama_model
 
 
 class OllamaClient:
-    def __init__(self, base_url: str = OLLAMA_BASE_URL):
+    def __init__(
+        self,
+        base_url: str = OLLAMA_BASE_URL,
+        *,
+        auto_prepare_model: bool = False,
+    ):
         self.base_url = base_url.rstrip("/")
+        self.auto_prepare_model = bool(auto_prepare_model)
 
     def is_available(self, timeout: float = 2.0) -> bool:
         try:
@@ -65,7 +71,8 @@ class OllamaClient:
         timeout: float = 600.0,
         response_format=None,
     ) -> str:
-        self.prepare_model(model)
+        if self.auto_prepare_model:
+            self.prepare_model(model)
         payload = {
             "model": model,
             "messages": messages,
