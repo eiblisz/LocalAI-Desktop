@@ -40,7 +40,7 @@ class SchedulerEngine:
     ):
         self.scheduler_store = scheduler_store or ScheduledTaskStore()
         self.chat_store = chat_store or ChatStore()
-        self.client = client or OllamaClient()
+        self.client = client or OllamaClient(auto_prepare_model=True)
         self._now_provider = now_provider or datetime.now
         self.lease_seconds = max(60, int(lease_seconds or 3600))
         self.owner_id = owner_id or self.default_owner_id()
