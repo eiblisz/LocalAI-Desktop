@@ -44,7 +44,18 @@ ALLOWED_STATES = {
     STATE_ERROR,
 }
 
-DEFAULT_LEASE_PATH = RUNTIME_DIR / "ollama_resource_leases.json"
+RESOURCE_LEASE_ENV_VAR = "LOCALAI_OLLAMA_RESOURCE_LEASE_PATH"
+
+
+def default_lease_path(env=None):
+    env = os.environ if env is None else env
+    override = str(env.get(RESOURCE_LEASE_ENV_VAR, "") or "").strip()
+    if override:
+        return Path(os.path.expandvars(override)).expanduser()
+    return RUNTIME_DIR / "ollama_resource_leases.json"
+
+
+DEFAULT_LEASE_PATH = default_lease_path()
 
 
 class OllamaResourceBusyError(RuntimeError):
