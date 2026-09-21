@@ -1366,12 +1366,15 @@ class AdaptiveChatWorker(QObject):
         model: str,
         messages: list[dict],
         user_prompt: str,
+        *,
+        allow_web_fallback: bool = True,
     ):
         super().__init__()
         self.client = client
         self.model = model
         self.messages = [dict(message) for message in messages]
         self.user_prompt = str(user_prompt or "").strip()
+        self.allow_web_fallback = bool(allow_web_fallback)
         self._stop_event = threading.Event()
         self.used_web_fallback = False
 
@@ -1388,7 +1391,8 @@ class AdaptiveChatWorker(QObject):
             ).strip()
 
             if (
-                not self._stop_event.is_set()
+                self.allow_web_fallback
+                and not self._stop_event.is_set()
                 and answer_requires_web_fallback(self.user_prompt, draft)
             ):
                 self.used_web_fallback = True
