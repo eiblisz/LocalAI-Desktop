@@ -4,10 +4,15 @@ from app import workers
 class DummyClient:
     def __init__(self):
         self.calls = []
+        self.releases = []
 
     def chat_once(self, model, messages, timeout=600.0):
         self.calls.append((model, messages))
         return "Scheduled result."
+
+    def release_owned_models(self, timeout=5.0):
+        self.releases.append(timeout)
+        return {"released": ["qwen-test"], "blocked": [], "reconciled": []}
 
 
 def _run_worker(task):
@@ -282,3 +287,17 @@ def test_web_result_system_prompt_requires_source_grounding(monkeypatch):
     assert "no relevant sources were found" in system
     assert "Never invent scores, ratings, prices" in system
     assert "https://example.com/relevant" in completed[0][1]
+
+
+
+def test_scheduled_worker_releases_scheduler_owned_model_after_task():
+    client, completed, failed = _run_worker({
+        "id": "release-1",
+        "task_type": "custom",
+        "prompt": "Short scheduled task.",
+        "model": "qwen-test",
+    })
+
+    assert not failed
+    assert completed
+    assert client.releases == [5.0]
