@@ -200,6 +200,15 @@ class VramController:
             )
             return
 
+        foreign = window.client.foreign_active_leases()
+        if foreign:
+            QMessageBox.warning(
+                window,
+                "Shared Ollama resource",
+                "KILL MODEL PROCESS blocked because another registered owner has an active lease.",
+            )
+            return
+
         external = self._external_consumers()
         if external is None:
             QMessageBox.warning(
