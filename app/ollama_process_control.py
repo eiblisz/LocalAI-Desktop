@@ -78,7 +78,7 @@ $targets = Get-CimInstance Win32_Process | Where-Object {
 
 def _extract_ollama_run_model(command_line):
     text = str(command_line or "")
-    match = re.search(r"(?i)\\brun\\s+(?:\"([^\"]+)\"|(\\S+))", text)
+    match = re.search(r'(?i)\brun\s+(?:"([^"]+)"|(\S+))', text)
     if not match:
         return ""
     return str(match.group(1) or match.group(2) or "").strip()
@@ -93,7 +93,7 @@ def _classify_ollama_consumer(name, command_line):
         return "SCHEDULER"
     if "localai-desktop" in lowered:
         return "LOCALAI_DESKTOP"
-    if name == "ollama.exe" and re.search(r"(?i)\\brun\\b", lowered):
+    if name == "ollama.exe" and re.search(r"(?i)\brun\b", lowered):
         return "MANUAL"
     return "OTHER"
 
