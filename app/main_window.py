@@ -1316,6 +1316,7 @@ class MainWindow(QMainWindow):
                 prompt,
                 contract.artifact_plans,
                 use_web=contract.use_web,
+                constraints=contract.constraints,
             )
             self.worker.moveToThread(self.thread)
             self.thread.started.connect(self.worker.run)
@@ -1370,6 +1371,7 @@ class MainWindow(QMainWindow):
                 messages_for_model,
                 execution_text,
                 allow_web_fallback=self.web_mode != "OFF",
+                constraints=contract.constraints,
             )
         else:
             self.thread = None
