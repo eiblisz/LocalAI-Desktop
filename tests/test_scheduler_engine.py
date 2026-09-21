@@ -141,3 +141,24 @@ def test_second_engine_cannot_run_task_with_active_lease(tmp_path):
     still_running = store.get(task["id"])
     assert still_running["lease_owner"] == "runner-a"
     assert still_running["attempt_id"] == claimed["attempt_id"]
+
+
+
+def test_default_scheduler_client_claims_scheduler_resource_owner(monkeypatch, tmp_path):
+    captured = {}
+
+    class CapturingClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("app.scheduler_engine.OllamaClient", CapturingClient)
+
+    SchedulerEngine(
+        ScheduledTaskStore(tmp_path / "tasks-owner.json"),
+        ChatStore(tmp_path / "chats-owner"),
+        owner_id="runner-owner-test",
+    )
+
+    assert captured["auto_prepare_model"] is True
+    assert captured["owner_type"] == "SCHEDULER"
+    assert captured["owner_id"] == "runner-owner-test"
