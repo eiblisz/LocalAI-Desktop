@@ -164,3 +164,22 @@ def test_girlfriend_fact_does_not_infer_relationship_to_user():
         )
     )
 
+
+
+
+def test_hungarian_first_person_identity_query_uses_user_name_memory():
+    assert (
+        direct_user_memory_answer("Ki vagyok én?", MEMORIES)
+        == "A neved Iblisz."
+    )
+    assert (
+        direct_user_memory_answer("Ki vagyok?", MEMORIES)
+        == "A neved Iblisz."
+    )
+
+
+def test_english_first_person_identity_query_uses_user_name_memory():
+    assert (
+        direct_user_memory_answer("Who am I?", MEMORIES)
+        == "Your name is Iblisz."
+    )
