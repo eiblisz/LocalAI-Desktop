@@ -162,3 +162,33 @@ def test_default_scheduler_client_claims_scheduler_resource_owner(monkeypatch, t
     assert captured["auto_prepare_model"] is True
     assert captured["owner_type"] == "SCHEDULER"
     assert captured["owner_id"] == "runner-owner-test"
+
+
+
+def test_background_scheduler_releases_owned_model_after_task(tmp_path):
+    class ReleasingClient:
+        def __init__(self):
+            self.releases = []
+
+        def release_owned_models(self, timeout=5.0):
+            self.releases.append(timeout)
+            return {"released": ["qwen-test"], "blocked": [], "reconciled": []}
+
+    store = ScheduledTaskStore(tmp_path / "tasks-release.json")
+    chats = ChatStore(tmp_path / "chats-release")
+    client = ReleasingClient()
+    engine = SchedulerEngine(
+        store,
+        chats,
+        client,
+        owner_id="runner-release",
+        now_provider=lambda: datetime(2026, 9, 20, 12, 0, 0),
+        lease_seconds=600,
+        executor_factory=SuccessExecutor,
+    )
+    _due_task(store)
+
+    result = engine.run_once()
+
+    assert result.status == "success"
+    assert client.releases == [5.0]
