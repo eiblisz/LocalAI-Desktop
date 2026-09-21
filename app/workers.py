@@ -10,6 +10,7 @@ from .document_tools import (
     build_excel_messages,
     build_summary_messages,
 )
+from .context_guard import guard_context_response
 from .computer_status_tool import (
     computer_status_context_text,
     get_computer_status,
@@ -1430,6 +1431,15 @@ class AdaptiveChatWorker(QObject):
                     constraints=self.constraints,
                     control=self.execution_control,
                 )
+                final = guard_context_response(
+                    self.client,
+                    self.model,
+                    self.user_prompt,
+                    final,
+                    self.messages,
+                    constraints=self.constraints,
+                    control=self.execution_control,
+                )
 
             if self._stop_event.is_set():
                 self.finished.emit()
@@ -1660,11 +1670,21 @@ class ArtifactActionWorker(QObject):
                             )
 
                 if self.constraints is not None:
+                    effective_prompt = str(plan.prompt or self.user_prompt)
                     content = guard_response(
                         self.client,
                         self.model,
-                        str(plan.prompt or self.user_prompt),
+                        effective_prompt,
                         content,
+                        constraints=self.constraints,
+                        control=self.execution_control,
+                    )
+                    content = guard_context_response(
+                        self.client,
+                        self.model,
+                        effective_prompt,
+                        content,
+                        self.messages,
                         constraints=self.constraints,
                         control=self.execution_control,
                     )

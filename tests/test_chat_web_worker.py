@@ -1586,3 +1586,42 @@ def test_adaptive_chat_repairs_accidental_hangul_with_parent_constraints():
 
     assert errors == []
     assert tokens == ["Ez egy javított magyar válasz."]
+
+
+
+def test_adaptive_chat_repairs_stale_subject_substitution():
+    from app.task_constraints import build_task_constraints
+
+    class DriftRepairClient:
+        def __init__(self):
+            self.responses = [
+                "A Bitcoin aktualis ara 60 000 USD.",
+                "A Tesla aktualis ara 364 USD.",
+            ]
+
+        def chat_once(self, model, messages, timeout=600.0, **kwargs):
+            return self.responses.pop(0)
+
+    prompt = "Melyik a Tesla aktualis ara?"
+    messages = [
+        {"role": "user", "content": "Melyik a Bitcoin aktualis ara?"},
+        {"role": "assistant", "content": "A Bitcoin ara..."},
+        {"role": "user", "content": prompt},
+    ]
+    tokens = []
+    errors = []
+    worker = workers.AdaptiveChatWorker(
+        DriftRepairClient(),
+        "qwen-test",
+        messages,
+        prompt,
+        allow_web_fallback=False,
+        constraints=build_task_constraints(prompt),
+    )
+    worker.token.connect(tokens.append)
+    worker.failed.connect(errors.append)
+
+    worker.run()
+
+    assert errors == []
+    assert tokens == ["A Tesla aktualis ara 364 USD."]
