@@ -1520,3 +1520,35 @@ def test_web_worker_chooses_newest_family_fact_across_multiple_queries(monkeypat
     assert "Qwen3.8" in main_answer
     assert "Qwen2.5" not in main_answer
     assert "qwen.ai/blog?id=qwen3.8" in main_answer
+
+
+
+def test_adaptive_chat_worker_local_only_never_uses_web_fallback(monkeypatch):
+    class StaleClient:
+        def chat_once(self, model, messages, timeout=600.0):
+            return "Nincs friss informaciom errol a kiadasrol."
+
+    monkeypatch.setattr(
+        workers,
+        "run_chat_web_request",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("LOCAL ONLY must never call web fallback")
+        ),
+    )
+
+    tokens = []
+    failed = []
+    worker = workers.AdaptiveChatWorker(
+        StaleClient(),
+        "qwen-test",
+        [{"role": "user", "content": "Melyik Qwen verzio a legujabb?"}],
+        "Melyik Qwen verzio a legujabb?",
+        allow_web_fallback=False,
+    )
+    worker.token.connect(tokens.append)
+    worker.failed.connect(failed.append)
+    worker.run()
+
+    assert not failed
+    assert tokens == ["Nincs friss informaciom errol a kiadasrol."]
+    assert worker.used_web_fallback is False
