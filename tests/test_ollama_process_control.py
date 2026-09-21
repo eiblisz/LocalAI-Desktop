@@ -72,6 +72,8 @@ def test_external_consumer_discovery_classifies_manual_and_einstein(monkeypatch)
 
     rows = control.list_external_ollama_consumers()
     assert [row["owner"] for row in rows] == ["MANUAL", "EINSTEIN"]
+    assert rows[0]["model"] == "gemma4:26b"
+    assert rows[1]["model"] == ""
 
 
 def test_kill_ollama_targets_server_and_runner_for_emergency_action(monkeypatch):
@@ -152,3 +154,11 @@ def test_direct_http_consumer_is_other_and_current_pid_can_be_excluded(monkeypat
 
     excluded = control.list_external_ollama_consumers(exclude_pids=[701])
     assert excluded == []
+
+
+
+def test_manual_ollama_run_parser_handles_quoted_executable_and_model():
+    command = '"C:\\Program Files\\Ollama\\ollama.exe" run "qwen3-coder:30b-a3b-q8_0"'
+
+    assert control._extract_ollama_run_model(command) == "qwen3-coder:30b-a3b-q8_0"
+    assert control._classify_ollama_consumer("ollama.exe", command) == "MANUAL"

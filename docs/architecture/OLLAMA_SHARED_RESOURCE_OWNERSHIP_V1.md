@@ -50,13 +50,19 @@ shared alternate path with `LOCALAI_OLLAMA_RESOURCE_LEASE_PATH`.
 
 ## Model switching
 
+Automatic model preparation first checks visible external Ollama clients before
+trusting the resident-model list. This is required because a manual
+`ollama run` session may exist even when `/api/ps` is temporarily empty or
+transitional.
+
 Automatic model preparation may gracefully unload a different loaded model only
 when all of the following are true:
 
 1. the loaded model has an exact lease for the current caller;
 2. that lease is not in active inference;
 3. runner discovery succeeds;
-4. no known external Ollama consumer is visible.
+4. no conflicting external Ollama consumer is visible;
+5. the external-consumer check still passes immediately before unload.
 
 If ownership is foreign or unknown, LocalAI Desktop reports the shared runtime as
 busy and does not unload or kill anything.
@@ -119,6 +125,8 @@ The contract is accepted only if tests prove:
 
 - unknown ownership blocks destructive model control;
 - foreign active ownership blocks model switching;
+- a visible manual `ollama run qwen...` blocks switching to a different model
+  before resident-model state is consulted;
 - own idle ownership permits graceful unload;
 - active inference is not FREE VRAM authority;
 - KILL MODEL PROCESS requires explicit authorized PIDs;

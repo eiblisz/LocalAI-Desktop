@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -75,6 +76,14 @@ $targets = Get-CimInstance Win32_Process | Where-Object {
     ]
 
 
+def _extract_ollama_run_model(command_line):
+    text = str(command_line or "")
+    match = re.search(r'(?i)\brun\s+(?:"([^"]+)"|(\S+))', text)
+    if not match:
+        return ""
+    return str(match.group(1) or match.group(2) or "").strip()
+
+
 def _classify_ollama_consumer(name, command_line):
     name = str(name or "").lower()
     lowered = str(command_line or "").lower()
@@ -84,7 +93,7 @@ def _classify_ollama_consumer(name, command_line):
         return "SCHEDULER"
     if "localai-desktop" in lowered:
         return "LOCALAI_DESKTOP"
-    if name == "ollama.exe" and " run " in f" {lowered} ":
+    if name == "ollama.exe" and re.search(r"(?i)\brun\b", lowered):
         return "MANUAL"
     return "OTHER"
 
@@ -99,7 +108,7 @@ def list_external_ollama_consumers(timeout=5.0, exclude_pids=None):
     """
     script = r"""
 $direct = Get-CimInstance Win32_Process | Where-Object {
-    ($_.Name -ieq 'ollama.exe' -and $_.CommandLine -match '(?i)(^|\s)run(\s|$)') -or
+    ($_.Name -ieq 'ollama.exe' -and $_.CommandLine -match '(?i)\brun\b') -or
     (($_.Name -ieq 'python.exe' -or $_.Name -ieq 'pythonw.exe') -and
         $_.CommandLine -match '(?i)EinsteinAI')
 } | Select-Object ProcessId,Name,CommandLine
@@ -139,6 +148,7 @@ $unique | ConvertTo-Json -Compress
                 "name": name,
                 "command_line": command_line,
                 "owner": _classify_ollama_consumer(name, command_line),
+                "model": _extract_ollama_run_model(command_line),
             }
         )
     return result
