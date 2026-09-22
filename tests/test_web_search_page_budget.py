@@ -33,9 +33,9 @@ def test_search_web_accepts_bounded_integer_page_fetch_budget(monkeypatch):
         lambda query, items: list(items),
     )
 
-    def capture_fetch(items, timeout, limit=6):
-        fetch_calls.append((len(items), timeout, limit))
-        for item in items[:limit]:
+    def capture_fetch(items, timeout):
+        fetch_calls.append((len(items), timeout))
+        for item in items:
             item["page_text"] = "Fetched evidence"
 
     monkeypatch.setattr(web_search_tool, "_fetch_top_pages", capture_fetch)
@@ -47,7 +47,7 @@ def test_search_web_accepts_bounded_integer_page_fetch_budget(monkeypatch):
         timeout=20.0,
     )
 
-    assert fetch_calls == [(5, 8.0, 2)]
+    assert fetch_calls == [(2, 8.0)]
     assert payload["timing"]["page_fetch_count"] == 2
     assert payload["timing"]["usable_sources"] == 5
 
@@ -84,9 +84,9 @@ def test_boolean_fetch_pages_keeps_legacy_six_page_budget(monkeypatch):
         lambda query, items: list(items),
     )
 
-    def capture_fetch(items, timeout, limit=6):
-        fetch_calls.append((len(items), timeout, limit))
-        for item in items[:limit]:
+    def capture_fetch(items, timeout):
+        fetch_calls.append((len(items), timeout))
+        for item in items:
             item["page_text"] = "Fetched evidence"
 
     monkeypatch.setattr(web_search_tool, "_fetch_top_pages", capture_fetch)
@@ -98,5 +98,5 @@ def test_boolean_fetch_pages_keeps_legacy_six_page_budget(monkeypatch):
         timeout=20.0,
     )
 
-    assert fetch_calls == [(8, 15.0, 6)]
+    assert fetch_calls == [(6, 15.0)]
     assert payload["timing"]["page_fetch_count"] == 6
