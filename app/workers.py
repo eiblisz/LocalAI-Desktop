@@ -468,8 +468,11 @@ class ChatWebWorker(QObject):
                     "role": "system",
                     "content": (
                         f"Rewrite the supplied answer in {language_name}. "
-                        "Preserve every URL, number, product name, and factual claim exactly. "
-                        "Do not add, remove, infer, or correct facts. Return only the rewritten answer."
+                        "Preserve every URL, number, product name, proper name, and factual claim "
+                        "exactly. Preserve the exact spelling, diacritics, and token order of proper "
+                        "names as they appear in the supplied answer; do not translate or reorder "
+                        "personal names. Do not add, remove, infer, or correct facts. "
+                        "Return only the rewritten answer."
                     ),
                 },
                 {
@@ -1022,11 +1025,30 @@ class ChatWebWorker(QObject):
                 and not self._has_multiple_research_topics()
                 and not evidence_required(build_search_plan(self.user_prompt))
             )
-            generated_queries = (
-                build_generic_shopping_queries(self.user_prompt)
-                if generic_shopping_mode
-                else self._generate_search_queries()
-            )
+            if generic_shopping_mode:
+                generated_queries = build_generic_shopping_queries(
+                    self.user_prompt
+                )
+                if self.trace is not None:
+                    self.trace.mark_duration("query_generation", 0.0)
+                    self.trace.add_metadata(query_strategy="generic_shopping")
+            elif (
+                is_factual_risk_request(self.user_prompt)
+                and not self._has_multiple_research_topics()
+            ):
+                generated_queries = [self.user_prompt]
+                if self.trace is not None:
+                    self.trace.mark_duration("query_generation", 0.0)
+                    self.trace.add_metadata(query_strategy="factual_direct")
+            else:
+                if self.trace is not None:
+                    self.trace.begin("query_generation")
+                generated_queries = self._generate_search_queries()
+                if self.trace is not None:
+                    self.trace.end(
+                        "query_generation",
+                        query_strategy="model_generated",
+                    )
             queries = self._validated_search_queries(generated_queries)
             if self.trace is not None:
                 self.trace.add_metadata(
