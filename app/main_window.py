@@ -83,6 +83,7 @@ from .ollama_resource_coordinator import OWNER_LOCALAI_DESKTOP, OWNER_SCHEDULER
 from .resource_monitor import format_resource_summary, get_system_metrics
 from .scheduler_dialog import SchedulerDialog
 from .sidebar_controller import SidebarController
+from .request_trace import RequestTrace
 from .task_constraints import task_constraints_instruction
 from .scheduler_runtime import SchedulerRuntime
 from .scheduler_store import ScheduledTaskStore
@@ -163,6 +164,7 @@ class MainWindow(QMainWindow):
         self.pending_action_original_text = ""
         self.pending_action_context_suffix = ""
         self.pending_action_images = []
+        self.pending_request_trace = None
         self.show_closed = False
         self.thinking_phase = 0
         self.thinking_base_text = "Gondolkodik"
@@ -1165,6 +1167,9 @@ class MainWindow(QMainWindow):
 
         crypto_market_extension = self._crypto_market_extension()
         multi_asset_market_extension = self._multi_asset_market_extension()
+        self.pending_request_trace = RequestTrace("desktop")
+        self.pending_request_trace.begin("request_received")
+        self.pending_request_trace.end("request_received")
 
         try:
             contracts = plan_chat_actions(
@@ -1176,6 +1181,7 @@ class MainWindow(QMainWindow):
                 multi_asset_market_available=(
                     multi_asset_market_extension is not None
                 ),
+                trace=self.pending_request_trace,
             )
         except PermissionError as exc:
             self.status.setText("Action blocked")
@@ -1362,6 +1368,7 @@ class MainWindow(QMainWindow):
                 messages_for_model,
                 execution_text,
                 compact_market_quote=contract.market_fallback,
+                trace=self.pending_request_trace,
             )
         elif contract.route == ROUTE_CHAT:
             self.worker = AdaptiveChatWorker(
@@ -1371,6 +1378,7 @@ class MainWindow(QMainWindow):
                 execution_text,
                 allow_web_fallback=self.web_mode != "OFF",
                 constraints=contract.constraints,
+                trace=self.pending_request_trace,
             )
         else:
             self.thread = None
@@ -1471,6 +1479,10 @@ class MainWindow(QMainWindow):
         self.stop_button.setEnabled(False)
         if content:
             self.status.setText("Ollama connected")
+        if self.pending_request_trace is not None:
+            self.pending_request_trace.begin("response_send")
+            self.pending_request_trace.end("response_send")
+            self.pending_request_trace.emit_if_enabled()
         self._load_chat_list()
 
     def _on_memory_finished(self):
@@ -1552,6 +1564,7 @@ class MainWindow(QMainWindow):
         self.current_chat_uses_web = False
         self.generation_chat_id = ""
         self.active_action_contract = None
+        self.pending_request_trace = None
         self._stop_thinking_indicator()
         if self.pending_action_contracts:
             QTimer.singleShot(0, self._run_next_action_contract)
