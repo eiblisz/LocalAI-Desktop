@@ -1,6 +1,7 @@
 import re
 import threading
 import unicodedata
+from time import perf_counter
 
 from PySide6.QtCore import QObject, Signal, Slot
 
@@ -26,6 +27,11 @@ from .evidence_verifier import (
 )
 from .followup_resolution import resolve_contextual_followup
 from .current_turn_binding import guard_current_turn_binding
+from .direct_fact import (
+    derive_premise_neutral_query,
+    deterministic_hungarian_fact_fallback,
+    requested_fact_supported,
+)
 from .grounded_factual_guard import guard_grounded_answer
 from .generic_shopping_evidence import (
     build_generic_shopping_queries,
@@ -37,6 +43,7 @@ from .memory_runtime import remember_explicit_request
 from .multi_asset_market_data import run_multi_asset_market_request
 from .language_policy import (
     detect_user_language,
+    effective_response_language,
     response_language_instruction,
     response_language_matches,
     response_language_repair_instruction,
@@ -61,6 +68,7 @@ from .web_search_tool import (
     build_search_plan,
     select_authoritative_current_fact,
     is_current_version_query,
+    fetch_result_pages,
     search_web,
     source_entries,
     source_urls,
@@ -286,7 +294,15 @@ class ChatWebWorker(QObject):
             self.followup_resolution.resolved_intent
             or self.original_user_prompt
         )
+        classification_started = perf_counter()
         self.request_profile = classify_request(self.user_prompt)
+        self._classification_ms = round(
+            (perf_counter() - classification_started) * 1000,
+            2,
+        )
+        self.execution_control = ExecutionControl.for_request_profile(
+            self.request_profile
+        )
         self.compact_market_quote = bool(compact_market_quote)
         self.trace = trace
         self._stop_event = threading.Event()
@@ -295,6 +311,8 @@ class ChatWebWorker(QObject):
         self.query_validation = {"status": "not_run", "rejections": []}
         self.source_metadata = []
         self.diagnostic_metadata = {}
+        self._factual_authority_text = ""
+        self._direct_query_strategy = "not_applicable"
 
     def _set_diagnostics(
         self,
@@ -318,12 +336,64 @@ class ChatWebWorker(QObject):
             "verification_status": str(verification_status or ""),
             "evidence_diagnostic": str(evidence_diagnostic or ""),
             "request_kind": self.request_profile.kind,
+            "requested_fact": self.request_profile.requested_fact,
             "response_depth": self.request_profile.response_depth,
             "research_breadth": self.request_profile.research_breadth,
             "query_budget": self.request_profile.query_budget,
             "source_budget": self.request_profile.source_budget,
             "page_fetch_budget": self.request_profile.page_fetch_budget,
+            "model_call_count": self.execution_control.budget.model_calls,
+            "search_count": self.execution_control.budget.search_calls,
+            "page_fetch_count": self.execution_control.budget.page_fetches,
+            "repair_count": self.execution_control.budget.repairs,
         }
+
+    def _chat_once(self, **kwargs):
+        if isinstance(self.client, OllamaClient):
+            return self.client.chat_once(
+                control=self.execution_control,
+                **kwargs,
+            )
+        self.execution_control.claim_model_call()
+        return self.client.chat_once(**kwargs)
+
+    def _chat_stream(self, **kwargs):
+        if isinstance(self.client, OllamaClient):
+            return self.client.chat_stream(
+                control=self.execution_control,
+                **kwargs,
+            )
+        self.execution_control.claim_model_call()
+        return self.client.chat_stream(**kwargs)
+
+    def _search_payload(self, query, *, max_results, fetch_pages):
+        self.execution_control.claim_search()
+        timeout = self.execution_control.request_timeout(20.0)
+        try:
+            return search_web(
+                query,
+                max_results=max_results,
+                fetch_pages=fetch_pages,
+                timeout=timeout,
+            )
+        except TypeError as exc:
+            # Older in-repo test doubles and third-party adapters may retain
+            # the legacy three-argument callable contract.
+            if "timeout" not in str(exc):
+                raise
+            return search_web(
+                query,
+                max_results=max_results,
+                fetch_pages=fetch_pages,
+            )
+
+    def _fetch_direct_fact_page(self, payload):
+        self.execution_control.claim_page_fetch()
+        return fetch_result_pages(
+            payload,
+            page_fetch_budget=1,
+            timeout=self.execution_control.request_timeout(8.0),
+        )
 
     def _followup_clarification(self):
         return self.followup_resolution.clarification
@@ -348,7 +418,10 @@ class ChatWebWorker(QObject):
         )
         accepted, rejected = validate_search_queries(candidates, validation_intent)
 
-        if is_factual_risk_request(self.user_prompt):
+        if (
+            is_factual_risk_request(self.user_prompt)
+            and self._direct_query_strategy != "premise_neutral_title_relation"
+        ):
             direct = validate_search_query(self.user_prompt, validation_intent)
             if direct.accepted:
                 direct_folded = self._fold_text(direct.query)
@@ -485,10 +558,15 @@ class ChatWebWorker(QObject):
 
     def _repair_response_language(self, answer):
         language_source = self._response_language_source()
-        if response_language_matches(language_source, answer):
+        if self.trace is not None:
+            self.trace.begin("language_validation")
+        matches = response_language_matches(language_source, answer)
+        if self.trace is not None:
+            self.trace.end("language_validation")
+        if matches:
             return answer
 
-        expected = detect_user_language(language_source)
+        expected = effective_response_language(language_source)
         if expected not in {"hu", "de", "en"}:
             return answer
 
@@ -496,7 +574,8 @@ class ChatWebWorker(QObject):
             self.trace.begin("language_repair")
         self.phase.emit("Nyelvi javítás")
 
-        repaired = self.client.chat_once(
+        self.execution_control.claim_repair()
+        repaired = self._chat_once(
             model=self.model,
             messages=[
                 {
@@ -517,6 +596,14 @@ class ChatWebWorker(QObject):
 
         if repaired and response_language_matches(language_source, repaired):
             return repaired
+
+        if expected == "hu":
+            fallback = deterministic_hungarian_fact_fallback(
+                self._factual_authority_text,
+                self.request_profile.requested_fact,
+            )
+            if fallback:
+                return fallback
 
         if expected == "hu":
             return (
@@ -660,7 +747,7 @@ class ChatWebWorker(QObject):
             },
         ]
 
-        raw = self.client.chat_once(
+        raw = self._chat_once(
             model=self.model,
             messages=messages,
         ).strip()
@@ -779,7 +866,7 @@ class ChatWebWorker(QObject):
         if len(final) <= 700:
             return final
 
-        compact = self.client.chat_once(
+        compact = self._chat_once(
             model=self.model,
             messages=[
                 {
@@ -854,7 +941,7 @@ class ChatWebWorker(QObject):
         if len(final) <= 650:
             return final
 
-        compact = self.client.chat_once(
+        compact = self._chat_once(
             model=self.model,
             messages=[
                 {
@@ -900,7 +987,7 @@ class ChatWebWorker(QObject):
         if not self.compact_market_quote or not original:
             return original
 
-        compact = self.client.chat_once(
+        compact = self._chat_once(
             model=self.model,
             messages=[
                 {
@@ -1014,7 +1101,10 @@ class ChatWebWorker(QObject):
                 return
 
             if self.trace is not None:
-                self.trace.begin("search")
+                self.trace.mark_duration(
+                    "request_classification",
+                    self._classification_ms,
+                )
             self.phase.emit(
                 "Brave LLM Context"
                 if brave_context_mode() == "llm_context"
@@ -1038,10 +1128,21 @@ class ChatWebWorker(QObject):
                 and is_factual_risk_request(self.user_prompt)
                 and not self._has_multiple_research_topics()
             ):
-                generated_queries = [self.user_prompt]
                 if self.trace is not None:
+                    self.trace.begin("query_derivation")
+                neutral_query, self._direct_query_strategy = (
+                    derive_premise_neutral_query(
+                        self.user_prompt,
+                        self.request_profile.requested_fact,
+                    )
+                )
+                generated_queries = [neutral_query]
+                if self.trace is not None:
+                    self.trace.end("query_derivation")
                     self.trace.mark_duration("query_generation", 0.0)
-                    self.trace.add_metadata(query_strategy="factual_direct")
+                    self.trace.add_metadata(
+                        query_strategy=self._direct_query_strategy,
+                    )
             elif (
                 self.followup_resolution.status == "direct"
                 and self.request_profile.kind == TASK_ENTITY_OVERVIEW
@@ -1069,10 +1170,13 @@ class ChatWebWorker(QObject):
                 )
             if not queries:
                 if self.trace is not None:
-                    self.trace.end("search", successful_queries=0, provider_count=0)
+                    self.trace.mark_duration("search_provider", 0.0)
                 self.token.emit(self._invalid_query_clarification())
                 self.finished.emit()
                 return
+            if self.trace is not None:
+                self.trace.begin("search")
+                self.trace.begin("search_provider")
             generic_shopping_records = []
             generic_shopping_queries = []
             generic_shopping_providers = []
@@ -1089,6 +1193,13 @@ class ChatWebWorker(QObject):
             constrained_rejections = []
             authoritative_facts = []
             context_modes = []
+            evidence_sufficiency = "not_applicable"
+            direct_fact_progressive = (
+                self.request_profile.kind == TASK_DIRECT_FACT
+                and self.followup_resolution.status == "direct"
+                and len(queries) == 1
+                and not generic_shopping_mode
+            )
 
             for query in queries:
                 if self._stop_event.is_set():
@@ -1096,7 +1207,7 @@ class ChatWebWorker(QObject):
                     return
 
                 try:
-                    payload = search_web(
+                    payload = self._search_payload(
                         query,
                         max_results=(
                             10
@@ -1106,11 +1217,34 @@ class ChatWebWorker(QObject):
                         fetch_pages=(
                             True
                             if generic_shopping_mode
-                            else self.request_profile.page_fetch_budget
+                            else (0 if direct_fact_progressive else self.request_profile.page_fetch_budget)
                         ),
                     )
+                    snippet_supported = requested_fact_supported(
+                        payload,
+                        self.request_profile.requested_fact,
+                    )
+                    if (
+                        direct_fact_progressive
+                        and not snippet_supported
+                    ):
+                        payload = self._fetch_direct_fact_page(payload)
+                        evidence_sufficiency = (
+                            "page_supported"
+                            if requested_fact_supported(
+                                payload,
+                                self.request_profile.requested_fact,
+                            )
+                            else "insufficient_after_one_page"
+                        )
+                    elif direct_fact_progressive:
+                        evidence_sufficiency = "snippet_supported"
                     if self.trace is not None:
                         timing = dict(payload.get("timing") or {})
+                        self.trace.add_duration(
+                            "search_provider_time",
+                            timing.get("provider_ms", 0.0),
+                        )
                         self.trace.add_duration(
                             "page_fetch",
                             timing.get("page_fetch_ms", 0.0),
@@ -1219,6 +1353,7 @@ class ChatWebWorker(QObject):
                         entries.append(entry)
 
             if self.trace is not None:
+                self.trace.end("search_provider")
                 self.trace.end(
                     "search",
                     successful_queries=len(
@@ -1364,6 +1499,7 @@ class ChatWebWorker(QObject):
                 )
                 or context_text[: (3000 if direct_factual_candidate else 5000)]
             )
+            self._factual_authority_text = factual_authority_text
             failure_text = ""
             if failed_queries:
                 failure_text = (
@@ -1418,11 +1554,13 @@ class ChatWebWorker(QObject):
                     request_query_budget=self.request_profile.query_budget,
                     request_source_budget=self.request_profile.source_budget,
                     request_page_fetch_budget=self.request_profile.page_fetch_budget,
+                    requested_fact=self.request_profile.requested_fact,
+                    evidence_sufficiency=evidence_sufficiency,
                 )
             self.phase.emit(f"{self.model} gondolkodik")
 
             if single_pass_factual:
-                answer = self.client.chat_once(
+                answer = self._chat_once(
                     model=self.model,
                     messages=[
                         {
@@ -1453,7 +1591,7 @@ class ChatWebWorker(QObject):
                 ).strip()
             else:
                 answer_parts = []
-                self.client.chat_stream(
+                self._chat_stream(
                     model=self.model,
                     messages=stream_messages,
                     on_token=answer_parts.append,
@@ -1484,6 +1622,8 @@ class ChatWebWorker(QObject):
             )
             answer = self._compact_grounded_answer(answer)
             answer = self._compact_market_quote_answer(answer)
+            if self.trace is not None:
+                self.trace.begin("factual_validation")
             answer = guard_grounded_answer(
                 self.client,
                 self.model,
@@ -1498,10 +1638,14 @@ class ChatWebWorker(QObject):
                 ),
                 language_instruction=self._conversation_language_instruction(),
             )
+            if self.trace is not None:
+                self.trace.end("factual_validation")
             if (
                 is_factual_risk_request(self.user_prompt)
                 and not has_authoritative_current_fact
             ):
+                if self.trace is not None:
+                    self.trace.begin("context_validation")
                 answer = guard_current_turn_binding(
                     self.client,
                     self.model,
@@ -1511,6 +1655,8 @@ class ChatWebWorker(QObject):
                     trace=self.trace,
                     language_instruction=self._conversation_language_instruction(),
                 )
+                if self.trace is not None:
+                    self.trace.end("context_validation")
 
             verification_status = ""
             unique_verification_queries = list(dict.fromkeys(verification_queries))
@@ -1568,6 +1714,10 @@ class ChatWebWorker(QObject):
                     web_provider=",".join(successful_providers),
                     source_count=len(self.source_metadata),
                     context_mode=",".join(context_modes),
+                    model_call_count=self.execution_control.budget.model_calls,
+                    search_count=self.execution_control.budget.search_calls,
+                    page_fetch_count=self.execution_control.budget.page_fetches,
+                    repair_count=self.execution_control.budget.repairs,
                 )
             self.token.emit(answer)
             self.finished.emit()
@@ -1576,6 +1726,7 @@ class ChatWebWorker(QObject):
 
     def stop(self):
         self._stop_event.set()
+        self.execution_control.cancellation.cancel()
 
 
 def _run_web_worker(worker):

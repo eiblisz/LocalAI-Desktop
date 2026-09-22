@@ -100,3 +100,68 @@ def test_boolean_fetch_pages_keeps_legacy_six_page_budget(monkeypatch):
 
     assert fetch_calls == [(6, 15.0)]
     assert payload["timing"]["page_fetch_count"] == 6
+
+
+def test_zero_page_budget_keeps_direct_lookup_snippet_first(monkeypatch):
+    monkeypatch.setattr(web_search_tool, "brave_context_mode", lambda: "legacy")
+    monkeypatch.setattr(web_search_tool, "brave_search_configured", lambda: True)
+    monkeypatch.setattr(
+        web_search_tool,
+        "_search_brave_api",
+        lambda query, limit, timeout: {
+            "provider": "Brave Search API",
+            "results": [{
+                "title": "Example source",
+                "url": "https://example.com/source",
+                "snippet": "Snippet-only evidence",
+            }],
+        },
+    )
+    monkeypatch.setattr(
+        web_search_tool,
+        "_filter_relevant_results",
+        lambda query, items, plan=None, require_verified=True: list(items),
+    )
+    monkeypatch.setattr(
+        web_search_tool,
+        "rank_authoritative_results",
+        lambda query, items: list(items),
+    )
+    monkeypatch.setattr(
+        web_search_tool,
+        "_fetch_top_pages",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("snippet-first lookup must not fetch a page")
+        ),
+    )
+
+    payload = web_search_tool.search_web("Example topic", fetch_pages=0)
+
+    assert payload["timing"]["page_fetch_count"] == 0
+
+
+def test_existing_payload_can_fetch_one_page_without_repeating_search(monkeypatch):
+    calls = []
+
+    def capture_fetch(items, timeout):
+        calls.append((len(items), timeout))
+        items[0]["page_text"] = "Fetched follow-up evidence"
+
+    monkeypatch.setattr(web_search_tool, "_fetch_top_pages", capture_fetch)
+
+    updated = web_search_tool.fetch_result_pages(
+        {
+            "results": [{
+                "title": "Example source",
+                "url": "https://example.com/source",
+                "snippet": "Initial snippet",
+            }],
+            "timing": {"page_fetch_count": 0, "page_fetch_ms": 0.0},
+        },
+        page_fetch_budget=1,
+        timeout=30.0,
+    )
+
+    assert calls == [(1, 8.0)]
+    assert updated["results"][0]["page_text"] == "Fetched follow-up evidence"
+    assert updated["timing"]["page_fetch_count"] == 1

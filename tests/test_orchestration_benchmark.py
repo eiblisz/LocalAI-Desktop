@@ -5,13 +5,16 @@ def test_host_orchestration_benchmark_passes_all_cases():
     report = run_host_orchestration_benchmark()
 
     assert report.failed == 0
-    assert report.passed == report.total == 5
+    assert report.passed == report.total == 8
     assert {item.name for item in report.results} == {
         "parent_task_binding",
         "web_mode_routing",
         "language_script_guard",
         "context_entity_drift",
         "runtime_budget",
+        "request_semantics_v2",
+        "direct_fact_sufficiency",
+        "hungarian_default_direct_budget",
     }
 
 
@@ -19,8 +22,8 @@ def test_benchmark_report_is_machine_readable():
     report = run_host_orchestration_benchmark().to_dict()
 
     assert report["failed"] == 0
-    assert report["total"] == 5
-    assert len(report["results"]) == 5
+    assert report["total"] == 8
+    assert len(report["results"]) == 8
     assert all("name" in item and "passed" in item for item in report["results"])
 
 

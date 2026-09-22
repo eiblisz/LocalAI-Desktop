@@ -3,8 +3,11 @@ from typing import Callable
 
 from .action_runtime import ActionRuntime, ROUTE_CHAT, ROUTE_WEB
 from .context_guard import stale_subject_substitution
+from .direct_fact import requested_fact_supported
+from .language_policy import response_language_matches
+from .request_semantics import TASK_COMPARISON, TASK_DIRECT_FACT, classify_request
 from .response_guard import unexpected_script_issues, validate_response
-from .runtime_control import ExecutionBudget, ExecutionBudgetExceeded
+from .runtime_control import ExecutionBudget, ExecutionBudgetExceeded, ExecutionControl
 from .task_constraints import build_task_constraints
 
 
@@ -141,6 +144,49 @@ def _benchmark_runtime_budget():
     raise AssertionError("model-call budget did not fail closed")
 
 
+def _benchmark_request_semantics_v2():
+    direct = classify_request("Mikor írta Wrong Author a Silver Story című művet?")
+    comparison = classify_request("Hasonlítsd össze részletesen Alpha és Beta rendszert.")
+
+    _assert(direct.kind == TASK_DIRECT_FACT, "temporal lookup lost direct-fact activity")
+    _assert(direct.requested_fact == "temporal", "temporal request was not represented")
+    _assert(
+        comparison.kind == TASK_COMPARISON and comparison.response_depth == "detailed",
+        "detailed modifier overwrote comparison activity",
+    )
+
+
+def _benchmark_direct_fact_sufficiency():
+    authorship_only = {
+        "results": [{"snippet": "Silver Story was written by Correct Author."}],
+    }
+    temporal = {
+        "results": [{"snippet": "Silver Story was published in 1912."}],
+    }
+    _assert(
+        not requested_fact_supported(authorship_only, "temporal"),
+        "authorship alone incorrectly satisfied a temporal request",
+    )
+    _assert(
+        requested_fact_supported(temporal, "temporal"),
+        "date evidence did not satisfy a temporal request",
+    )
+
+
+def _benchmark_hungarian_default_and_direct_budget():
+    _assert(
+        not response_language_matches(
+            "Ambiguous entity", "The response remains entirely in English with many words."
+        ),
+        "ambiguous turn did not retain Hungarian default",
+    )
+    control = ExecutionControl.for_request_profile(
+        classify_request("Mikor írta Sample Author a Sample Work című művet?")
+    )
+    _assert(control.budget.max_search_calls == 1, "direct lookup search was not bounded")
+    _assert(control.budget.max_page_fetches == 1, "direct lookup page fetch was not bounded")
+
+
 def run_host_orchestration_benchmark() -> BenchmarkReport:
     cases = (
         ("parent_task_binding", _benchmark_parent_binding),
@@ -148,6 +194,9 @@ def run_host_orchestration_benchmark() -> BenchmarkReport:
         ("language_script_guard", _benchmark_script_guard),
         ("context_entity_drift", _benchmark_context_drift),
         ("runtime_budget", _benchmark_runtime_budget),
+        ("request_semantics_v2", _benchmark_request_semantics_v2),
+        ("direct_fact_sufficiency", _benchmark_direct_fact_sufficiency),
+        ("hungarian_default_direct_budget", _benchmark_hungarian_default_and_direct_budget),
     )
     results = tuple(_case(name, fn) for name, fn in cases)
     passed = sum(1 for item in results if item.passed)
