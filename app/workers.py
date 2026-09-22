@@ -1493,13 +1493,21 @@ class AdaptiveChatWorker(QObject):
                 self.used_web_fallback = True
                 if self.trace is not None:
                     self.trace.end("post_processing")
-                final = run_chat_web_request(
-                    self.client,
-                    self.model,
-                    self.messages,
-                    self.user_prompt,
-                    trace=self.trace,
-                ).strip()
+                if self.trace is None:
+                    final = run_chat_web_request(
+                        self.client,
+                        self.model,
+                        self.messages,
+                        self.user_prompt,
+                    ).strip()
+                else:
+                    final = run_chat_web_request(
+                        self.client,
+                        self.model,
+                        self.messages,
+                        self.user_prompt,
+                        trace=self.trace,
+                    ).strip()
                 if self.trace is not None:
                     self.trace.begin("post_processing")
             else:
