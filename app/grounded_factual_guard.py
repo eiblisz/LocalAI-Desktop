@@ -55,10 +55,11 @@ def guard_grounded_answer(
     authority_text,
     *,
     trace=None,
+    force_verify=False,
 ):
     draft = str(answer or "").strip()
     unsupported = unsupported_grounded_literals(draft, authority_text)
-    if not unsupported:
+    if not unsupported and not force_verify:
         return draft
 
     if trace is not None:
