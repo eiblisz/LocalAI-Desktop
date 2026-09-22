@@ -23,6 +23,7 @@ from .evidence_verifier import (
     filter_verified_results,
     verify_answer_against_evidence,
 )
+from .current_turn_binding import guard_current_turn_binding
 from .grounded_factual_guard import guard_grounded_answer
 from .generic_shopping_evidence import (
     build_generic_shopping_queries,
@@ -1272,6 +1273,15 @@ class ChatWebWorker(QObject):
                 trace=self.trace,
                 force_verify=is_factual_risk_request(self.user_prompt),
             )
+            if is_factual_risk_request(self.user_prompt):
+                answer = guard_current_turn_binding(
+                    self.client,
+                    self.model,
+                    self.user_prompt,
+                    answer,
+                    context_text,
+                    trace=self.trace,
+                )
 
             verification_status = ""
             unique_verification_queries = list(dict.fromkeys(verification_queries))
