@@ -8,7 +8,12 @@ import discord
 import requests
 from PySide6.QtCore import QObject, Signal
 
-from .action_runtime import ActionRuntime
+from .action_runtime import (
+    ActionRuntime,
+    ROUTE_CRYPTO_MARKET,
+    ROUTE_MARKET_WEB,
+    ROUTE_MULTI_ASSET_MARKET,
+)
 from .chat_orchestration import normalize_web_mode, plan_chat_actions
 from .artifact_service import (
     ArtifactPlanItem,
@@ -802,7 +807,17 @@ class DiscordBotBridge(QObject):
                 ),
                 trace=trace,
             )
-            use_web = bool(planned and planned[0].use_web)
+            use_web = bool(
+                planned
+                and (
+                    planned[0].use_web
+                    or planned[0].route in {
+                        ROUTE_CRYPTO_MARKET,
+                        ROUTE_MULTI_ASSET_MARKET,
+                        ROUTE_MARKET_WEB,
+                    }
+                )
+            )
         if allow_web_fallback is None:
             allow_web_fallback = self._current_web_mode() != "OFF"
 
