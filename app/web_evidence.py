@@ -28,3 +28,53 @@ def normalized_evidence_items(payload):
         })
 
     return items
+
+
+
+def compact_evidence_authority(payload, *, max_sources=5, max_text_chars=700):
+    """
+    Build a bounded provider-neutral evidence authority for factual verification.
+
+    Prefer provider snippets because they are already relevance-focused. Fall back
+    to only a short prefix of fetched/page context when no snippet is available.
+    The full page text remains available to the initial grounded generation, but
+    is deliberately excluded from the verifier to reduce evidence noise.
+    """
+    provider = _clean(payload.get("provider"))
+    query = _clean(payload.get("query"))
+    retrieved_at = _clean(payload.get("retrieved_at"))
+    lines = [
+        f"Provider: {provider}",
+        f"Query: {query}",
+        f"Retrieved: {retrieved_at}",
+    ]
+
+    accepted = 0
+    for result in payload.get("results") or []:
+        url = str(result.get("url") or "").strip()
+        title = _clean(result.get("title"))
+        snippet = _clean(result.get("snippet"))
+        if snippet:
+            relevant = snippet
+        else:
+            relevant = _clean(result.get("page_text"))
+
+        if not url or not title or not relevant:
+            continue
+
+        relevant = relevant[: max(120, int(max_text_chars or 700))].rstrip()
+        lines.extend([
+            "",
+            f"Title: {title}",
+            f"URL: {url}",
+            f"Relevant text: {relevant}",
+        ])
+        published = _clean(result.get("published"))
+        if published:
+            lines.append(f"Published: {published}")
+
+        accepted += 1
+        if accepted >= max(1, int(max_sources or 5)):
+            break
+
+    return "\n".join(lines).strip() if accepted else ""
