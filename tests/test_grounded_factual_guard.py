@@ -102,3 +102,47 @@ def test_factual_risk_force_verify_checks_relation_even_when_literals_are_known(
 
     assert result.startswith("No.")
     assert client.calls == 1
+
+
+
+def test_grounded_guard_strips_unsupported_source_attribution_but_keeps_supported_fact():
+    authority = (
+        "USER REQUEST: Ki írta a Silver Storyt és mikor?\n"
+        "AUTHORIZED EVIDENCE: Silver Story szerzője Correct Author, 1912."
+    )
+    client = RepairClient(
+        "A Magyar Könyvszemle egyik cikke szerint Correct Author írta "
+        "a Silver Storyt 1912-ben."
+    )
+
+    result = guard_grounded_answer(
+        client,
+        "qwen-test",
+        "Ki írta a Silver Storyt és mikor?",
+        "Wrong Author írta 1956-ban.",
+        authority,
+        force_verify=True,
+    )
+
+    assert "Magyar Könyvszemle" not in result
+    assert "Correct Author" in result
+    assert "1912" in result
+    assert client.calls == 1
+
+
+def test_grounded_guard_still_rejects_unsupported_relation_name_not_source_attribution():
+    authority = (
+        "USER REQUEST: Ki írta a Silver Storyt?\n"
+        "AUTHORIZED EVIDENCE: Silver Story szerzője Correct Author."
+    )
+    client = RepairClient("Other Person írta a Silver Storyt.")
+
+    with pytest.raises(GroundedFactualGuardError):
+        guard_grounded_answer(
+            client,
+            "qwen-test",
+            "Ki írta a Silver Storyt?",
+            "Wrong Author írta a Silver Storyt.",
+            authority,
+            force_verify=True,
+        )

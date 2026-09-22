@@ -53,6 +53,74 @@ def unsupported_grounded_literals(answer, authority_text):
     return tuple(sorted(set(unsupported), key=str.casefold))
 
 
+def _looks_like_name_literal(value):
+    text = str(value or "").strip()
+    if not text or re.search(r"https?://|\d|[$€£%]", text, flags=re.IGNORECASE):
+        return False
+    parts = [part for part in text.split() if part]
+    return (
+        len(parts) >= 2
+        and all(part[0].isupper() for part in parts if part[0].isalpha())
+    )
+
+
+def _strip_unsupported_source_attributions(text, unsupported_literals):
+    """
+    Remove unsupported source/publication attribution wrappers without weakening
+    factual checks for the answer itself.
+
+    This is intentionally generic: it never recognizes specific publications or
+    QA entities. Only proper-name literals already identified as unsupported are
+    eligible, and only when they occur in a source-attribution shape.
+    """
+    cleaned = str(text or "")
+    unsupported_names = [
+        item for item in unsupported_literals
+        if _looks_like_name_literal(item)
+    ]
+
+    for name in unsupported_names:
+        escaped = re.escape(name)
+
+        # Standalone source footer lines, e.g. "Forrás: Publication Name".
+        cleaned = re.sub(
+            rf"(?im)^[ \t]*(?:forrás|forras|source|quelle)\s*:\s*"
+            rf"[^\r\n]*\b{escaped}\b[^\r\n]*(?:\r?\n|$)",
+            "",
+            cleaned,
+        )
+
+        # Prefix attribution, including variants such as
+        # "A Publication egyik cikke szerint ..." / "Publication szerint ...".
+        cleaned = re.sub(
+            rf"(?i)(?<!\w)(?:a|az|the|der|die|das)?\s*"
+            rf"{escaped}\b[^.!?\r\n]{{0,60}}?\b"
+            rf"(?:szerint|according\s+to|laut)\b\s*[:,]?\s*",
+            "",
+            cleaned,
+        )
+
+        # English/German attribution where the marker comes first.
+        cleaned = re.sub(
+            rf"(?i)(?<!\w)(?:according\s+to|laut)\s+"
+            rf"(?:a|az|the|der|die|das)?\s*{escaped}\b[:,]?\s*",
+            "",
+            cleaned,
+        )
+
+        # Bare parenthetical/bracketed source identity.
+        cleaned = re.sub(
+            rf"[\[(]\s*{escaped}\s*[\])]",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+
+    cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
 def guard_grounded_answer(
     client,
     model,
@@ -108,6 +176,16 @@ def guard_grounded_answer(
         )
 
     remaining = unsupported_grounded_literals(repair, authority_text)
+    if remaining:
+        sanitized = _strip_unsupported_source_attributions(repair, remaining)
+        sanitized_remaining = unsupported_grounded_literals(
+            sanitized,
+            authority_text,
+        )
+        if sanitized and not sanitized_remaining:
+            return sanitized
+        remaining = sanitized_remaining or remaining
+
     if remaining:
         raise GroundedFactualGuardError(
             "Grounded answer still contains unsupported factual literals: "
