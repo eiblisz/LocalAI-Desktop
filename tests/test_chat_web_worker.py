@@ -156,6 +156,104 @@ def test_chat_web_worker_stop_prevents_source_footer(monkeypatch):
     assert "Web results / sources:" not in "".join(tokens)
 
 
+def test_punctuation_only_web_input_never_calls_search_provider(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        workers,
+        "search_web",
+        lambda *args, **kwargs: calls.append(args) or (_ for _ in ()).throw(
+            AssertionError("invalid input must not reach a provider")
+        ),
+    )
+
+    tokens = []
+    worker = workers.ChatWebWorker(
+        DummyWebClient(),
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "?",
+    )
+    worker.token.connect(tokens.append)
+    worker.run()
+
+    assert calls == []
+    assert "context" in "".join(tokens).lower()
+
+
+def test_contextual_followup_uses_previous_turn_not_literal_punctuation(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        workers.ChatWebWorker,
+        "_generate_search_queries",
+        lambda self: ["Arany János Toldi date written"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "search_web",
+        lambda query, max_results=6, fetch_pages=True: seen.append(query) or {
+            "provider": "test",
+            "query": query,
+            "results": [{
+                "title": "Toldi",
+                "url": "https://example.com/toldi",
+                "snippet": "Arany János 1846",
+            }],
+        },
+    )
+    monkeypatch.setattr(workers, "source_urls", lambda payload: ["https://example.com/toldi"])
+    monkeypatch.setattr(workers, "web_search_context_text", lambda payload: "Arany János 1846")
+
+    worker = workers.ChatWebWorker(
+        DummyWebClient(),
+        "qwen-test",
+        [
+            {"role": "user", "content": "Mikor írta Arany János a Toldit?"},
+            {"role": "assistant", "content": "1846-ban írta."},
+            {"role": "user", "content": "?"},
+        ],
+        "?",
+    )
+    worker.run()
+
+    assert seen == ["Arany János Toldi date written"]
+    assert worker.followup_resolution.status == "resolved"
+
+
+def test_query_generator_prose_is_repaired_before_provider_call(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        workers.ChatWebWorker,
+        "_generate_search_queries",
+        lambda self: ["You should search for the user's request about Gemma."],
+    )
+    monkeypatch.setattr(
+        workers,
+        "search_web",
+        lambda query, max_results=6, fetch_pages=True: seen.append(query) or {
+            "provider": "test",
+            "query": query,
+            "results": [{
+                "title": "Gemma",
+                "url": "https://example.com/gemma",
+                "snippet": "Gemma4 release",
+            }],
+        },
+    )
+    monkeypatch.setattr(workers, "source_urls", lambda payload: ["https://example.com/gemma"])
+    monkeypatch.setattr(workers, "web_search_context_text", lambda payload: "Gemma4 release")
+
+    worker = workers.ChatWebWorker(
+        DummyWebClient(),
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Melyik a legfrissebb Gemma4 modell?",
+    )
+    worker.run()
+
+    assert worker.query_validation["status"] == "bounded_repair"
+    assert seen == ["Melyik a legfrissebb Gemma4 modell?"]
+
+
 def test_chat_web_worker_runs_separate_searches_for_multi_part_request(monkeypatch):
     class MultiQueryClient(DummyWebClient):
         def chat_once(self, model, messages, timeout=600.0):

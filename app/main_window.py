@@ -67,6 +67,7 @@ from .extension_authority import (
 from .extension_store import ExtensionStore
 from .extensions_dialog import ExtensionsDialog
 from .file_reader import read_attachment
+from .followup_resolution import resolve_contextual_followup
 from .internal_viewer import (
     BrowserView,
     create_resource_view,
@@ -1128,6 +1129,11 @@ class MainWindow(QMainWindow):
             )
             return
 
+        followup_resolution = resolve_contextual_followup(
+            text,
+            (self.current_chat or {}).get("messages", []),
+        )
+
         if self.current_chat.get("closed", False):
             self.current_chat["closed"] = False
             self.show_closed = False
@@ -1149,6 +1155,23 @@ class MainWindow(QMainWindow):
         if self.current_chat["title"] == "New chat":
             self.current_chat["title"] = self.store.infer_title(text)
 
+        if followup_resolution.needs_clarification:
+            self.current_chat["messages"].extend([
+                {"role": "user", "content": text},
+                {
+                    "role": "assistant",
+                    "content": followup_resolution.clarification,
+                    "diagnostic": {"followup_resolution": "clarification"},
+                },
+            ])
+            self.store.save(self.current_chat)
+            self.input.clear()
+            self.attachment_context = []
+            self.status.setText("Context needed")
+            self._load_chat_list()
+            self._render_chat()
+            return
+
         self.current_chat["model"] = model
         self.current_chat["messages"].append(
             {"role": "user", "content": text}
@@ -1169,7 +1192,7 @@ class MainWindow(QMainWindow):
         try:
             contracts = plan_chat_actions(
                 self.action_runtime,
-                text,
+                followup_resolution.resolved_intent,
                 web_mode=self.web_mode,
                 model_context_suffix=context_suffix,
                 crypto_market_available=crypto_market_extension is not None,

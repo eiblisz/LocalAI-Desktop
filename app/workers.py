@@ -23,6 +23,7 @@ from .evidence_verifier import (
     filter_verified_results,
     verify_answer_against_evidence,
 )
+from .followup_resolution import resolve_contextual_followup
 from .current_turn_binding import guard_current_turn_binding
 from .grounded_factual_guard import guard_grounded_answer
 from .generic_shopping_evidence import (
@@ -40,6 +41,7 @@ from .language_policy import (
 )
 from .ollama_client import OllamaClient
 from .response_guard import guard_response
+from .search_query_validation import validate_search_queries, validate_search_query
 from .runtime_control import ExecutionBudget, ExecutionControl
 from .scheduled_task_executor import ScheduledTaskExecutor
 from .weather_tool import get_weather, weather_context_text
@@ -266,12 +268,67 @@ class ChatWebWorker(QObject):
         self.client = client
         self.model = model
         self.messages = [dict(message) for message in messages]
-        self.user_prompt = str(user_prompt or "").strip()
+        self.original_user_prompt = str(user_prompt or "").strip()
+        self.followup_resolution = resolve_contextual_followup(
+            self.original_user_prompt,
+            self.messages,
+        )
+        self.user_prompt = (
+            self.followup_resolution.resolved_intent
+            or self.original_user_prompt
+        )
         self.compact_market_quote = bool(compact_market_quote)
         self.trace = trace
         self._stop_event = threading.Event()
         self.web_research_pipeline = WebResearchPipeline(self)
         self._latest_evidence_ledgers = []
+        self.query_validation = {"status": "not_run", "rejections": []}
+
+    def _followup_clarification(self):
+        return self.followup_resolution.clarification
+
+    def _invalid_query_clarification(self):
+        if "Hungarian" in self._conversation_language_instruction():
+            return (
+                "Nem indítok webes keresést, mert a kérésből nem lett "
+                "biztonságos, értelmes keresőkifejezés. Kérlek, írd le "
+                "röviden, mit szeretnél megtudni."
+            )
+        return (
+            "I did not start a web search because this request did not produce "
+            "a safe, meaningful search query. Please add a little more context."
+        )
+
+    def _validated_search_queries(self, candidates):
+        validation_intent = (
+            self._search_constraint_authority()
+            if self._is_research_followup()
+            else self.user_prompt
+        )
+        accepted, rejected = validate_search_queries(candidates, validation_intent)
+        if accepted:
+            self.query_validation = {
+                "status": "accepted",
+                "rejections": rejected,
+            }
+            return accepted
+
+        repair = validate_search_query(
+            self._search_constraint_authority(),
+            validation_intent,
+        )
+        if repair.accepted:
+            self.query_validation = {
+                "status": "bounded_repair",
+                "rejections": rejected,
+            }
+            return [repair.query]
+
+        self.query_validation = {
+            "status": "rejected",
+            "rejections": rejected + [repair.reason],
+        }
+        return []
 
     def _recent_user_requests(self, limit=4):
         requests = []
@@ -902,6 +959,16 @@ class ChatWebWorker(QObject):
             if not self.user_prompt:
                 raise RuntimeError("Web chat request is empty.")
 
+            if self.followup_resolution.needs_clarification:
+                if self.trace is not None:
+                    self.trace.add_metadata(
+                        followup_resolution="clarification",
+                        web_request_skipped=True,
+                    )
+                self.token.emit(self._followup_clarification())
+                self.finished.emit()
+                return
+
             if self.trace is not None:
                 self.trace.begin("search")
 
@@ -910,11 +977,24 @@ class ChatWebWorker(QObject):
                 and not self._has_multiple_research_topics()
                 and not evidence_required(build_search_plan(self.user_prompt))
             )
-            queries = (
+            generated_queries = (
                 build_generic_shopping_queries(self.user_prompt)
                 if generic_shopping_mode
                 else self._generate_search_queries()
             )
+            queries = self._validated_search_queries(generated_queries)
+            if self.trace is not None:
+                self.trace.add_metadata(
+                    followup_resolution=self.followup_resolution.status,
+                    query_validation=self.query_validation["status"],
+                    rejected_query_count=len(self.query_validation["rejections"]),
+                )
+            if not queries:
+                if self.trace is not None:
+                    self.trace.end("search", successful_queries=0, provider_count=0)
+                self.token.emit(self._invalid_query_clarification())
+                self.finished.emit()
+                return
             generic_shopping_records = []
             generic_shopping_queries = []
             generic_shopping_providers = []
