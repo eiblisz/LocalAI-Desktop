@@ -1276,6 +1276,9 @@ class ChatWebWorker(QObject):
             )
             answer = self._compact_grounded_answer(answer)
             answer = self._compact_market_quote_answer(answer)
+            has_authoritative_current_fact = bool(
+                self._canonical_authoritative_fact(authoritative_facts)
+            )
             answer = guard_grounded_answer(
                 self.client,
                 self.model,
@@ -1283,9 +1286,15 @@ class ChatWebWorker(QObject):
                 answer,
                 self.user_prompt + "\n\n" + factual_authority_text,
                 trace=self.trace,
-                force_verify=is_factual_risk_request(self.user_prompt),
+                force_verify=(
+                    is_factual_risk_request(self.user_prompt)
+                    and not has_authoritative_current_fact
+                ),
             )
-            if is_factual_risk_request(self.user_prompt):
+            if (
+                is_factual_risk_request(self.user_prompt)
+                and not has_authoritative_current_fact
+            ):
                 answer = guard_current_turn_binding(
                     self.client,
                     self.model,
