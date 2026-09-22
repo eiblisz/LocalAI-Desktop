@@ -1016,7 +1016,10 @@ class ChatWebWorker(QObject):
                         verification_queries.append(query)
                         context_body = evidence_ledger_context_text(payload)
 
-                compact_authority = compact_evidence_authority(payload)
+                compact_authority = compact_evidence_authority(
+                    payload,
+                    authoritative_fact=fact,
+                )
                 if compact_authority:
                     factual_authorities.append(
                         f"SEARCH QUERY: {query}\n{compact_authority}"
