@@ -153,10 +153,9 @@ def test_normal_chat_has_web_auto_on_off_modes():
     assert 'self.web_button.setText("WEB ON")' in apply_source
     assert 'self.web_button.setText("WEB OFF")' in apply_source
     assert "LOCAL ONLY" in apply_source
-    assert 'force_web=self.web_mode == "ON"' in send
-    assert 'disable_web=self.web_mode == "OFF"' in send
-    assert "self.action_runtime.plan_many(" in send
-    assert "self.action_runtime.validate_many(contracts)" in send
+    assert "plan_chat_actions(" in send
+    assert "web_mode=self.web_mode" in send
+    assert "trace=self.pending_request_trace" in send
     assert "contract.use_web" in run
     assert "ChatWebWorker" in run
     assert "AdaptiveChatWorker" in run
