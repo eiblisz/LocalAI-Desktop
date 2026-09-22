@@ -54,10 +54,19 @@ def _critical_literals(text):
 
 def unsupported_grounded_literals(answer, authority_text):
     allowed = {_normalize(item) for item in _critical_literals(authority_text)}
+    authority_normalized = _normalize(authority_text)
     unsupported = []
     for item in _critical_literals(answer):
-        if _normalize(item) not in allowed:
-            unsupported.append(item)
+        normalized_item = _normalize(item)
+        if normalized_item in allowed:
+            continue
+        if (
+            _looks_like_name_literal(item)
+            and normalized_item
+            and normalized_item in authority_normalized
+        ):
+            continue
+        unsupported.append(item)
     return tuple(sorted(set(unsupported), key=str.casefold))
 
 
