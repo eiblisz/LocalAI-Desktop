@@ -206,10 +206,18 @@ def _result_relevant_text(
     )
 
     parts = []
+    prefer_page = (
+        temporal_requested
+        and _contains_temporal_literal(page_excerpt)
+        and not _contains_temporal_literal(snippet)
+    )
+    if prefer_page and page_excerpt:
+        parts.append("Page evidence: " + page_excerpt)
     if snippet:
         parts.append(snippet)
     if (
-        page_excerpt
+        not prefer_page
+        and page_excerpt
         and _fold_text(page_excerpt) not in _fold_text(snippet)
         and _fold_text(snippet) not in _fold_text(page_excerpt)
     ):
