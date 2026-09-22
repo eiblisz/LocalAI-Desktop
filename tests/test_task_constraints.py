@@ -50,3 +50,21 @@ def test_constraint_instruction_binds_subtask_to_parent_scope():
     assert "AI Desktop teljes munkanapjáról" in instruction
     assert "Current subtask: Hogyan indul a reggel?" in instruction
     assert "not as an unrelated standalone topic" in instruction
+
+
+
+def test_task_constraints_carry_request_semantics_profile():
+    constraints = build_task_constraints(
+        "Mit tudsz az Ezüst Hold zenekarról?"
+    )
+
+    assert constraints.request_profile is not None
+    assert constraints.request_profile.kind == "entity_overview"
+    assert constraints.request_profile.response_depth == "overview"
+    assert constraints.request_profile.query_budget == 1
+    assert constraints.request_profile.source_budget == 8
+
+    instruction = task_constraints_instruction(constraints)
+    assert "Request kind: entity_overview" in instruction
+    assert "Response depth: overview" in instruction
+    assert "Research breadth: balanced" in instruction
