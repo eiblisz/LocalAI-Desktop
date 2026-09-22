@@ -219,8 +219,8 @@ def test_worker_fails_closed_without_showing_rejected_candidate(monkeypatch):
     assert client.stream_calls == 0
     assert "2x16GB" not in combined
     assert "234.95" not in combined
-    assert "FAIL-CLOSED" in combined
-    assert "0 accepted products" in combined
+    assert "FAIL-CLOSED" not in combined
+    assert worker.diagnostic_metadata["evidence_diagnostic"]
 
 
 def test_worker_buffers_and_replaces_unverified_model_answer(monkeypatch):
@@ -282,5 +282,8 @@ def test_worker_buffers_and_replaces_unverified_model_answer(monkeypatch):
     assert not failed
     assert "Wrong product" not in combined
     assert "234.95" not in combined
-    assert "Evidence verification: PASS (host-verified fallback used)" in combined
+    assert (
+        worker.diagnostic_metadata["verification_status"]
+        == "Evidence verification: PASS (host-verified fallback used)"
+    )
     assert "https://shop.example.de/kingston-64gb" in combined

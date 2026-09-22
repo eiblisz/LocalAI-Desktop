@@ -26,6 +26,7 @@ from .extension_authority import (
     ExtensionAuthority,
     ExtensionExecutionContext,
 )
+from .followup_resolution import resolve_contextual_followup
 from .crypto_market_data import (
     is_crypto_quote_request,
     run_crypto_market_request,
@@ -294,12 +295,44 @@ class DiscordBotBridge(QObject):
                 trace.begin("request_received")
                 trace.end("request_received")
                 try:
+                    chat = self._load_remote_chat()
+                    followup_resolution = resolve_contextual_followup(
+                        content,
+                        chat.get("messages", []),
+                    )
+                    if followup_resolution.needs_clarification:
+                        chat["messages"].extend([
+                            {"role": "user", "content": content},
+                            {
+                                "role": "assistant",
+                                "content": followup_resolution.clarification,
+                                "diagnostic": {
+                                    "followup_resolution": "clarification",
+                                },
+                            },
+                        ])
+                        self.chat_store.save(chat)
+                        trace.add_metadata(
+                            followup_resolution="clarification",
+                            web_request_skipped=True,
+                        )
+                        trace.begin("response_send")
+                        await message.reply(
+                            followup_resolution.clarification,
+                            mention_author=False,
+                        )
+                        self.chat_updated.emit(str(chat.get("id", "")))
+                        trace.end("response_send")
+                        trace.emit_if_enabled()
+                        return
+
+                    resolved_content = followup_resolution.resolved_intent
                     crypto_available, multi_asset_available = (
-                        self._market_capabilities_for_prompt(content)
+                        self._market_capabilities_for_prompt(resolved_content)
                     )
                     contracts = plan_chat_actions(
                         self.action_runtime,
-                        content,
+                        resolved_content,
                         web_mode=self._current_web_mode(),
                         crypto_market_available=crypto_available,
                         multi_asset_market_available=multi_asset_available,
@@ -314,6 +347,7 @@ class DiscordBotBridge(QObject):
                                 contract.prompt,
                                 contract.plan,
                                 trace,
+                                original_prompt=content,
                             )
 
                         last_chat_id = str(result.get("chat_id", "") or last_chat_id)
@@ -677,9 +711,11 @@ class DiscordBotBridge(QObject):
             {"role": "system", "content": self._remote_system_prompt(prompt)}
         ]
         history = [
-            item for item in chat.get("messages", [])
+            dict(item) for item in chat.get("messages", [])
             if item.get("role") in {"user", "assistant"}
         ][-24:]
+        if history and history[-1].get("role") == "user":
+            history[-1]["content"] = str(prompt or "").strip()
         messages.extend(history)
         return messages
 
@@ -766,7 +802,13 @@ class DiscordBotBridge(QObject):
         self.chat_store.save(chat)
         return answer, str(chat.get("id", ""))
 
-    def _execute_planned_action(self, prompt, action_plan, trace=None):
+    def _execute_planned_action(
+        self,
+        prompt,
+        action_plan,
+        trace=None,
+        original_prompt=None,
+    ):
         if action_plan.has(ACTION_MEMORY_WRITE):
             answer, chat_id = self._remember_remote(prompt)
             return {"chat_id": chat_id, "messages": [answer], "artifacts": []}
@@ -792,6 +834,7 @@ class DiscordBotBridge(QObject):
             use_web=action_plan.has(ACTION_WEB_RESEARCH),
             allow_web_fallback=self._current_web_mode() != "OFF",
             trace=trace,
+            original_prompt=original_prompt,
         )
         return {"chat_id": chat_id, "messages": [answer], "artifacts": []}
 
@@ -801,6 +844,7 @@ class DiscordBotBridge(QObject):
         use_web=None,
         allow_web_fallback=None,
         trace=None,
+        original_prompt=None,
     ):
         if use_web is None:
             crypto_available, multi_asset_available = (
@@ -830,7 +874,10 @@ class DiscordBotBridge(QObject):
 
         chat = self._load_remote_chat()
         chat["model"] = self.settings.model
-        chat["messages"].append({"role": "user", "content": prompt})
+        chat["messages"].append({
+            "role": "user",
+            "content": str(original_prompt or prompt),
+        })
         self.chat_store.save(chat)
 
         direct_answer = self._direct_compound_answer(prompt)

@@ -111,10 +111,10 @@ def test_worker_fail_closed_output_includes_candidate_rejection_reason(monkeypat
     combined = "".join(tokens)
     assert failed == []
     assert finished == [True]
-    assert "FAIL-CLOSED (0 accepted products)" in combined
-    assert "Evidence diagnostic:" in combined
-    assert "Candidate 1" in combined
-    assert "exact_kit=REJECTED" in combined
-    assert "total-capacity conflict" in combined
+    assert "FAIL-CLOSED" not in combined
+    diagnostic = worker.diagnostic_metadata["evidence_diagnostic"]
+    assert "Candidate 1" in diagnostic
+    assert "exact_kit=REJECTED" in diagnostic
+    assert "total-capacity conflict" in diagnostic
     assert "RAM 32GB DDR4 3200 | eBay.de" not in combined
     assert "2x16GB" not in combined

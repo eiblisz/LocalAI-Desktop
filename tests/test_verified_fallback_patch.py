@@ -57,4 +57,7 @@ def test_rejected_model_answer_is_replaced_by_verified_host_fallback(monkeypatch
     assert "606.90 EUR" in combined
     assert "https://shop.example.de/crucial-64gb" in combined
     assert "Az ellenorzott forrasok alapjan:" in combined
-    assert "Evidence verification: PASS (host-verified fallback used)" in combined
+    assert (
+        worker.diagnostic_metadata["verification_status"]
+        == "Evidence verification: PASS (host-verified fallback used)"
+    )
