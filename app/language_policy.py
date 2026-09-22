@@ -68,7 +68,7 @@ _HUNGARIAN_WORDS = {
     "hasonlítsd",
 }
 
-_STRONG_HUNGARIAN_CHARS = set("áéíóőúű")
+_STRONG_HUNGARIAN_CHARS = set("őű")
 
 _GERMAN_WORDS = {
     "der", "die", "das", "und", "oder", "mit", "fuer", "für", "ist", "sind",
@@ -77,7 +77,9 @@ _GERMAN_WORDS = {
 }
 
 _ENGLISH_WORDS = {
-    "the", "and", "or", "with", "is", "are", "price", "prices", "buy",
+    "the", "and", "or", "with", "is", "are", "was", "were", "be", "been",
+    "in", "of", "to", "from", "by", "on", "as", "this", "that", "it", "one",
+    "formed", "founded", "known", "group", "band", "price", "prices", "buy",
     "search", "find", "verified", "product", "products", "source", "sources",
 }
 
@@ -161,6 +163,7 @@ def response_language_repair_instruction(text):
     language = detect_user_language(text)
     if language == "hu":
         return (
+            "Rewrite the supplied answer in Hungarian. "
             "Írd át az alábbi választ kizárólag magyar nyelvre. "
             "A tényeket, számokat, URL-eket, termékneveket és tulajdonneveket "
             "pontosan őrizd meg. A személynevek írásmódját és szórendjét ne változtasd meg. "
@@ -191,8 +194,8 @@ def response_language_instruction(text):
     if language == "hu":
         return (
             "VÁLASZ NYELVE: Kizárólag magyarul válaszolj az elejétől a végéig. "
-            "RESPONSE LANGUAGE: Hungarian only. Do not switch to English unless "
-            "the user explicitly asks for English."
+            "RESPONSE LANGUAGE: Hungarian only. Answer in Hungarian. "
+            "Do not switch to English unless the user explicitly asks for English."
         )
     if language == "en":
         return (
