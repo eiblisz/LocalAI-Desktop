@@ -363,7 +363,7 @@ def test_explicit_memory_request_uses_dedicated_background_worker():
     send_source = inspect.getsource(MainWindow._send)
     run_source = inspect.getsource(MainWindow._run_next_action_contract)
 
-    assert "self.action_runtime.plan_many(" in send_source
+    assert "plan_chat_actions(" in send_source
     assert "contract.route == ROUTE_MEMORY_WRITE" in run_source
     assert "self.worker = MemoryWriteWorker(" in run_source
     assert "self.memory_store" in run_source
@@ -1152,8 +1152,8 @@ def test_desktop_executes_validated_multi_action_contracts_in_order():
     cleanup_source = inspect.getsource(MainWindow._cleanup_worker)
 
     assert "self.pending_action_contracts = []" in init_source
-    assert "self.action_runtime.plan_many(" in send_source
-    assert "self.action_runtime.validate_many(contracts)" in send_source
+    assert "plan_chat_actions(" in send_source
+    assert "web_mode=self.web_mode" in send_source
     assert "self.pending_action_contracts = list(contracts)" in send_source
     assert "pop(0)" in run_source
     assert "self.active_action_contract = contract" in run_source
