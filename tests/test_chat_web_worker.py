@@ -2032,3 +2032,143 @@ def test_hungarian_language_repair_uses_native_instruction():
     assert repaired == "A Pokolgép 1980-ban alakult Budapesten."
     assert client.messages is not None
     assert "kizárólag magyar" in client.messages[0]["content"].casefold()
+
+
+
+def test_entity_overview_uses_semantic_profile_without_model_query_generation(
+    monkeypatch,
+):
+    prompt = "Mit tudsz az Ezüst Hold zenekarról?"
+    search_calls = []
+
+    class OverviewClient:
+        def __init__(self):
+            self.once_calls = []
+            self.stream_calls = []
+
+        def chat_once(self, model, messages, timeout=600.0, **kwargs):
+            self.once_calls.append((model, messages))
+            raise AssertionError(
+                "entity overview should not need query-generation or compaction call"
+            )
+
+        def chat_stream(
+            self,
+            model,
+            messages,
+            on_token,
+            should_stop,
+            timeout=600.0,
+            **kwargs,
+        ):
+            self.stream_calls.append((model, messages))
+            system = messages[-2]["content"]
+            assert "kind=entity_overview" in system
+            assert "substantive overview" in system
+            if not should_stop():
+                on_token(
+                    "Az Ezüst Hold egy magyar zenekar. "
+                    "A források alapján a története több korszakra tagolódik, "
+                    "és több fontos kiadvány, tag és mérföldkő kapcsolódik hozzá."
+                )
+
+    def fake_search(query, max_results=6, fetch_pages=True):
+        search_calls.append((query, max_results, fetch_pages))
+        return {
+            "provider": "Brave Search API",
+            "query": query,
+            "provider_query": query,
+            "retrieved_at": "2026-09-22T10:00:00",
+            "provider_chain_errors": [],
+            "results": [{
+                "title": "Ezüst Hold zenekar története",
+                "url": "https://example.com/ezust-hold",
+                "snippet": "Az Ezüst Hold zenekar története, tagjai és kiadványai.",
+                "page_text": "Az Ezüst Hold több korszakon át működő magyar zenekar.",
+            }],
+        }
+
+    monkeypatch.setattr(
+        workers.ChatWebWorker,
+        "_generate_search_queries",
+        lambda self: (_ for _ in ()).throw(
+            AssertionError("overview profile must skip model query generation")
+        ),
+    )
+    monkeypatch.setattr(workers, "search_web", fake_search)
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: ["https://example.com/ezust-hold"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_entries",
+        lambda payload, limit=6: [{
+            "title": "Ezüst Hold zenekar története",
+            "url": "https://example.com/ezust-hold",
+        }],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: (
+            "Ezüst Hold zenekar története, tagjai, kiadványai és mérföldkövei."
+        ),
+    )
+
+    client = OverviewClient()
+    tokens = []
+    errors = []
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        prompt,
+    )
+    worker.token.connect(tokens.append)
+    worker.failed.connect(errors.append)
+    worker.run()
+
+    assert errors == []
+    assert tokens
+    assert client.once_calls == []
+    assert len(client.stream_calls) == 1
+    assert search_calls == [(prompt, 8, 2)]
+    assert worker.diagnostic_metadata["request_kind"] == "entity_overview"
+    assert worker.diagnostic_metadata["response_depth"] == "overview"
+    assert worker.diagnostic_metadata["query_budget"] == 1
+    assert worker.diagnostic_metadata["page_fetch_budget"] == 2
+
+
+def test_entity_overview_is_not_collapsed_to_three_sentences():
+    class NoCompactClient(DummyWebClient):
+        def chat_once(self, model, messages, timeout=600.0, **kwargs):
+            raise AssertionError("overview response must not enter concise compaction")
+
+    worker = workers.ChatWebWorker(
+        NoCompactClient(),
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Mit tudsz az Ezüst Hold zenekarról?",
+    )
+    original = "Áttekintő, evidence-grounded bekezdés. " * 40
+
+    assert worker.request_profile.kind == "entity_overview"
+    assert worker._wants_detailed_web_answer() is True
+    assert worker._compact_grounded_answer(original) == original
+
+
+def test_direct_fact_keeps_narrow_semantic_budget():
+    worker = workers.ChatWebWorker(
+        DummyWebClient(),
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Mikor írta Nimbus Szerző az Ezüst Történetet?",
+    )
+
+    assert worker.request_profile.kind == "direct_fact"
+    assert worker.request_profile.query_budget == 1
+    assert worker.request_profile.source_budget == 4
+    assert worker.request_profile.page_fetch_budget == 2
+    assert worker._wants_detailed_web_answer() is False
