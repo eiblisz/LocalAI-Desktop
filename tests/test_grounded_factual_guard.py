@@ -177,3 +177,18 @@ def test_grounded_repair_prompt_preserves_evidence_name_form_and_order():
     system = client.messages[0]["content"]
     assert "Preserve proper-name spelling, diacritics, and token order" in system
     assert "use the form conventional in the requested answer language" in system
+
+
+
+def test_grounded_guard_matches_accented_and_unaccented_name_literals():
+    authority = (
+        "USER REQUEST: Mikor írta Arany Janos a Silver Storyt?\n"
+        "AUTHORIZED EVIDENCE: Arany Janos nem a szerző; Correct Author írta 1912-ben."
+    )
+
+    unsupported = unsupported_grounded_literals(
+        "Arany János nem írta a Silver Storyt; Correct Author írta 1912-ben.",
+        authority,
+    )
+
+    assert unsupported == ()
