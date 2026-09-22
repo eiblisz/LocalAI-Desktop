@@ -31,7 +31,13 @@ def normalized_evidence_items(payload):
 
 
 
-def compact_evidence_authority(payload, *, max_sources=5, max_text_chars=700):
+def compact_evidence_authority(
+    payload,
+    *,
+    authoritative_fact=None,
+    max_sources=5,
+    max_text_chars=700,
+):
     """
     Build a bounded provider-neutral evidence authority for factual verification.
 
@@ -48,6 +54,18 @@ def compact_evidence_authority(payload, *, max_sources=5, max_text_chars=700):
         f"Query: {query}",
         f"Retrieved: {retrieved_at}",
     ]
+
+    fact = dict(authoritative_fact or {})
+    if fact.get("value"):
+        lines.extend([
+            "",
+            "AUTHORITATIVE CURRENT FACT",
+            f"Kind: {_clean(fact.get('kind'))}",
+            f"Value: {_clean(fact.get('value'))}",
+            f"Authority: {_clean(fact.get('authority'))}",
+            f"Source: {_clean(fact.get('title'))}",
+            f"Source URL: {str(fact.get('url') or '').strip()}",
+        ])
 
     accepted = 0
     for result in payload.get("results") or []:
