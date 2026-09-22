@@ -956,14 +956,7 @@ class ChatWebWorker(QObject):
                     )
                     continue
 
-                if self.trace is not None:
-                self.trace.end(
-                    "search",
-                    successful_queries=len(successful_queries or generic_shopping_queries),
-                    provider_count=len(successful_providers or generic_shopping_providers),
-                )
-
-            if generic_shopping_mode:
+                if generic_shopping_mode:
                     if query not in generic_shopping_queries:
                         generic_shopping_queries.append(query)
                     provider = str(payload.get("provider", "")).strip() or "unknown"
@@ -1047,6 +1040,17 @@ class ChatWebWorker(QObject):
                         item["url"] for item in entries
                     }:
                         entries.append(entry)
+
+            if self.trace is not None:
+                self.trace.end(
+                    "search",
+                    successful_queries=len(
+                        successful_queries or generic_shopping_queries
+                    ),
+                    provider_count=len(
+                        successful_providers or generic_shopping_providers
+                    ),
+                )
 
             if generic_shopping_mode:
                 answer = render_generic_shopping_answer(
