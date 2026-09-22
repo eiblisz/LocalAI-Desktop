@@ -190,8 +190,9 @@ def response_language_instruction(text):
     language = detect_user_language(text)
     if language == "hu":
         return (
-            "RESPONSE LANGUAGE: The current user message is Hungarian. "
-            "Answer in Hungarian. Do not switch to English unless the user explicitly asks for English."
+            "VÁLASZ NYELVE: Kizárólag magyarul válaszolj az elejétől a végéig. "
+            "RESPONSE LANGUAGE: Hungarian only. Do not switch to English unless "
+            "the user explicitly asks for English."
         )
     if language == "en":
         return (
@@ -200,8 +201,9 @@ def response_language_instruction(text):
         )
     if language == "de":
         return (
-            "RESPONSE LANGUAGE: The current user message is German. "
-            "Answer in German unless the user explicitly asks for another language."
+            "ANTWORTSPRACHE: Antworte ausschließlich auf Deutsch. "
+            "RESPONSE LANGUAGE: German only unless the user explicitly asks "
+            "for another language."
         )
     return (
         "RESPONSE LANGUAGE: Answer in the same language as the current user message. "
