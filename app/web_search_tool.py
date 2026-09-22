@@ -1399,6 +1399,7 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
     if isinstance(fetch_pages, bool):
         should_fetch_pages = fetch_pages
         page_fetch_limit = 6
+        page_fetch_timeout = min(float(timeout), 15.0)
     else:
         try:
             page_fetch_limit = max(1, min(int(fetch_pages or 0), 6))
@@ -1406,11 +1407,10 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
         except (TypeError, ValueError):
             should_fetch_pages = bool(fetch_pages)
             page_fetch_limit = 6
-
-    page_fetch_timeout = min(
-        float(timeout),
-        8.0 if page_fetch_limit <= 2 else 12.0,
-    )
+        page_fetch_timeout = min(
+            float(timeout),
+            8.0 if page_fetch_limit <= 2 else 12.0,
+        )
     attempts = []
     mode = brave_context_mode()
     if brave_search_configured() and mode == "llm_context":
