@@ -1370,22 +1370,77 @@ class ChatWebWorker(QObject):
                 + [grounded_user]
             )
 
+            has_authoritative_current_fact = bool(
+                self._canonical_authoritative_fact(authoritative_facts)
+            )
+            single_pass_factual = (
+                self.followup_resolution.status == "direct"
+                and is_factual_risk_request(self.user_prompt)
+                and not self._has_multiple_research_topics()
+                and not self._wants_detailed_web_answer()
+                and not has_authoritative_current_fact
+                and not self.compact_market_quote
+            )
+
             if self.trace is not None:
                 self.trace.end(
                     "evidence_context_build",
-                    context_chars=len(context_text),
+                    context_chars=len(
+                        factual_authority_text
+                        if single_pass_factual
+                        else context_text
+                    ),
                     usable_sources=len(entries or urls),
                 )
                 self.trace.begin("model_inference")
+                self.trace.add_metadata(
+                    generation_strategy=(
+                        "factual_single_pass"
+                        if single_pass_factual
+                        else "grounded_stream"
+                    )
+                )
             self.phase.emit(f"{self.model} gondolkodik")
 
-            answer_parts = []
-            self.client.chat_stream(
-                model=self.model,
-                messages=stream_messages,
-                on_token=answer_parts.append,
-                should_stop=self._stop_event.is_set,
-            )
+            if single_pass_factual:
+                answer = self.client.chat_once(
+                    model=self.model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "Answer the CURRENT USER REQUEST using ONLY the "
+                                "AUTHORIZED EVIDENCE. Treat every factual premise in "
+                                "the request as a claim to verify, not as authority. "
+                                "If the evidence contradicts a person-work, person-event, "
+                                "date, year, version, price, or other concrete relation, "
+                                "correct the premise explicitly. If the evidence is "
+                                "insufficient, say so briefly instead of guessing. "
+                                "Answer immediately in one to three short sentences. "
+                                "Preserve evidence-backed proper-name spelling, diacritics, "
+                                "and token order. Do not add any factual literal absent "
+                                "from the evidence or request. "
+                                + self._conversation_language_instruction()
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": (
+                                f"CURRENT USER REQUEST:\n{self.user_prompt}\n\n"
+                                f"AUTHORIZED EVIDENCE:\n{factual_authority_text}"
+                            ),
+                        },
+                    ],
+                ).strip()
+            else:
+                answer_parts = []
+                self.client.chat_stream(
+                    model=self.model,
+                    messages=stream_messages,
+                    on_token=answer_parts.append,
+                    should_stop=self._stop_event.is_set,
+                )
+                answer = "".join(answer_parts).strip()
 
             if self._stop_event.is_set():
                 self.finished.emit()
@@ -1396,7 +1451,6 @@ class ChatWebWorker(QObject):
                 self.trace.begin("post_processing")
             self.phase.emit("Evidence ellenőrzése")
 
-            answer = "".join(answer_parts).strip()
             if not answer:
                 raise RuntimeError("The model returned an empty web answer.")
 
@@ -1411,9 +1465,6 @@ class ChatWebWorker(QObject):
             )
             answer = self._compact_grounded_answer(answer)
             answer = self._compact_market_quote_answer(answer)
-            has_authoritative_current_fact = bool(
-                self._canonical_authoritative_fact(authoritative_facts)
-            )
             answer = guard_grounded_answer(
                 self.client,
                 self.model,
@@ -1424,7 +1475,9 @@ class ChatWebWorker(QObject):
                 force_verify=(
                     is_factual_risk_request(self.user_prompt)
                     and not has_authoritative_current_fact
+                    and not single_pass_factual
                 ),
+                language_instruction=self._conversation_language_instruction(),
             )
             if (
                 is_factual_risk_request(self.user_prompt)
@@ -1437,6 +1490,7 @@ class ChatWebWorker(QObject):
                     answer,
                     factual_authority_text,
                     trace=self.trace,
+                    language_instruction=self._conversation_language_instruction(),
                 )
 
             verification_status = ""
