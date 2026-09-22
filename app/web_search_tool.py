@@ -14,6 +14,7 @@ from bs4 import BeautifulSoup
 
 from .browser_web_tool import browser_read_pages, browser_search
 from .brave_llm_context import context_mode as brave_context_mode, search_brave_llm_context
+from .web_evidence import normalized_evidence_items
 from .web_research_pipeline import (
     filter_relevant_results as pipeline_filter_relevant_results,
     specialize_provider_query,
@@ -1473,7 +1474,7 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
                 len(str(item.get("page_text") or item.get("snippet") or ""))
                 for item in results
             )
-            return {
+            result_payload = {
                 "provider": payload.get("provider", name),
                 "query": clean,
                 "provider_query": provider_query,
@@ -1492,6 +1493,8 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
                     "usable_sources": len(results),
                 },
             }
+            result_payload["evidence"] = normalized_evidence_items(result_payload)
+            return result_payload
         except Exception as exc:
             errors.append(f"{name}: {exc}")
 
