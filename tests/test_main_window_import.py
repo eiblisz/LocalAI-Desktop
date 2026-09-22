@@ -1294,3 +1294,10 @@ def test_action_workers_receive_task_constraints_for_response_guard():
     assert "constraints=contract.constraints" in source
     assert "ArtifactActionWorker(" in source
     assert "AdaptiveChatWorker(" in source
+
+
+
+def test_main_window_common_chat_planner_symbol_is_runtime_resolvable():
+    import app.main_window as main_window
+
+    assert callable(main_window.plan_chat_actions)
