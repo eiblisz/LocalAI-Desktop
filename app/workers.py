@@ -445,14 +445,31 @@ class ChatWebWorker(QObject):
         ]
         return any(marker in normalized for marker in reference_markers)
 
+    def _response_language_source(self):
+        if detect_user_language(self.original_user_prompt) != "unknown":
+            return self.original_user_prompt
+
+        if self.followup_resolution.status == "resolved":
+            for message in reversed(self.messages):
+                if message.get("role") != "user":
+                    continue
+                text = " ".join(str(message.get("content") or "").split())
+                if not text or text == self.original_user_prompt:
+                    continue
+                if detect_user_language(text) != "unknown":
+                    return text
+
+        return self.original_user_prompt or self.user_prompt
+
     def _conversation_language_instruction(self):
-        return response_language_instruction(self.user_prompt)
+        return response_language_instruction(self._response_language_source())
 
     def _repair_response_language(self, answer):
-        if response_language_matches(self.user_prompt, answer):
+        language_source = self._response_language_source()
+        if response_language_matches(language_source, answer):
             return answer
 
-        expected = detect_user_language(self.user_prompt)
+        expected = detect_user_language(language_source)
         language_name = {
             "hu": "Hungarian",
             "de": "German",
@@ -482,7 +499,7 @@ class ChatWebWorker(QObject):
             ],
         ).strip()
 
-        if repaired and response_language_matches(self.user_prompt, repaired):
+        if repaired and response_language_matches(language_source, repaired):
             return repaired
 
         if expected == "hu":
