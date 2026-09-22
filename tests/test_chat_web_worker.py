@@ -1775,3 +1775,107 @@ def test_factual_risk_query_seed_does_not_duplicate_equivalent_generated_query()
 
     assert queries[0] == prompt
     assert queries.count(prompt) == 1
+
+
+
+def test_single_factual_risk_request_skips_model_query_generation(monkeypatch):
+    from app.request_trace import RequestTrace
+
+    prompt = "Mikor írta Wrong Author a Silver Story című művet?"
+    search_calls = []
+
+    class FactualClient:
+        def chat_once(self, model, messages, timeout=600.0, **kwargs):
+            return (
+                "A Silver Story című művet Correct Author írta, "
+                "és 1912-ben jelent meg."
+            )
+
+        def chat_stream(
+            self,
+            model,
+            messages,
+            on_token,
+            should_stop,
+            timeout=600.0,
+            **kwargs,
+        ):
+            if not should_stop():
+                on_token(
+                    "A Silver Story című művet Correct Author írta, "
+                    "és 1912-ben jelent meg."
+                )
+
+    def fake_search(query, max_results=6, fetch_pages=True):
+        search_calls.append(query)
+        return {
+            "provider": "Brave Search API",
+            "query": query,
+            "retrieved_at": "2026-09-22T10:00:00",
+            "provider_chain_errors": [],
+            "results": [{
+                "title": "Correct Author: Silver Story",
+                "url": "https://example.com/silver-story",
+                "snippet": (
+                    "Silver Story was written by Correct Author and "
+                    "published in 1912."
+                ),
+                "page_text": (
+                    "Silver Story was written by Correct Author and "
+                    "published in 1912."
+                ),
+            }],
+        }
+
+    monkeypatch.setattr(
+        workers.ChatWebWorker,
+        "_generate_search_queries",
+        lambda self: (_ for _ in ()).throw(
+            AssertionError("factual fast path must skip model query generation")
+        ),
+    )
+    monkeypatch.setattr(workers, "search_web", fake_search)
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: ["https://example.com/silver-story"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_entries",
+        lambda payload, limit=6: [{
+            "title": "Correct Author: Silver Story",
+            "url": "https://example.com/silver-story",
+        }],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: (
+            "Silver Story was written by Correct Author and published in 1912."
+        ),
+    )
+
+    trace = RequestTrace("test")
+    tokens = []
+    errors = []
+    worker = workers.ChatWebWorker(
+        FactualClient(),
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        prompt,
+        trace=trace,
+    )
+    worker.token.connect(tokens.append)
+    worker.failed.connect(errors.append)
+    worker.run()
+
+    assert errors == []
+    assert tokens
+    assert "Correct Author" in tokens[0]
+    assert "1912" in tokens[0]
+    assert search_calls == [prompt]
+
+    snapshot = trace.snapshot()
+    assert snapshot["phases_ms"]["query_generation"] == 0.0
+    assert snapshot["metadata"]["query_strategy"] == "factual_direct"
