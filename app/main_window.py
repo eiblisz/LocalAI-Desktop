@@ -1899,6 +1899,7 @@ class MainWindow(QMainWindow):
             token,
             memory_store=self.memory_store,
             extension_store=self.extension_store,
+            web_mode_provider=lambda: self.web_mode,
             parent=self,
         )
         bridge.status_changed.connect(self._discord_bot_status_changed)
