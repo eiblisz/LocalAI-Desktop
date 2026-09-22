@@ -1,0 +1,81 @@
+import pytest
+
+from app.grounded_factual_guard import (
+    GroundedFactualGuardError,
+    guard_grounded_answer,
+    unsupported_grounded_literals,
+)
+
+
+class RepairClient:
+    def __init__(self, repaired):
+        self.repaired = repaired
+        self.calls = 0
+
+    def chat_once(self, model, messages, timeout=600.0, **kwargs):
+        self.calls += 1
+        return self.repaired
+
+
+def test_grounded_guard_detects_unsupported_year_and_name():
+    authority = (
+        "USER REQUEST: Mikor készült a Csillag Története?\n"
+        "AUTHORIZED EVIDENCE: A forrás szerint Example Author készítette 1912-ben."
+    )
+
+    unsupported = unsupported_grounded_literals(
+        "Other Person készítette 1956-ban.",
+        authority,
+    )
+
+    assert "1956" in unsupported
+    assert "Other Person" in unsupported
+
+
+def test_grounded_guard_accepts_supported_factual_literals():
+    authority = (
+        "AUTHORIZED EVIDENCE: Example Author készítette 1912-ben. "
+        "Forrás: https://example.com/source"
+    )
+
+    unsupported = unsupported_grounded_literals(
+        "Example Author készítette 1912-ben. https://example.com/source",
+        authority,
+    )
+
+    assert unsupported == ()
+
+
+def test_grounded_guard_repairs_false_premise_once():
+    authority = (
+        "USER REQUEST: Mikor írta Wrong Author a Silver Storyt?\n"
+        "AUTHORIZED EVIDENCE: Silver Story szerzője Correct Author, 1912."
+    )
+    client = RepairClient("A Silver Story szerzője Correct Author, 1912.")
+
+    result = guard_grounded_answer(
+        client,
+        "qwen-test",
+        "Mikor írta Wrong Author a Silver Storyt?",
+        "Wrong Author 1956-ban írta.",
+        authority,
+    )
+
+    assert result == "A Silver Story szerzője Correct Author, 1912."
+    assert client.calls == 1
+
+
+def test_grounded_guard_fails_closed_after_bad_repair():
+    authority = "AUTHORIZED EVIDENCE: Correct Author, 1912."
+    client = RepairClient("Other Person 1956-ban írta.")
+
+    with pytest.raises(GroundedFactualGuardError):
+        guard_grounded_answer(
+            client,
+            "qwen-test",
+            "Mikor írták?",
+            "Wrong Author 1956-ban írta.",
+            authority,
+        )
+
+    assert client.calls == 1
