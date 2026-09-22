@@ -1118,7 +1118,14 @@ class MainWindow(QMainWindow):
 
     def _send(self):
         text = self.input.toPlainText().strip()
-        if not text or self.worker is not None or self.pending_action_contracts:
+        if (
+            not text
+            or self.worker is not None
+            or self.thread is not None
+            or self.pending_action_contracts
+        ):
+            if text and self.thread is not None and self.worker is None:
+                self.status.setText("Previous request is still finishing")
             return
 
         model = self.model_combo.currentText().strip()
@@ -1189,6 +1196,10 @@ class MainWindow(QMainWindow):
         self.pending_request_trace = RequestTrace("desktop")
         self.pending_request_trace.begin("request_received")
         self.pending_request_trace.end("request_received")
+        self._start_thinking_indicator(
+            False,
+            base_text="Útvonal kiválasztása",
+        )
 
         try:
             contracts = plan_chat_actions(
@@ -1203,16 +1214,58 @@ class MainWindow(QMainWindow):
                 trace=self.pending_request_trace,
             )
         except PermissionError as exc:
+            self._stop_thinking_indicator()
+            self.pending_request_trace = None
             self.status.setText("Action blocked")
             QMessageBox.warning(self, "Action authority", str(exc))
             return
+        except Exception as exc:
+            self._stop_thinking_indicator()
+            self.pending_request_trace = None
+            self.status.setText("Request planning failed")
+            self.status.setToolTip(" ".join(str(exc).split()))
+            QMessageBox.critical(
+                self,
+                "Request planning error",
+                " ".join(str(exc).split()) or "Unknown request planning error",
+            )
+            return
 
         self.pending_action_contracts = list(contracts)
+        if not self.pending_action_contracts:
+            self._stop_thinking_indicator()
+            self.pending_request_trace = None
+            self.status.setText("No executable action")
+            QMessageBox.warning(
+                self,
+                "Request routing",
+                "The request did not produce an executable action.",
+            )
+            return
+
         self.pending_action_model = model
         self.pending_action_original_text = text
         self.pending_action_context_suffix = context_suffix
         self.pending_action_images = list(image_payloads)
-        self._run_next_action_contract()
+        try:
+            self._run_next_action_contract()
+        except Exception as exc:
+            self.pending_action_contracts = []
+            self.active_action_contract = None
+            self.worker = None
+            if self.thread is not None and not self.thread.isRunning():
+                self.thread.deleteLater()
+                self.thread = None
+            self._stop_thinking_indicator()
+            self.pending_request_trace = None
+            self.stop_button.setEnabled(False)
+            self.status.setText("Request start failed")
+            self.status.setToolTip(" ".join(str(exc).split()))
+            QMessageBox.critical(
+                self,
+                "Request start error",
+                " ".join(str(exc).split()) or "Unknown request start error",
+            )
 
     def _action_messages_for_model(self, prompt, constraints=None):
         prompt = str(prompt or "").strip()
@@ -1350,7 +1403,14 @@ class MainWindow(QMainWindow):
             self.worker.failed.connect(self.thread.quit)
             self.thread.finished.connect(self._cleanup_worker)
             self.stop_button.setEnabled(True)
-            self._start_thinking_indicator(contract.use_web)
+            if self.thinking_timer.isActive():
+                self._on_execution_phase(
+                    "Webes keresés"
+                    if contract.use_web
+                    else "Creating artifact"
+                )
+            else:
+                self._start_thinking_indicator(contract.use_web)
             self.thread.start()
             return
 
@@ -1418,7 +1478,14 @@ class MainWindow(QMainWindow):
         self.thread.finished.connect(self._cleanup_worker)
 
         self.stop_button.setEnabled(True)
-        self._start_thinking_indicator(contract.use_web)
+        if self.thinking_timer.isActive():
+            self._on_execution_phase(
+                "Webes keresés"
+                if contract.use_web
+                else f"{self.pending_action_model} gondolkodik"
+            )
+        else:
+            self._start_thinking_indicator(contract.use_web)
         self.thread.start()
 
     def _on_action_artifacts_finished(self, results):
@@ -1471,6 +1538,7 @@ class MainWindow(QMainWindow):
 
     def _on_token(self, token):
         self.partial_assistant += token
+        self._render_streaming_chat()
 
     def _on_finished(self):
         self._stop_thinking_indicator()
@@ -1620,11 +1688,20 @@ class MainWindow(QMainWindow):
             self.stop_button.setEnabled(False)
             self._stop_thinking_indicator()
 
-    def _start_thinking_indicator(self, use_web=False):
+    def _start_thinking_indicator(self, use_web=False, base_text=None):
         self.thinking_base_text = (
-            "Webes keresés" if use_web else f"{self.pending_action_model} gondolkodik"
+            str(base_text).strip()
+            if str(base_text or "").strip()
+            else (
+                "Webes keresés"
+                if use_web
+                else f"{self.pending_action_model} gondolkodik"
+            )
         )
         self.thinking_phase = 0
+        self.thinking_label.show()
+        self.status.setText(self.thinking_base_text)
+        self.status.setToolTip("")
         self.thinking_label.setStyleSheet(
             "color:#7FAE8C;font-size:12px;font-weight:600;"
         )
@@ -1636,6 +1713,8 @@ class MainWindow(QMainWindow):
         if not text:
             return
         self.thinking_base_text = text
+        self.status.setText(text)
+        self.status.setToolTip("")
         self._pulse_thinking_indicator()
 
     def _pulse_thinking_indicator(self):
