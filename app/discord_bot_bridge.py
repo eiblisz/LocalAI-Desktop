@@ -37,6 +37,7 @@ from .document_tools import (
 from .language_policy import response_language_instruction
 from .memory_answers import direct_user_memory_answer
 from .memory_runtime import remember_explicit_request
+from .request_trace import RequestTrace
 from .web_intent import (
     ACTION_ARTIFACT,
     ACTION_MEMORY_WRITE,
@@ -275,6 +276,9 @@ class DiscordBotBridge(QObject):
                 return
 
             async with request_lock:
+                trace = RequestTrace("discord")
+                trace.begin("request_received")
+                trace.end("request_received")
                 try:
                     contracts = plan_chat_actions(
                         self.action_runtime,
@@ -286,6 +290,7 @@ class DiscordBotBridge(QObject):
                         multi_asset_market_available=(
                             self._multi_asset_market_extension() is not None
                         ),
+                        trace=trace,
                     )
 
                     last_chat_id = ""
@@ -295,6 +300,7 @@ class DiscordBotBridge(QObject):
                                 self._execute_planned_action,
                                 contract.prompt,
                                 contract.plan,
+                                trace,
                             )
 
                         last_chat_id = str(result.get("chat_id", "") or last_chat_id)
@@ -308,8 +314,11 @@ class DiscordBotBridge(QObject):
                                 mention_author=False,
                             )
 
+                    trace.begin("response_send")
                     if last_chat_id:
                         self.chat_updated.emit(last_chat_id)
+                    trace.end("response_send")
+                    trace.emit_if_enabled()
                 except Exception as exc:
                     compact = " ".join(str(exc).split())[:500]
                     self.status_changed.emit(f"Discord request failed: {compact}")
@@ -661,7 +670,7 @@ class DiscordBotBridge(QObject):
         messages.extend(history)
         return messages
 
-    def _grounded_web_answer(self, prompt):
+    def _grounded_web_answer(self, prompt, trace=None):
         chat = self._load_remote_chat()
         messages = self._messages_for_prompt(chat, prompt)
         return run_chat_web_request(
@@ -669,6 +678,7 @@ class DiscordBotBridge(QObject):
             self.settings.model,
             messages,
             prompt,
+            trace=trace,
         ).strip()
 
     def _crypto_market_extension(self):
@@ -689,7 +699,7 @@ class DiscordBotBridge(QObject):
             ExtensionExecutionContext.discord_remote(),
         )
 
-    def _grounded_external_answer(self, prompt):
+    def _grounded_external_answer(self, prompt, trace=None):
         if is_crypto_quote_request(prompt):
             crypto_extension = self._crypto_market_extension()
             if crypto_extension is not None:
@@ -710,7 +720,7 @@ class DiscordBotBridge(QObject):
                     ).strip()
                 except Exception:
                     pass
-        return self._grounded_web_answer(prompt)
+        return self._grounded_web_answer(prompt, trace=trace)
 
     def _remember_remote(self, prompt):
         if self.memory_store is None:
@@ -736,7 +746,7 @@ class DiscordBotBridge(QObject):
         self.chat_store.save(chat)
         return answer, str(chat.get("id", ""))
 
-    def _execute_planned_action(self, prompt, action_plan):
+    def _execute_planned_action(self, prompt, action_plan, trace=None):
         if action_plan.has(ACTION_MEMORY_WRITE):
             answer, chat_id = self._remember_remote(prompt)
             return {"chat_id": chat_id, "messages": [answer], "artifacts": []}
@@ -744,7 +754,7 @@ class DiscordBotBridge(QObject):
         if action_plan.has(ACTION_ARTIFACT):
             source_context = ""
             if action_plan.has(ACTION_WEB_RESEARCH):
-                source_context = self._grounded_external_answer(prompt)
+                source_context = self._grounded_external_answer(prompt, trace=trace)
 
             chat_id, artifact_results = self._create_remote_artifacts(
                 prompt,
@@ -761,10 +771,17 @@ class DiscordBotBridge(QObject):
             prompt,
             use_web=action_plan.has(ACTION_WEB_RESEARCH),
             allow_web_fallback=self._current_web_mode() != "OFF",
+            trace=trace,
         )
         return {"chat_id": chat_id, "messages": [answer], "artifacts": []}
 
-    def _answer_prompt(self, prompt, use_web=False, allow_web_fallback=True):
+    def _answer_prompt(
+        self,
+        prompt,
+        use_web=False,
+        allow_web_fallback=True,
+        trace=None,
+    ):
         chat = self._load_remote_chat()
         chat["model"] = self.settings.model
         chat["messages"].append({"role": "user", "content": prompt})
@@ -831,18 +848,24 @@ class DiscordBotBridge(QObject):
                     self.settings.model,
                     messages,
                     prompt,
+                    trace=trace,
                 ).strip()
         else:
+            if trace is not None:
+                trace.begin("model_inference")
             answer = self.ollama_client.chat_once(
                 model=self.settings.model,
                 messages=messages,
             ).strip()
+            if trace is not None:
+                trace.end("model_inference")
             if allow_web_fallback and answer_requires_web_fallback(prompt, answer):
                 answer = run_chat_web_request(
                     self.ollama_client,
                     self.settings.model,
                     messages,
                     prompt,
+                    trace=trace,
                 ).strip()
 
         if not answer:
