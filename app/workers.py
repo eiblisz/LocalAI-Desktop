@@ -5,6 +5,7 @@ import unicodedata
 from PySide6.QtCore import QObject, Signal, Slot
 
 from .artifact_service import ArtifactPlanItem, create_artifact
+from .brave_llm_context import context_mode as brave_context_mode
 from .document_tools import (
     build_document_messages,
     build_excel_messages,
@@ -251,6 +252,7 @@ class MultiAssetMarketDataWorker(QObject):
 
 class ChatWebWorker(QObject):
     token = Signal(str)
+    phase = Signal(str)
     finished = Signal()
     failed = Signal(str)
 
@@ -283,6 +285,31 @@ class ChatWebWorker(QObject):
         self.web_research_pipeline = WebResearchPipeline(self)
         self._latest_evidence_ledgers = []
         self.query_validation = {"status": "not_run", "rejections": []}
+        self.source_metadata = []
+        self.diagnostic_metadata = {}
+
+    def _set_diagnostics(
+        self,
+        *,
+        queries=(),
+        providers=(),
+        provider_fallbacks=(),
+        evidence_ledger_count=0,
+        context_modes=(),
+        verification_status="",
+        evidence_diagnostic="",
+    ):
+        self.diagnostic_metadata = {
+            "route": "web",
+            "search_queries": list(queries),
+            "providers": list(providers),
+            "provider_fallbacks": list(provider_fallbacks),
+            "query_validation": dict(self.query_validation),
+            "evidence_ledger_count": int(evidence_ledger_count or 0),
+            "context_modes": list(context_modes),
+            "verification_status": str(verification_status or ""),
+            "evidence_diagnostic": str(evidence_diagnostic or ""),
+        }
 
     def _followup_clarification(self):
         return self.followup_resolution.clarification
@@ -971,6 +998,11 @@ class ChatWebWorker(QObject):
 
             if self.trace is not None:
                 self.trace.begin("search")
+            self.phase.emit(
+                "Brave LLM Context"
+                if brave_context_mode() == "llm_context"
+                else "Webes keresés"
+            )
 
             generic_shopping_mode = (
                 is_generic_shopping_request(self.user_prompt)
@@ -1010,6 +1042,7 @@ class ChatWebWorker(QObject):
             verification_queries = []
             constrained_rejections = []
             authoritative_facts = []
+            context_modes = []
 
             for query in queries:
                 if self._stop_event.is_set():
@@ -1033,6 +1066,9 @@ class ChatWebWorker(QObject):
                                 "llm_context",
                                 timing.get("provider_ms", 0.0),
                             )
+                    mode = str(payload.get("context_mode") or "legacy")
+                    if mode not in context_modes:
+                        context_modes.append(mode)
                 except Exception as exc:
                     failed_queries.append(
                         f"{query}: {self._compact_web_error(exc)}"
@@ -1143,91 +1179,56 @@ class ChatWebWorker(QObject):
                         successful_providers or generic_shopping_providers
                     ),
                 )
+            self.phase.emit("Források feldolgozása")
 
             if generic_shopping_mode:
                 answer = render_generic_shopping_answer(
                     self.user_prompt,
                     generic_shopping_records,
                 )
-                self.token.emit(answer)
-
-                if generic_shopping_queries:
-                    if len(generic_shopping_queries) == 1:
-                        query_footer = (
-                            f"Search query: {generic_shopping_queries[0]}"
-                        )
-                    else:
-                        query_footer = (
-                            "Search queries:\n"
-                            + "\n".join(
-                                f"- {query}"
-                                for query in generic_shopping_queries
-                            )
-                        )
-                else:
-                    query_footer = f"Search query: {self.user_prompt}"
-
-                if len(generic_shopping_providers) == 1:
-                    provider_footer = (
-                        f"Search provider: {generic_shopping_providers[0]}"
-                    )
-                elif generic_shopping_providers:
-                    provider_footer = (
-                        "Search providers: "
-                        + ", ".join(generic_shopping_providers)
-                    )
-                else:
-                    provider_footer = "Search provider: none"
-
-                if generic_shopping_records:
-                    source_lines = "\n".join(
-                        f"- [{item['title']}]({item['url']})"
-                        for item in generic_shopping_records[:12]
-                    )
-                    evidence_status = (
-                        "Shopping evidence: PASS "
-                        f"({len(generic_shopping_records)} product-level result(s))"
-                    )
-                else:
-                    source_lines = "- No verified product-level source"
-                    evidence_status = (
-                        "Shopping evidence: FAIL-CLOSED "
-                        "(0 product-level results)"
-                    )
-
-                self.token.emit(
-                    "\n\n---\n"
-                    f"{query_footer}\n"
-                    f"{provider_footer}\n"
-                    f"{evidence_status}\n"
-                    "Web results / sources:\n"
-                    f"{source_lines}"
+                self.source_metadata = [
+                    {
+                        "title": str(item.get("title") or "Source").strip(),
+                        "url": str(item.get("url") or "").strip(),
+                    }
+                    for item in generic_shopping_records[:12]
+                    if str(item.get("url") or "").strip()
+                ]
+                self._set_diagnostics(
+                    queries=generic_shopping_queries,
+                    providers=generic_shopping_providers,
+                    provider_fallbacks=provider_fallback_notes,
+                    evidence_ledger_count=len(evidence_ledgers),
+                    context_modes=context_modes,
                 )
+                self.token.emit(answer)
                 self.finished.emit()
                 return
 
             if not contexts or not urls:
                 if constrained_rejections:
-                    diagnostic = self._evidence_diagnostic(evidence_ledgers)
-                    diagnostic_text = (
-                        "\nEvidence diagnostic:\n" + diagnostic
-                        if diagnostic
-                        else ""
+                    evidence_diagnostic = self._evidence_diagnostic(evidence_ledgers)
+                    self._set_diagnostics(
+                        queries=constrained_rejections,
+                        providers=successful_providers,
+                        provider_fallbacks=provider_fallback_notes,
+                        evidence_ledger_count=len(evidence_ledgers),
+                        context_modes=context_modes,
+                        evidence_diagnostic=evidence_diagnostic,
                     )
                     self.token.emit(self._safe_evidence_failure())
-                    self.token.emit(
-                        "\n\n---\n"
-                        f"Search query: {constrained_rejections[0]}\n"
-                        "Evidence verification: FAIL-CLOSED (0 accepted products)"
-                        f"{diagnostic_text}"
-                    )
                     self.finished.emit()
                     return
 
-                detail = " | ".join(failed_queries[:4])
+                self._set_diagnostics(
+                    queries=queries,
+                    providers=successful_providers,
+                    provider_fallbacks=provider_fallback_notes,
+                    evidence_ledger_count=len(evidence_ledgers),
+                    context_modes=context_modes,
+                )
                 raise RuntimeError(
                     "Web research returned no usable public sources."
-                    + (f" {detail}" if detail else "")
                 )
 
             history = [dict(message) for message in self.messages]
@@ -1327,6 +1328,7 @@ class ChatWebWorker(QObject):
                     usable_sources=len(entries or urls),
                 )
                 self.trace.begin("model_inference")
+            self.phase.emit(f"{self.model} gondolkodik")
 
             answer_parts = []
             self.client.chat_stream(
@@ -1343,6 +1345,7 @@ class ChatWebWorker(QObject):
             if self.trace is not None:
                 self.trace.end("model_inference")
                 self.trace.begin("post_processing")
+            self.phase.emit("Evidence ellenőrzése")
 
             answer = "".join(answer_parts).strip()
             if not answer:
@@ -1416,72 +1419,35 @@ class ChatWebWorker(QObject):
             if self.trace is not None:
                 self.trace.end("post_processing")
 
-            self.token.emit(answer)
-
-            if entries:
-                source_lines = "\n".join(
-                    f"- [{item['title']}]({item['url']})"
-                    for item in entries[:12]
-                )
-            else:
-                source_lines = "\n".join(
-                    f"- {url}" for url in urls[:12]
-                )
-
-            if len(successful_queries) == 1:
-                query_footer = f"Search query: {successful_queries[0]}"
-            else:
-                query_footer = (
-                    "Search queries:\n"
-                    + "\n".join(
-                        f"- {query}" for query in successful_queries
-                    )
-                )
-
-            if len(successful_providers) == 1:
-                provider_footer = f"Search provider: {successful_providers[0]}"
-            else:
-                provider_footer = (
-                    "Search providers: "
-                    + ", ".join(successful_providers)
-                )
-
-            fallback_footer = ""
-            llm_context_fallback = [
-                note for note in provider_fallback_notes
-                if note.startswith("Brave LLM Context:")
+            self.source_metadata = [
+                {
+                    "title": str(item.get("title") or "Source").strip(),
+                    "url": str(item.get("url") or "").strip(),
+                }
+                for item in entries[:12]
+                if str(item.get("url") or "").strip()
             ]
-            brave_fallback = [
-                note for note in provider_fallback_notes
-                if note.startswith("Brave Search API:")
-            ]
-            if llm_context_fallback:
-                fallback_footer += (
-                    "\nLLM Context fallback: "
-                    + llm_context_fallback[0].split(":", 1)[1].strip()
-                )
-            if brave_fallback:
-                fallback_footer += (
-                    "\nBrave fallback: "
-                    + brave_fallback[0].split(":", 1)[1].strip()
-                )
-
-            verification_footer = (
-                f"\n{verification_status}"
-                if verification_status
-                else ""
+            if not self.source_metadata:
+                self.source_metadata = [
+                    {"title": url, "url": url}
+                    for url in urls[:12]
+                    if str(url or "").strip()
+                ]
+            self._set_diagnostics(
+                queries=successful_queries,
+                providers=successful_providers,
+                provider_fallbacks=provider_fallback_notes,
+                evidence_ledger_count=len(evidence_ledgers),
+                context_modes=context_modes,
+                verification_status=verification_status,
             )
-
-            if not self.compact_market_quote:
-                self.token.emit(
-                    "\n\n---\n"
-                    f"{query_footer}\n"
-                    f"{provider_footer}"
-                    f"{fallback_footer}"
-                    f"{verification_footer}\n"
-                    "Web results / sources:\n"
-                    f"{source_lines}"
+            if self.trace is not None:
+                self.trace.add_metadata(
+                    web_provider=",".join(successful_providers),
+                    source_count=len(self.source_metadata),
+                    context_mode=",".join(context_modes),
                 )
+            self.token.emit(answer)
             self.finished.emit()
         except Exception as exc:
             self.failed.emit(str(exc))
@@ -1543,6 +1509,7 @@ class AdaptiveChatWorker(QObject):
     """
 
     token = Signal(str)
+    phase = Signal(str)
     finished = Signal()
     failed = Signal(str)
 
@@ -1578,6 +1545,7 @@ class AdaptiveChatWorker(QObject):
 
             if self.trace is not None:
                 self.trace.begin("model_inference")
+            self.phase.emit(f"{self.model} gondolkodik")
 
             if isinstance(self.client, OllamaClient):
                 draft_parts = []
@@ -1605,6 +1573,7 @@ class AdaptiveChatWorker(QObject):
                 and answer_requires_web_fallback(self.user_prompt, draft)
             ):
                 self.used_web_fallback = True
+                self.phase.emit("Webes keresés")
                 if self.trace is not None:
                     self.trace.end("post_processing")
                 if self.trace is None:
@@ -1628,6 +1597,7 @@ class AdaptiveChatWorker(QObject):
                 final = draft
 
             if self.constraints is not None:
+                self.phase.emit("Ellenőrzés")
                 final = guard_response(
                     self.client,
                     self.model,

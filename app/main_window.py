@@ -168,11 +168,12 @@ class MainWindow(QMainWindow):
         self.pending_action_context_suffix = ""
         self.pending_action_images = []
         self.pending_request_trace = None
+        self.expanded_source_message_ids = set()
         self.show_closed = False
         self.thinking_phase = 0
         self.thinking_base_text = "Gondolkodik"
         self.thinking_timer = QTimer(self)
-        self.thinking_timer.setInterval(450)
+        self.thinking_timer.setInterval(100)
         self.thinking_timer.timeout.connect(self._pulse_thinking_indicator)
         self.pdf_thread = None
         self.pdf_worker = None
@@ -1407,6 +1408,9 @@ class MainWindow(QMainWindow):
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
         self.worker.token.connect(self._on_token)
+        phase_signal = getattr(self.worker, "phase", None)
+        if phase_signal is not None:
+            phase_signal.connect(self._on_execution_phase)
         self.worker.finished.connect(self._on_finished)
         self.worker.failed.connect(self._on_failed)
         self.worker.finished.connect(self.thread.quit)
@@ -1479,10 +1483,29 @@ class MainWindow(QMainWindow):
             except Exception:
                 target_chat = self.current_chat
 
+        timing = None
+        if self.pending_request_trace is not None:
+            self.pending_request_trace.begin("response_send")
+            self.pending_request_trace.end("response_send")
+            timing = self.pending_request_trace.snapshot()
+
         if content and target_chat is not None:
-            target_chat["messages"].append(
-                {"role": "assistant", "content": self.partial_assistant}
+            assistant_message = {
+                "id": uuid.uuid4().hex,
+                "role": "assistant",
+                "content": self.partial_assistant,
+            }
+            if timing is not None:
+                assistant_message["timing"] = timing
+            sources = list(getattr(self.worker, "source_metadata", []) or [])
+            if sources:
+                assistant_message["sources"] = sources
+            diagnostic = dict(
+                getattr(self.worker, "diagnostic_metadata", {}) or {}
             )
+            if diagnostic:
+                assistant_message["diagnostic"] = diagnostic
+            target_chat["messages"].append(assistant_message)
             self.store.save(target_chat)
 
             current_id = str((self.current_chat or {}).get("id", ""))
@@ -1498,8 +1521,6 @@ class MainWindow(QMainWindow):
         if content:
             self.status.setText("Ollama connected")
         if self.pending_request_trace is not None:
-            self.pending_request_trace.begin("response_send")
-            self.pending_request_trace.end("response_send")
             self.pending_request_trace.emit_if_enabled()
         self._load_chat_list()
 
@@ -1601,25 +1622,33 @@ class MainWindow(QMainWindow):
 
     def _start_thinking_indicator(self, use_web=False):
         self.thinking_base_text = (
-            "Keres es gondolkodik"
-            if use_web
-            else "Gondolkodik"
+            "Webes keresés" if use_web else f"{self.pending_action_model} gondolkodik"
         )
         self.thinking_phase = 0
-        self.thinking_label.setText(self.thinking_base_text + ".")
         self.thinking_label.setStyleSheet(
             "color:#7FAE8C;font-size:12px;font-weight:600;"
         )
+        self._pulse_thinking_indicator()
         self.thinking_timer.start()
 
+    def _on_execution_phase(self, phase):
+        text = " ".join(str(phase or "").split())
+        if not text:
+            return
+        self.thinking_base_text = text
+        self._pulse_thinking_indicator()
+
     def _pulse_thinking_indicator(self):
-        self.thinking_phase = (self.thinking_phase + 1) % 4
-        dots = "." * max(1, self.thinking_phase)
-        colors = ["#6E9D7C", "#82B493", "#9BC7AA", "#82B493"]
-        self.thinking_label.setText(self.thinking_base_text + dots)
+        total_ms = 0.0
+        if self.pending_request_trace is not None:
+            total_ms = float(
+                self.pending_request_trace.snapshot().get("total_ms", 0.0) or 0.0
+            )
+        self.thinking_label.setText(
+            f"{self.thinking_base_text}… {total_ms / 1000.0:.1f} s"
+        )
         self.thinking_label.setStyleSheet(
-            f"color:{colors[self.thinking_phase]};"
-            "font-size:12px;font-weight:600;"
+            "color:#7FAE8C;font-size:12px;font-weight:600;"
         )
 
     def _stop_thinking_indicator(self):
@@ -1634,6 +1663,67 @@ class MainWindow(QMainWindow):
             safe,
             extensions=["fenced_code", "tables", "sane_lists", "nl2br"],
         )
+
+    @staticmethod
+    def _response_timing_html(message):
+        timing = message.get("timing") or {}
+        try:
+            total_ms = float(timing.get("total_ms", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return ""
+        if total_ms <= 0:
+            return ""
+        return (
+            "<div style='margin-top:10px;color:#8F99A6;font-size:12px;'>"
+            f"Válaszidő: {total_ms / 1000.0:.1f} s"
+            "</div>"
+        )
+
+    def _sources_html(self, message, message_index):
+        raw_sources = list(message.get("sources") or [])
+        sources = []
+        for item in raw_sources:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url") or "").strip()
+            if urlparse(url).scheme.lower() not in {"http", "https"}:
+                continue
+            title = " ".join(str(item.get("title") or url).split())
+            sources.append({"title": title or url, "url": url})
+        if not sources:
+            return ""
+
+        message_id = str(message.get("id") or f"message-{message_index}")
+        expanded = message_id in self.expanded_source_message_ids
+        marker = "▾" if expanded else "▸"
+        href = html.escape(f"localai-source://{message_id}", quote=True)
+        content = (
+            "<div style='margin-top:12px;font-size:13px;'>"
+            f"<a style='color:#8FBE9B;text-decoration:none;font-weight:700;' href='{href}'>"
+            f"Források ({len(sources)}) {marker}</a>"
+        )
+        if expanded:
+            content += "<div style='margin-top:7px;padding-left:8px;'>"
+            for source in sources:
+                source_url = html.escape(source["url"], quote=True)
+                title = html.escape(source["title"])
+                content += (
+                    "<div style='margin:4px 0;'>"
+                    f"<a style='color:#B7CFDD;text-decoration:none;' href='{source_url}'>"
+                    f"{title}</a></div>"
+                )
+            content += "</div>"
+        return content + "</div>"
+
+    def _toggle_sources(self, message_id):
+        key = str(message_id or "").strip()
+        if not key:
+            return
+        if key in self.expanded_source_message_ids:
+            self.expanded_source_message_ids.remove(key)
+        else:
+            self.expanded_source_message_ids.add(key)
+        self._render_chat()
 
     def _render_chat(self, include_partial=False, streaming=False):
         self._refresh_chat_extensions_button()
@@ -1674,7 +1764,7 @@ class MainWindow(QMainWindow):
                 "</div>"
             )
 
-        for message in messages:
+        for message_index, message in enumerate(messages):
             role = message.get("role", "assistant")
 
             if role == "artifact":
@@ -1705,6 +1795,13 @@ class MainWindow(QMainWindow):
                 label = "LOCAL AI"
                 border = "#2C3540"
 
+            details = ""
+            if role == "assistant":
+                details = (
+                    self._response_timing_html(message)
+                    + self._sources_html(message, message_index)
+                )
+
             html_parts.append(
                 f"<div style='background:{bg};border:1px solid {border};"
                 "border-radius:12px;padding:17px;margin:12px 6px 18px 6px;'>"
@@ -1713,6 +1810,7 @@ class MainWindow(QMainWindow):
                 "<div style='font-size:16px;line-height:1.62;'>"
                 f"{rendered}"
                 "</div>"
+                f"{details}"
                 "</div>"
             )
 
@@ -2498,6 +2596,9 @@ class MainWindow(QMainWindow):
 
     def _open_artifact_link(self, url):
         try:
+            if url.scheme().lower() == "localai-source":
+                self._toggle_sources(url.host() or url.path().strip("/"))
+                return
             if url.scheme().lower() in {"http", "https"}:
                 self._open_resource(url.toString())
                 return

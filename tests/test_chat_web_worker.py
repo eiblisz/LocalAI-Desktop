@@ -23,7 +23,7 @@ class DummyWebClient:
             on_token("Grounded web answer.")
 
 
-def test_chat_web_worker_searches_streams_and_appends_sources(monkeypatch):
+def test_chat_web_worker_searches_streams_and_keeps_sources_structured(monkeypatch):
     monkeypatch.setattr(
         workers,
         "search_web",
@@ -78,8 +78,15 @@ def test_chat_web_worker_searches_streams_and_appends_sources(monkeypatch):
 
     combined = "".join(tokens)
     assert "Grounded web answer." in combined
-    assert "Search query: Qwen local AI latest news" in combined
-    assert "https://example.com/qwen" in combined
+    assert "Search query:" not in combined
+    assert "Search provider:" not in combined
+    assert worker.source_metadata == [{
+        "title": "Qwen update",
+        "url": "https://example.com/qwen",
+    }]
+    assert worker.diagnostic_metadata["search_queries"] == [
+        "Qwen local AI latest news"
+    ]
 
 
 def test_chat_web_worker_fails_closed_without_sources(monkeypatch):
@@ -315,13 +322,12 @@ def test_chat_web_worker_runs_separate_searches_for_multi_part_request(monkeypat
         "64GB DDR4 2x32 current prices Germany",
     ]
     combined = "".join(tokens)
-    assert "Search queries:" in combined
-    assert "https://example.com/1" in combined
-    assert "https://example.com/2" in combined
-    assert "https://example.com/3" in combined
+    assert "Search queries:" not in combined
+    assert len(worker.source_metadata) == 3
+    assert worker.diagnostic_metadata["search_queries"] == seen
 
 
-def test_chat_web_worker_appends_markdown_result_links(monkeypatch):
+def test_chat_web_worker_keeps_result_links_in_structured_sources(monkeypatch):
     monkeypatch.setattr(
         workers.ChatWebWorker,
         "_generate_search_queries",
@@ -371,12 +377,11 @@ def test_chat_web_worker_appends_markdown_result_links(monkeypatch):
     worker.run()
 
     combined = "".join(tokens)
-    assert (
-        "[Kingston 64GB DDR4 kit]"
-        "(https://shop.example/kingston-64gb)"
-        in combined
-    )
-    assert "Web results / sources:" in combined
+    assert "Web results / sources:" not in combined
+    assert worker.source_metadata == [{
+        "title": "Kingston 64GB DDR4 kit",
+        "url": "https://shop.example/kingston-64gb",
+    }]
 
 
 def test_search_again_uses_previous_user_request_context(monkeypatch):
@@ -444,7 +449,10 @@ def test_search_again_uses_previous_user_request_context(monkeypatch):
     worker.run()
 
     assert not failed
-    assert "Search query: 2x32GB DDR4 Germany under 1000 EUR" in "".join(tokens)
+    assert "Search query:" not in "".join(tokens)
+    assert worker.diagnostic_metadata["search_queries"] == [
+        "2x32GB DDR4 Germany under 1000 EUR"
+    ]
 
 
 def test_literal_search_again_query_is_rejected_and_falls_back_to_previous_request():
@@ -528,7 +536,7 @@ def test_multi_topic_search_does_not_cross_contaminate_constraints():
     ]
 
 
-def test_chat_web_worker_footer_reports_provider_and_brave_fallback(monkeypatch):
+def test_chat_web_worker_keeps_provider_fallback_in_diagnostics(monkeypatch):
     monkeypatch.setattr(
         workers.ChatWebWorker,
         "_generate_search_queries",
@@ -581,8 +589,11 @@ def test_chat_web_worker_footer_reports_provider_and_brave_fallback(monkeypatch)
     worker.run()
 
     combined = "".join(tokens)
-    assert "Search provider: Bing Web RSS" in combined
-    assert "Brave fallback: 401 Client Error" in combined
+    assert "Search provider:" not in combined
+    assert worker.diagnostic_metadata["providers"] == ["Bing Web RSS"]
+    assert worker.diagnostic_metadata["provider_fallbacks"] == [
+        "Brave Search API: 401 Client Error"
+    ]
 
 
 def test_new_explicit_search_does_not_inherit_previous_topic():
@@ -754,7 +765,8 @@ def test_unconstrained_ssd_shopping_uses_deterministic_product_evidence(monkeypa
     assert "Idealo" not in combined
     assert "Preis-Leistungs" not in combined
     assert "MB/s" not in combined
-    assert "Shopping evidence: PASS" in combined
+    assert "Shopping evidence:" not in combined
+    assert worker.source_metadata
 
 
 def test_unconstrained_shopping_fails_closed_without_product_page(monkeypatch):
@@ -800,7 +812,7 @@ def test_unconstrained_shopping_fails_closed_without_product_page(monkeypatch):
     combined = "".join(tokens)
     assert "Nem találtam olyan termékszintű forrást" in combined
     assert "Nem fogok kitalált árat vagy specifikációt" in combined
-    assert "Shopping evidence: FAIL-CLOSED" in combined
+    assert "Shopping evidence:" not in combined
 
 
 def test_price_bounded_teakettle_keeps_existing_verified_model_path(monkeypatch):
@@ -917,7 +929,8 @@ def test_generic_shopping_bypasses_model_query_generation(monkeypatch):
 
     combined = "".join(tokens)
     assert "Samsung 870 QVO 4TB SSD" in combined
-    assert "Shopping evidence: PASS" in combined
+    assert "Shopping evidence:" not in combined
+    assert worker.source_metadata
     assert seen_queries
     assert all(max_results == 10 for _, max_results in seen_queries)
 
@@ -973,8 +986,8 @@ def test_run_chat_web_request_collects_grounded_worker_output(monkeypatch):
     )
 
     assert "Grounded web answer." in answer
-    assert "Search query: latest Qwen local AI news" in answer
-    assert "https://example.com/qwen" in answer
+    assert "Search query:" not in answer
+    assert "Web results / sources:" not in answer
 
 
 def test_adaptive_chat_worker_retries_grounded_web_when_local_answer_is_stale(monkeypatch):
@@ -1252,11 +1265,12 @@ def test_current_version_answer_with_authoritative_fact_is_canonical_and_brief(m
     assert len(main_answer) < 400
 
     combined = "".join(tokens)
-    assert "Search query: Ollama latest version release" in combined
-    assert "Web results / sources:" in combined
+    assert "Search query:" not in combined
+    assert "Web results / sources:" not in combined
+    assert worker.source_metadata
 
 
-def test_family_current_version_answer_is_compacted_but_source_appendix_remains(monkeypatch):
+def test_family_current_version_answer_is_compacted_with_structured_sources(monkeypatch):
     class FamilyClient(DummyWebClient):
         def chat_once(self, model, messages, timeout=600.0):
             self.once_calls.append((model, messages))
@@ -1337,8 +1351,9 @@ def test_family_current_version_answer_is_compacted_but_source_appendix_remains(
     assert len(main_answer) < 700
 
     combined = "".join(tokens)
-    assert "Search query: Qwen latest version release" in combined
-    assert "https://qwen.ai/" in combined
+    assert "Search query:" not in combined
+    assert "Web results / sources:" not in combined
+    assert worker.source_metadata
 
 
 def test_current_version_compactor_rejects_new_version_tokens():

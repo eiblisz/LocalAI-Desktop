@@ -200,7 +200,7 @@ def test_chat_tokens_buffer_without_live_rendering():
     assert "_render_chat" not in token_source
     assert "stream_render_timer" not in token_source
 
-def test_chat_uses_pulsing_thinking_indicator_until_complete():
+def test_chat_shows_real_phase_and_elapsed_time_until_complete():
     from app.main_window import MainWindow
 
     build_source = inspect.getsource(MainWindow._build_chat_panel)
@@ -214,10 +214,11 @@ def test_chat_uses_pulsing_thinking_indicator_until_complete():
     assert 'self.thinking_label = QLabel("")' in build_source
     assert "setFixedHeight(26)" in build_source
     assert "_start_thinking_indicator(contract.use_web)" in run_source
-    assert '"Gondolkodik"' in start_source
-    assert '"Keres es gondolkodik"' in start_source
+    assert '"Webes keresés"' in start_source
     assert "thinking_timer.start()" in start_source
-    assert "thinking_phase" in pulse_source
+    assert "self.pending_request_trace.snapshot()" in pulse_source
+    assert "total_ms / 1000.0:.1f" in pulse_source
+    assert "_on_execution_phase" in run_source
     assert "_stop_thinking_indicator()" in finished_source
     assert "_stop_thinking_indicator()" in failed_source
     assert "_stop_thinking_indicator()" in stop_source
@@ -248,6 +249,24 @@ def test_chat_link_handler_routes_http_and_artifacts_to_internal_viewer():
     assert "path_from_artifact_url" in source
     assert "self._open_resource(target)" in source
     assert "webbrowser.open" not in source
+
+
+def test_chat_renders_structured_collapsible_sources_and_completed_timing():
+    from app.main_window import MainWindow
+
+    sources_source = inspect.getsource(MainWindow._sources_html)
+    timing_source = inspect.getsource(MainWindow._response_timing_html)
+    render_source = inspect.getsource(MainWindow._render_chat)
+    link_source = inspect.getsource(MainWindow._open_artifact_link)
+
+    assert 'message.get("sources")' in sources_source
+    assert "localai-source://" in sources_source
+    assert "expanded_source_message_ids" in sources_source
+    assert "Források (" in sources_source
+    assert "Válaszidő:" in timing_source
+    assert "self._sources_html(message, message_index)" in render_source
+    assert 'url.scheme().lower() == "localai-source"' in link_source
+    assert "self._toggle_sources" in link_source
 
 
 def test_chat_view_wraps_long_urls_without_horizontal_growth():
