@@ -213,6 +213,15 @@ class DiscordBotBridge(QObject):
                 return "AUTO"
         return "AUTO"
 
+    def _market_capabilities_for_prompt(self, prompt):
+        crypto_available = False
+        multi_asset_available = False
+        if is_crypto_quote_request(prompt):
+            crypto_available = self._crypto_market_extension() is not None
+        elif is_multi_asset_quote_request(prompt):
+            multi_asset_available = self._multi_asset_market_extension() is not None
+        return crypto_available, multi_asset_available
+
     def is_running(self):
         return bool(self._thread and self._thread.is_alive())
 
@@ -285,16 +294,15 @@ class DiscordBotBridge(QObject):
                 trace.begin("request_received")
                 trace.end("request_received")
                 try:
+                    crypto_available, multi_asset_available = (
+                        self._market_capabilities_for_prompt(content)
+                    )
                     contracts = plan_chat_actions(
                         self.action_runtime,
                         content,
                         web_mode=self._current_web_mode(),
-                        crypto_market_available=(
-                            self._crypto_market_extension() is not None
-                        ),
-                        multi_asset_market_available=(
-                            self._multi_asset_market_extension() is not None
-                        ),
+                        crypto_market_available=crypto_available,
+                        multi_asset_market_available=multi_asset_available,
                         trace=trace,
                     )
 
@@ -795,16 +803,15 @@ class DiscordBotBridge(QObject):
         trace=None,
     ):
         if use_web is None:
+            crypto_available, multi_asset_available = (
+                self._market_capabilities_for_prompt(prompt)
+            )
             planned = plan_chat_actions(
                 self.action_runtime,
                 prompt,
                 web_mode=self._current_web_mode(),
-                crypto_market_available=(
-                    self._crypto_market_extension() is not None
-                ),
-                multi_asset_market_available=(
-                    self._multi_asset_market_extension() is not None
-                ),
+                crypto_market_available=crypto_available,
+                multi_asset_market_available=multi_asset_available,
                 trace=trace,
             )
             use_web = bool(
