@@ -47,7 +47,7 @@ from .runtime_control import ExecutionBudget, ExecutionControl
 from .scheduled_task_executor import ScheduledTaskExecutor
 from .weather_tool import get_weather, weather_context_text
 from .web_intent import answer_requires_web_fallback, is_factual_risk_request
-from .web_evidence import compact_evidence_authority
+from .web_evidence import compact_evidence_authority, compact_evidence_bundle
 from .web_research_pipeline import WebResearchPipeline
 from .web_search_tool import (
     authoritative_current_fact,
@@ -333,6 +333,19 @@ class ChatWebWorker(QObject):
             else self.user_prompt
         )
         accepted, rejected = validate_search_queries(candidates, validation_intent)
+
+        if is_factual_risk_request(self.user_prompt):
+            direct = validate_search_query(self.user_prompt, validation_intent)
+            if direct.accepted:
+                direct_folded = self._fold_text(direct.query)
+                accepted = [
+                    direct.query,
+                    *[
+                        query for query in accepted
+                        if self._fold_text(query) != direct_folded
+                    ],
+                ][:4]
+
         if accepted:
             self.query_validation = {
                 "status": "accepted",
@@ -1031,7 +1044,7 @@ class ChatWebWorker(QObject):
             generic_shopping_queries = []
             generic_shopping_providers = []
             contexts = []
-            factual_authorities = []
+            factual_payloads = []
             urls = []
             entries = []
             successful_queries = []
@@ -1132,15 +1145,6 @@ class ChatWebWorker(QObject):
                         verification_queries.append(query)
                         context_body = evidence_ledger_context_text(payload)
 
-                compact_authority = compact_evidence_authority(
-                    payload,
-                    authoritative_fact=fact,
-                )
-                if compact_authority:
-                    factual_authorities.append(
-                        f"SEARCH QUERY: {query}\n{compact_authority}"
-                    )
-
                 query_urls = source_urls(payload)
                 if not query_urls:
                     failed_queries.append(
@@ -1149,6 +1153,7 @@ class ChatWebWorker(QObject):
                     continue
 
                 successful_queries.append(query)
+                factual_payloads.append(dict(payload))
                 provider = str(payload.get("provider", "")).strip() or "unknown"
                 if provider not in successful_providers:
                     successful_providers.append(provider)
@@ -1295,7 +1300,11 @@ class ChatWebWorker(QObject):
                 self.trace.begin("evidence_context_build")
             context_text = "\n\n===== NEXT SEARCH =====\n\n".join(contexts)
             factual_authority_text = (
-                "\n\n===== NEXT EVIDENCE SET =====\n\n".join(factual_authorities)
+                compact_evidence_bundle(
+                    factual_payloads,
+                    user_prompt=self.user_prompt,
+                    authoritative_facts=authoritative_facts,
+                )
                 or context_text[:5000]
             )
             failure_text = ""
