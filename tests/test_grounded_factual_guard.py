@@ -146,3 +146,34 @@ def test_grounded_guard_still_rejects_unsupported_relation_name_not_source_attri
             authority,
             force_verify=True,
         )
+
+
+
+def test_grounded_repair_prompt_preserves_evidence_name_form_and_order():
+    class CaptureClient:
+        def __init__(self):
+            self.messages = None
+
+        def chat_once(self, model, messages, timeout=600.0, **kwargs):
+            self.messages = messages
+            return "Correct Author írta a Silver Storyt 1912-ben."
+
+    client = CaptureClient()
+    authority = (
+        "USER REQUEST: Ki írta a Silver Storyt?\n"
+        "AUTHORIZED EVIDENCE: Correct Author írta a Silver Storyt 1912-ben."
+    )
+
+    result = guard_grounded_answer(
+        client,
+        "qwen-test",
+        "Ki írta a Silver Storyt?",
+        "Wrong Author írta 1956-ban.",
+        authority,
+        force_verify=True,
+    )
+
+    assert result == "Correct Author írta a Silver Storyt 1912-ben."
+    system = client.messages[0]["content"]
+    assert "Preserve proper-name spelling, diacritics, and token order" in system
+    assert "use the form conventional in the requested answer language" in system
