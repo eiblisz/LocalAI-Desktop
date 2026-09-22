@@ -1268,7 +1268,10 @@ def test_discord_factual_web_path_uses_bounded_relevant_authority(tmp_path: Path
             system = str(messages[0].get("content") or "")
             if "Convert the CURRENT USER REQUEST" in system:
                 return "Silver Story author publication date"
-            if "Repair the grounded answer" in system:
+            if (
+                "Answer the CURRENT USER REQUEST using ONLY the AUTHORIZED EVIDENCE"
+                in system
+            ):
                 authority = str(messages[-1].get("content") or "")
                 self.repair_authority_size = len(authority)
                 assert "Correct Author: Silver Story" in authority
@@ -1276,6 +1279,10 @@ def test_discord_factual_web_path_uses_bounded_relevant_authority(tmp_path: Path
                 return (
                     "Wrong Author nem írta a Silver Story című művet; "
                     "a mű Correct Author alkotása, és 1912-ben jelent meg."
+                )
+            if "Repair the grounded answer" in system:
+                raise AssertionError(
+                    "single-pass factual path must not require a forced repair call"
                 )
             return "unused"
 
