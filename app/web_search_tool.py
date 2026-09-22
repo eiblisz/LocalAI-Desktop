@@ -1356,10 +1356,9 @@ def source_entries(payload, limit=10):
     return entries
 
 
-def _fetch_top_pages(results, timeout, limit=6):
+def _fetch_top_pages(results, timeout):
     missing = []
-    page_limit = max(1, min(int(limit or 6), 6))
-    bounded = results[: min(page_limit, len(results))]
+    bounded = results[: min(6, len(results))]
 
     for item in bounded:
         try:
@@ -1472,9 +1471,8 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
                 page_started = perf_counter()
                 page_fetch_count = min(page_fetch_limit, len(results))
                 _fetch_top_pages(
-                    results,
+                    results[:page_fetch_limit],
                     page_fetch_timeout,
-                    page_fetch_limit,
                 )
                 page_fetch_ms = round((perf_counter() - page_started) * 1000, 2)
                 results = _filter_relevant_results(
