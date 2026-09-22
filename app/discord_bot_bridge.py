@@ -9,6 +9,7 @@ import requests
 from PySide6.QtCore import QObject, Signal
 
 from .action_runtime import ActionRuntime
+from .chat_orchestration import normalize_web_mode, plan_chat_actions
 from .artifact_service import (
     ArtifactPlanItem,
     create_artifact,
@@ -171,6 +172,7 @@ class DiscordBotBridge(QObject):
         token,
         memory_store=None,
         extension_store=None,
+        web_mode_provider=None,
         parent=None,
     ):
         super().__init__(parent)
@@ -184,6 +186,7 @@ class DiscordBotBridge(QObject):
             else None
         )
         self.action_runtime = ActionRuntime()
+        self.web_mode_provider = web_mode_provider
         self.settings = settings
         self.token = validate_bot_token(token)
         self._thread = None
@@ -194,6 +197,15 @@ class DiscordBotBridge(QObject):
     @property
     def fingerprint(self):
         return self.settings.fingerprint
+
+    def _current_web_mode(self):
+        provider = self.web_mode_provider
+        if callable(provider):
+            try:
+                return normalize_web_mode(provider())
+            except Exception:
+                return "AUTO"
+        return "AUTO"
 
     def is_running(self):
         return bool(self._thread and self._thread.is_alive())
@@ -264,8 +276,10 @@ class DiscordBotBridge(QObject):
 
             async with request_lock:
                 try:
-                    contracts = self.action_runtime.plan_many(
+                    contracts = plan_chat_actions(
+                        self.action_runtime,
                         content,
+                        web_mode=self._current_web_mode(),
                         crypto_market_available=(
                             self._crypto_market_extension() is not None
                         ),
@@ -273,7 +287,6 @@ class DiscordBotBridge(QObject):
                             self._multi_asset_market_extension() is not None
                         ),
                     )
-                    contracts = self.action_runtime.validate_many(contracts)
 
                     last_chat_id = ""
                     for contract in contracts:
@@ -746,11 +759,12 @@ class DiscordBotBridge(QObject):
 
         answer, chat_id = self._answer_prompt(
             prompt,
-            force_web=action_plan.has(ACTION_WEB_RESEARCH),
+            use_web=action_plan.has(ACTION_WEB_RESEARCH),
+            allow_web_fallback=self._current_web_mode() != "OFF",
         )
         return {"chat_id": chat_id, "messages": [answer], "artifacts": []}
 
-    def _answer_prompt(self, prompt, force_web=False):
+    def _answer_prompt(self, prompt, use_web=False, allow_web_fallback=True):
         chat = self._load_remote_chat()
         chat["model"] = self.settings.model
         chat["messages"].append({"role": "user", "content": prompt})
@@ -765,9 +779,8 @@ class DiscordBotBridge(QObject):
             return direct_answer, str(chat.get("id", ""))
 
         messages = self._messages_for_prompt(chat, prompt)
-        action_plan = plan_user_action(prompt, force_web=force_web)
 
-        if action_plan.has(ACTION_WEB_RESEARCH):
+        if use_web:
             if is_crypto_quote_request(prompt):
                 crypto_extension = self._crypto_market_extension()
                 if crypto_extension is not None:
@@ -824,7 +837,7 @@ class DiscordBotBridge(QObject):
                 model=self.settings.model,
                 messages=messages,
             ).strip()
-            if answer_requires_web_fallback(prompt, answer):
+            if allow_web_fallback and answer_requires_web_fallback(prompt, answer):
                 answer = run_chat_web_request(
                     self.ollama_client,
                     self.settings.model,
