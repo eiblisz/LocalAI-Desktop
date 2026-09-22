@@ -20,6 +20,7 @@ class RequestProfile:
     query_budget: int
     source_budget: int
     page_fetch_budget: int
+    requested_fact: str = "general"
 
 
 def _fold(value):
@@ -35,6 +36,46 @@ def _fold(value):
 
 def _contains_any(text, markers):
     return any(marker in text for marker in markers)
+
+
+def classify_requested_fact(text):
+    """Return the semantic fact requested by a direct lookup, if recognizable.
+
+    This stays deliberately entity-neutral.  It tells retrieval and evidence
+    checks what must be supported, without trying to extract or validate a
+    particular named entity on the host.
+    """
+    folded = _fold(text)
+    patterns = (
+        ("temporal", (
+            r"\bmikor\b", r"\bmelyik evben\b", r"\bwhen\b", r"\bwhat year\b",
+            r"\bwann\b", r"\bdate\b", r"\byear\b",
+        )),
+        ("location", (
+            r"\bhol\b", r"\bwhere\b", r"\bwo\b", r"\bhelye\b",
+        )),
+        ("quantity", (
+            r"\bmennyi\b", r"\bhany\b", r"\bhow many\b", r"\bhow much\b",
+            r"\bwie viel\b", r"\bwie viele\b", r"\bnumber\b",
+        )),
+        ("current_value", (
+            r"\bmost\b", r"\bjelenlegi\b", r"\baktualis\b", r"\bcurrent\b",
+            r"\blatest\b", r"\baktuell\b", r"\bneueste\b",
+        )),
+        ("version", (
+            r"\bverzio\b", r"\bversion\b", r"\bkiadas\b", r"\brelease\b",
+        )),
+        ("person_relation", (
+            r"\bki\b", r"\bwho\b", r"\bwer\b", r"\bszerzo\b", r"\bauthor\b",
+        )),
+        ("value", (
+            r"\bmi\b", r"\bwhat\b", r"\bwas ist\b", r"\bwert\b",
+        )),
+    )
+    for fact_type, fact_patterns in patterns:
+        if any(re.search(pattern, folded) for pattern in fact_patterns):
+            return fact_type
+    return "general"
 
 
 def classify_request(text):
@@ -170,14 +211,10 @@ def classify_request(text):
         r"\bwann schrieb\b",
     )
 
-    if explicit_detailed:
-        kind = TASK_DEEP_RESEARCH
-        depth = "detailed"
-        breadth = "broad"
-        query_budget = 3
-        source_budget = 10
-        page_fetch_budget = 4
-    elif any(re.search(pattern, folded) for pattern in overview_patterns):
+    # Resolve the requested activity first.  Depth is a separate dimension:
+    # "detailed comparison" remains a comparison rather than becoming a
+    # generic research request.
+    if any(re.search(pattern, folded) for pattern in overview_patterns):
         kind = TASK_ENTITY_OVERVIEW
         depth = "overview"
         breadth = "balanced"
@@ -220,6 +257,13 @@ def classify_request(text):
         source_budget = 6
         page_fetch_budget = 2
 
+    if explicit_detailed:
+        depth = "detailed"
+        breadth = "broad" if kind in {TASK_GENERAL, TASK_EXPLANATION} else breadth
+        query_budget = max(query_budget, 3 if kind != TASK_DIRECT_FACT else 1)
+        source_budget = max(source_budget, 10 if kind != TASK_DIRECT_FACT else 4)
+        page_fetch_budget = max(page_fetch_budget, 4 if kind != TASK_DIRECT_FACT else 2)
+
     if explicit_concise:
         depth = "concise"
         if kind not in {TASK_DISCOVERY, TASK_COMPARISON}:
@@ -234,6 +278,7 @@ def classify_request(text):
         query_budget=max(1, min(int(query_budget), 4)),
         source_budget=max(3, min(int(source_budget), 12)),
         page_fetch_budget=max(1, min(int(page_fetch_budget), 6)),
+        requested_fact=classify_requested_fact(raw),
     )
 
 
@@ -244,14 +289,16 @@ def request_profile_instruction(profile):
     common = (
         "REQUEST PROFILE: "
         f"kind={profile.kind}; depth={profile.response_depth}; "
-        f"research_breadth={profile.research_breadth}. "
+        f"research_breadth={profile.research_breadth}; "
+        f"requested_fact={profile.requested_fact}. "
     )
 
     if profile.kind == TASK_DIRECT_FACT:
         return (
             common
             + "Answer the exact requested fact immediately. Usually use one to three "
-            "short sentences. Correct a false premise when the evidence contradicts it."
+            "short sentences. Correct a false premise when the evidence contradicts it, "
+            "but separately answer the requested fact only when the evidence supports it."
         )
     if profile.kind == TASK_ENTITY_OVERVIEW:
         return (

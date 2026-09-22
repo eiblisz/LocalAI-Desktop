@@ -5,6 +5,7 @@ from app.request_semantics import (
     TASK_ENTITY_OVERVIEW,
     TASK_GENERAL,
     classify_request,
+    classify_requested_fact,
     request_profile_instruction,
 )
 
@@ -48,17 +49,32 @@ def test_entity_overview_equivalents_work_across_languages():
     ).kind == TASK_ENTITY_OVERVIEW
 
 
-def test_explicit_deep_research_overrides_overview_default():
+def test_explicit_detailed_overview_preserves_overview_activity():
     profile = classify_request(
         "Mesélj részletesen az Ezüst Hold zenekarról."
     )
 
-    assert profile.kind == TASK_DEEP_RESEARCH
+    assert profile.kind == TASK_ENTITY_OVERVIEW
     assert profile.response_depth == "detailed"
-    assert profile.research_breadth == "broad"
+    assert profile.research_breadth == "balanced"
     assert profile.query_budget == 3
     assert profile.source_budget == 10
     assert profile.page_fetch_budget == 4
+
+
+def test_detailed_comparison_keeps_activity_and_depth_separate():
+    profile = classify_request("Hasonlítsd össze részletesen Alpha és Beta rendszert.")
+
+    assert profile.kind == TASK_COMPARISON
+    assert profile.response_depth == "detailed"
+
+
+def test_requested_fact_semantics_are_entity_generic():
+    profile = classify_request("Mikor írta Wrong Author a Silver Story című művet?")
+
+    assert profile.kind == TASK_DIRECT_FACT
+    assert profile.requested_fact == "temporal"
+    assert classify_requested_fact("Where was the Silver Story published?") == "location"
 
 
 def test_comparison_profile_has_balanced_multi_query_budget():
