@@ -1329,12 +1329,21 @@ class ChatWebWorker(QObject):
                 )
 
             fallback_footer = ""
+            llm_context_fallback = [
+                note for note in provider_fallback_notes
+                if note.startswith("Brave LLM Context:")
+            ]
             brave_fallback = [
                 note for note in provider_fallback_notes
                 if note.startswith("Brave Search API:")
             ]
+            if llm_context_fallback:
+                fallback_footer += (
+                    "\nLLM Context fallback: "
+                    + llm_context_fallback[0].split(":", 1)[1].strip()
+                )
             if brave_fallback:
-                fallback_footer = (
+                fallback_footer += (
                     "\nBrave fallback: "
                     + brave_fallback[0].split(":", 1)[1].strip()
                 )
