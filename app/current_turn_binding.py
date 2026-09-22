@@ -51,6 +51,7 @@ def guard_current_turn_binding(
     authority_text,
     *,
     trace=None,
+    language_instruction="",
 ):
     """
     Keep grounded factual-risk answers explicitly bound to the current request.
@@ -79,7 +80,9 @@ def guard_current_turn_binding(
                     "Use ONLY the authorized evidence. Correct a false premise when the "
                     "evidence contradicts it. Keep the answer concise unless the user asked "
                     "for detail. Do not invent facts, names, dates, prices, versions, or URLs. "
-                    "Return only the repaired answer."
+                    + (" " + str(language_instruction).strip()
+                       if str(language_instruction or "").strip() else "")
+                    + " Return only the repaired answer."
                 ),
             },
             {

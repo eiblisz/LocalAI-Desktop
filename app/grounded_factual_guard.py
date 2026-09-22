@@ -1,4 +1,5 @@
 import re
+import unicodedata
 
 
 class GroundedFactualGuardError(RuntimeError):
@@ -6,7 +7,14 @@ class GroundedFactualGuardError(RuntimeError):
 
 
 def _normalize(value):
-    return " ".join(str(value or "").strip().split()).casefold()
+    normalized = unicodedata.normalize(
+        "NFKD",
+        " ".join(str(value or "").strip().split()).casefold(),
+    )
+    return "".join(
+        char for char in normalized
+        if not unicodedata.combining(char)
+    )
 
 
 def _critical_literals(text):
@@ -130,6 +138,7 @@ def guard_grounded_answer(
     *,
     trace=None,
     force_verify=False,
+    language_instruction="",
 ):
     draft = str(answer or "").strip()
     unsupported = unsupported_grounded_literals(draft, authority_text)
@@ -164,7 +173,9 @@ def guard_grounded_answer(
                     "answer language rather than inventing a new ordering. "
                     "Do not add any name, date, number, price, version, URL, or factual claim "
                     "that is absent from the authorized evidence or user request. "
-                    "Return only the repaired answer."
+                    + (" " + str(language_instruction).strip()
+                       if str(language_instruction or "").strip() else "")
+                    + " Return only the repaired answer."
                 ),
             },
             {

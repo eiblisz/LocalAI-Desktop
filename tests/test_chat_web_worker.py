@@ -1879,3 +1879,116 @@ def test_single_factual_risk_request_skips_model_query_generation(monkeypatch):
     snapshot = trace.snapshot()
     assert snapshot["phases_ms"]["query_generation"] == 0.0
     assert snapshot["metadata"]["query_strategy"] == "factual_direct"
+
+
+
+def test_resolved_punctuation_followup_preserves_previous_user_language():
+    worker = workers.ChatWebWorker(
+        DummyWebClient(),
+        "qwen-test",
+        [
+            {"role": "user", "content": "Mikor írta Arany Janos a Janos vitez cimu verset?"},
+            {"role": "assistant", "content": "Petőfi Sándor írta 1844-ben."},
+            {"role": "user", "content": "?"},
+        ],
+        "?",
+    )
+
+    assert worker.followup_resolution.status == "resolved"
+    assert worker._response_language_source().startswith("Mikor írta")
+    instruction = worker._conversation_language_instruction()
+    assert "Answer in Hungarian" in instruction
+
+
+def test_direct_factual_request_uses_one_grounded_model_call_not_forced_second_pass(
+    monkeypatch,
+):
+    from app.request_trace import RequestTrace
+
+    prompt = "Mikor írta Wrong Author a Silver Story című művet?"
+
+    class SinglePassClient:
+        def __init__(self):
+            self.once_calls = []
+            self.stream_calls = []
+
+        def chat_once(self, model, messages, timeout=600.0, **kwargs):
+            self.once_calls.append((model, messages))
+            return (
+                "A Silver Story című művet nem Wrong Author, hanem Correct Author "
+                "írta, és 1912-ben jelent meg."
+            )
+
+        def chat_stream(self, *args, **kwargs):
+            self.stream_calls.append((args, kwargs))
+            raise AssertionError(
+                "direct factual single-pass path must not stream a draft first"
+            )
+
+    def fake_search(query, max_results=6, fetch_pages=True):
+        assert query == prompt
+        return {
+            "provider": "Brave Search API",
+            "query": query,
+            "retrieved_at": "2026-09-22T10:00:00",
+            "provider_chain_errors": [],
+            "results": [{
+                "title": "Correct Author: Silver Story",
+                "url": "https://example.com/silver-story",
+                "snippet": (
+                    "Silver Story was written by Correct Author and "
+                    "published in 1912."
+                ),
+                "page_text": (
+                    "Silver Story was written by Correct Author and "
+                    "published in 1912."
+                ),
+            }],
+        }
+
+    monkeypatch.setattr(workers, "search_web", fake_search)
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: ["https://example.com/silver-story"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_entries",
+        lambda payload, limit=6: [{
+            "title": "Correct Author: Silver Story",
+            "url": "https://example.com/silver-story",
+        }],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: (
+            "Silver Story was written by Correct Author and published in 1912."
+        ),
+    )
+
+    client = SinglePassClient()
+    tokens = []
+    errors = []
+    trace = RequestTrace("test")
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        prompt,
+        trace=trace,
+    )
+    worker.token.connect(tokens.append)
+    worker.failed.connect(errors.append)
+    worker.run()
+
+    assert errors == []
+    assert len(client.once_calls) == 1
+    assert client.stream_calls == []
+    assert tokens == [
+        "A Silver Story című művet nem Wrong Author, hanem Correct Author "
+        "írta, és 1912-ben jelent meg."
+    ]
+    snapshot = trace.snapshot()
+    assert snapshot["metadata"]["generation_strategy"] == "factual_single_pass"
