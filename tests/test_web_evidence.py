@@ -75,3 +75,36 @@ def test_compact_factual_authority_is_bounded_by_source_count():
     assert "Source 0" in authority
     assert "Source 2" in authority
     assert "Source 3" not in authority
+
+
+
+def test_compact_factual_authority_includes_host_authoritative_current_fact():
+    payload = {
+        "provider": "Brave Search API",
+        "query": "Ollama latest version release",
+        "retrieved_at": "2026-09-22T10:00:00",
+        "results": [
+            {
+                "title": "Releases · ollama/ollama · GitHub",
+                "url": "https://github.com/ollama/ollama/releases",
+                "snippet": "Official releases",
+                "page_text": "Release list v0.34.2 Latest",
+            }
+        ],
+    }
+
+    authority = compact_evidence_authority(
+        payload,
+        authoritative_fact={
+            "kind": "latest_release",
+            "value": "v0.34.2",
+            "authority": "first_party",
+            "title": "Releases · ollama/ollama · GitHub",
+            "url": "https://github.com/ollama/ollama/releases",
+        },
+    )
+
+    assert "AUTHORITATIVE CURRENT FACT" in authority
+    assert "Value: v0.34.2" in authority
+    assert "Authority: first_party" in authority
+    assert "Source URL: https://github.com/ollama/ollama/releases" in authority
