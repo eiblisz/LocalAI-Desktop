@@ -2,6 +2,7 @@ from dataclasses import dataclass
 import re
 
 from .language_policy import detect_user_language
+from .request_semantics import classify_request
 
 
 @dataclass(frozen=True)
@@ -12,6 +13,7 @@ class TaskConstraints:
     parent_intent: str
     format_constraints: tuple[str, ...] = ()
     user_explicit_constraints: tuple[str, ...] = ()
+    request_profile: object = None
 
 
 def _clean(text):
@@ -94,6 +96,7 @@ def build_task_constraints(user_text):
         parent_intent=parent[:2400],
         format_constraints=_format_constraints(parent),
         user_explicit_constraints=_explicit_constraints(parent),
+        request_profile=classify_request(parent),
     )
 
 
@@ -125,6 +128,14 @@ def task_constraints_instruction(constraints, *, current_subtask=""):
         lines.append(
             "- Format constraints: " + ", ".join(constraints.format_constraints)
         )
+    profile = getattr(constraints, "request_profile", None)
+    if profile is not None:
+        lines.extend([
+            f"- Request kind: {getattr(profile, 'kind', 'general')}.",
+            f"- Response depth: {getattr(profile, 'response_depth', 'standard')}.",
+            f"- Research breadth: {getattr(profile, 'research_breadth', 'balanced')}.",
+        ])
+
     if constraints.user_explicit_constraints:
         lines.append(
             "- Explicit user constraints: "

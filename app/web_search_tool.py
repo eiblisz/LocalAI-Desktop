@@ -1395,6 +1395,21 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
     search_plan = build_search_plan(clean)
     provider_query = build_provider_query(search_plan)
     limit = max(1, min(int(max_results or 6), 10))
+    if isinstance(fetch_pages, bool):
+        should_fetch_pages = fetch_pages
+        page_fetch_limit = 6
+        page_fetch_timeout = min(float(timeout), 15.0)
+    else:
+        try:
+            page_fetch_limit = max(1, min(int(fetch_pages or 0), 6))
+            should_fetch_pages = page_fetch_limit > 0
+        except (TypeError, ValueError):
+            should_fetch_pages = bool(fetch_pages)
+            page_fetch_limit = 6
+        page_fetch_timeout = min(
+            float(timeout),
+            8.0 if page_fetch_limit <= 2 else 12.0,
+        )
     attempts = []
     mode = brave_context_mode()
     if brave_search_configured() and mode == "llm_context":
@@ -1441,7 +1456,7 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
                 provider_query,
                 results,
                 plan=search_plan,
-                require_verified=not fetch_pages,
+                require_verified=not should_fetch_pages,
             )
             results = rank_authoritative_results(clean, results)
             if not results:
@@ -1452,10 +1467,13 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
 
             page_fetch_ms = 0.0
             page_fetch_count = 0
-            if fetch_pages and not bool(payload.get("pre_extracted_context")):
+            if should_fetch_pages and not bool(payload.get("pre_extracted_context")):
                 page_started = perf_counter()
-                page_fetch_count = min(6, len(results))
-                _fetch_top_pages(results, timeout)
+                page_fetch_count = min(page_fetch_limit, len(results))
+                _fetch_top_pages(
+                    results[:page_fetch_limit],
+                    page_fetch_timeout,
+                )
                 page_fetch_ms = round((perf_counter() - page_started) * 1000, 2)
                 results = _filter_relevant_results(
                     provider_query,
