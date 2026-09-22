@@ -98,5 +98,5 @@ def test_boolean_fetch_pages_keeps_legacy_six_page_budget(monkeypatch):
         timeout=20.0,
     )
 
-    assert fetch_calls == [(8, 12.0, 6)]
+    assert fetch_calls == [(8, 15.0, 6)]
     assert payload["timing"]["page_fetch_count"] == 6
