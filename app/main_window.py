@@ -170,6 +170,7 @@ class MainWindow(QMainWindow):
         self.pending_action_images = []
         self.pending_request_trace = None
         self.expanded_source_message_ids = set()
+        self.expanded_diagnostic_message_ids = set()
         self.show_closed = False
         self.thinking_phase = 0
         self.thinking_base_text = "Gondolkodik"
@@ -1805,6 +1806,59 @@ class MainWindow(QMainWindow):
             self.expanded_source_message_ids.add(key)
         self._render_chat()
 
+    def _diagnostic_html(self, message, message_index):
+        diagnostic = dict(message.get("diagnostic") or {})
+        timing = dict(message.get("timing") or {})
+        phases = dict(timing.get("phases_ms") or {})
+        if not diagnostic and not phases:
+            return ""
+
+        message_id = str(message.get("id") or f"message-{message_index}")
+        expanded = message_id in self.expanded_diagnostic_message_ids
+        marker = "▾" if expanded else "▸"
+        href = html.escape(f"localai-diagnostic://{message_id}", quote=True)
+        content = (
+            "<div style='margin-top:8px;font-size:12px;'>"
+            f"<a style='color:#8F99A6;text-decoration:none;' href='{href}'>"
+            f"Diagnosztika {marker}</a>"
+        )
+        if not expanded:
+            return content + "</div>"
+
+        labels = (
+            ("Profile", diagnostic.get("request_kind") or timing.get("metadata", {}).get("request_kind")),
+            ("Requested fact", diagnostic.get("requested_fact") or timing.get("metadata", {}).get("requested_fact")),
+            ("Search", phases.get("search_provider_time")),
+            ("Page fetch", phases.get("page_fetch")),
+            ("Inference", phases.get("model_inference")),
+            ("Post-processing", phases.get("post_processing")),
+            ("Model calls", diagnostic.get("model_call_count") or timing.get("metadata", {}).get("model_call_count")),
+            ("Searches", diagnostic.get("search_count") or timing.get("metadata", {}).get("search_count")),
+            ("Pages", diagnostic.get("page_fetch_count") or timing.get("metadata", {}).get("page_fetch_count")),
+            ("Repairs", diagnostic.get("repair_count") or timing.get("metadata", {}).get("repair_count")),
+        )
+        content += "<div style='margin-top:5px;padding-left:8px;color:#8F99A6;'>"
+        for label, value in labels:
+            if value is None or value == "":
+                continue
+            if label in {"Search", "Page fetch", "Inference", "Post-processing"}:
+                try:
+                    value = f"{float(value) / 1000.0:.1f} s"
+                except (TypeError, ValueError):
+                    continue
+            content += f"<div>{html.escape(label)}: {html.escape(str(value))}</div>"
+        return content + "</div></div>"
+
+    def _toggle_diagnostics(self, message_id):
+        key = str(message_id or "").strip()
+        if not key:
+            return
+        if key in self.expanded_diagnostic_message_ids:
+            self.expanded_diagnostic_message_ids.remove(key)
+        else:
+            self.expanded_diagnostic_message_ids.add(key)
+        self._render_chat()
+
     def _render_chat(self, include_partial=False, streaming=False):
         self._refresh_chat_extensions_button()
         keep_bottom = (
@@ -1880,6 +1934,7 @@ class MainWindow(QMainWindow):
                 details = (
                     self._response_timing_html(message)
                     + self._sources_html(message, message_index)
+                    + self._diagnostic_html(message, message_index)
                 )
 
             html_parts.append(
@@ -2678,6 +2733,9 @@ class MainWindow(QMainWindow):
         try:
             if url.scheme().lower() == "localai-source":
                 self._toggle_sources(url.host() or url.path().strip("/"))
+                return
+            if url.scheme().lower() == "localai-diagnostic":
+                self._toggle_diagnostics(url.host() or url.path().strip("/"))
                 return
             if url.scheme().lower() in {"http", "https"}:
                 self._open_resource(url.toString())

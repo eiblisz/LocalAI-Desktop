@@ -256,6 +256,7 @@ def test_chat_renders_structured_collapsible_sources_and_completed_timing():
 
     sources_source = inspect.getsource(MainWindow._sources_html)
     timing_source = inspect.getsource(MainWindow._response_timing_html)
+    diagnostic_source = inspect.getsource(MainWindow._diagnostic_html)
     render_source = inspect.getsource(MainWindow._render_chat)
     link_source = inspect.getsource(MainWindow._open_artifact_link)
 
@@ -264,9 +265,13 @@ def test_chat_renders_structured_collapsible_sources_and_completed_timing():
     assert "expanded_source_message_ids" in sources_source
     assert "Források (" in sources_source
     assert "Válaszidő:" in timing_source
+    assert "localai-diagnostic://" in diagnostic_source
+    assert "Diagnosztika" in diagnostic_source
     assert "self._sources_html(message, message_index)" in render_source
+    assert "self._diagnostic_html(message, message_index)" in render_source
     assert 'url.scheme().lower() == "localai-source"' in link_source
     assert "self._toggle_sources" in link_source
+    assert 'url.scheme().lower() == "localai-diagnostic"' in link_source
 
 
 def test_chat_view_wraps_long_urls_without_horizontal_growth():
