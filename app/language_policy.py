@@ -68,7 +68,7 @@ _HUNGARIAN_WORDS = {
     "hasonlítsd",
 }
 
-_STRONG_HUNGARIAN_CHARS = set("őű")
+_STRONG_HUNGARIAN_CHARS = set("áéíóőúű")
 
 _GERMAN_WORDS = {
     "der", "die", "das", "und", "oder", "mit", "fuer", "für", "ist", "sind",
@@ -82,10 +82,14 @@ _ENGLISH_WORDS = {
 }
 
 _HUNGARIAN_RESPONSE_WORDS = {
-    "a", "az", "es", "és", "vagy", "van", "vannak", "arat", "árat", "arak",
-    "árak", "termek", "termék", "termekek", "termékek", "forras", "forrás",
-    "forrasok", "források", "talalat", "találat", "talalatok", "találatok",
-    "ellenorzott", "ellenőrzött", "csak", "olyan", "nem", "tudtam", "lehetett",
+    "a", "az", "es", "és", "egy", "vagy", "van", "volt", "lett", "vannak",
+    "amely", "aki", "hogy", "nem", "csak", "olyan", "azonban", "majd", "mar",
+    "már", "ota", "óta", "szerint", "kozott", "között", "elott", "előtt",
+    "utan", "után", "evben", "évben", "alakult", "irta", "írta", "jelent",
+    "jelent meg", "magyar", "zenekar", "mu", "mű", "cimu", "című",
+    "arat", "árat", "arak", "árak", "termek", "termék", "termekek", "termékek",
+    "forras", "forrás", "forrasok", "források", "talalat", "találat",
+    "talalatok", "találatok", "ellenorzott", "ellenőrzött", "tudtam", "lehetett",
 }
 
 
@@ -151,6 +155,35 @@ def detect_user_language(text):
         return "en"
 
     return "unknown"
+
+
+def response_language_repair_instruction(text):
+    language = detect_user_language(text)
+    if language == "hu":
+        return (
+            "Írd át az alábbi választ kizárólag magyar nyelvre. "
+            "A tényeket, számokat, URL-eket, termékneveket és tulajdonneveket "
+            "pontosan őrizd meg. A személynevek írásmódját és szórendjét ne változtasd meg. "
+            "Ne adj hozzá és ne vegyél el információt. Csak a magyarra átírt választ add vissza."
+        )
+    if language == "de":
+        return (
+            "Schreibe die folgende Antwort ausschließlich auf Deutsch um. "
+            "Bewahre Fakten, Zahlen, URLs, Produktnamen und Eigennamen exakt. "
+            "Ändere weder Schreibweise noch Reihenfolge von Personennamen. "
+            "Füge keine Informationen hinzu und entferne keine. "
+            "Gib nur die deutsch umgeschriebene Antwort zurück."
+        )
+    if language == "en":
+        return (
+            "Rewrite the following answer in English only. Preserve every fact, "
+            "number, URL, product name and proper name exactly. Do not add or remove "
+            "information. Return only the English answer."
+        )
+    return (
+        "Rewrite the supplied answer in the same language as the current user message. "
+        "Preserve all facts, numbers, URLs and proper names exactly. Return only the answer."
+    )
 
 
 def response_language_instruction(text):
