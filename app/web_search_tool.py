@@ -1474,7 +1474,7 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
                 _fetch_top_pages(
                     results,
                     page_fetch_timeout,
-                    limit=page_fetch_limit,
+                    page_fetch_limit,
                 )
                 page_fetch_ms = round((perf_counter() - page_started) * 1000, 2)
                 results = _filter_relevant_results(
