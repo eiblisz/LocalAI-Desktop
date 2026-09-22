@@ -191,14 +191,13 @@ def test_web_chat_failure_gets_distinct_status():
     assert "Web research failed" in source
 
 
-def test_chat_tokens_buffer_without_live_rendering():
+def test_chat_tokens_render_immediately_when_worker_emits_answer():
     from app.main_window import MainWindow
 
     token_source = inspect.getsource(MainWindow._on_token)
 
     assert "self.partial_assistant += token" in token_source
-    assert "_render_chat" not in token_source
-    assert "stream_render_timer" not in token_source
+    assert "self._render_streaming_chat()" in token_source
 
 def test_chat_shows_real_phase_and_elapsed_time_until_complete():
     from app.main_window import MainWindow
@@ -214,6 +213,7 @@ def test_chat_shows_real_phase_and_elapsed_time_until_complete():
     assert 'self.thinking_label = QLabel("")' in build_source
     assert "setFixedHeight(26)" in build_source
     assert "_start_thinking_indicator(contract.use_web)" in run_source
+    assert "thinking_timer.isActive()" in run_source
     assert '"Webes keresés"' in start_source
     assert "thinking_timer.start()" in start_source
     assert "self.pending_request_trace.snapshot()" in pulse_source
