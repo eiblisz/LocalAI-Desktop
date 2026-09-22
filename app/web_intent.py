@@ -327,42 +327,54 @@ def is_freshness_sensitive_request(text):
 
 def _looks_non_factual(text):
     normalized = _fold(text)
-    markers = (
+    if not normalized:
+        return False
+
+    # A noun naming a creative work is not itself a generation request.
+    # For example, "Mikor írta X ezt a verset?" is a factual relation/date
+    # question even though it contains the word "verset". Only explicit
+    # generation/transformation instructions suppress factual-risk routing.
+    phrase_markers = (
         "írj egy",
         "irj egy",
+        "írj nekem",
+        "irj nekem",
         "fogalmazd át",
         "fogalmazd at",
         "fordítsd le",
         "forditsd le",
         "találj ki",
         "talalj ki",
-        "verset",
-        "viccet",
-        "történetet",
-        "tortenetet",
         "write a",
+        "write me",
         "rewrite",
         "translate",
         "brainstorm",
-        "poem",
-        "story",
-        "joke",
         "schreib",
         "übersetz",
         "ubersetz",
     )
-    for marker in markers:
-        if " " in marker:
-            if marker in normalized:
-                return True
-            continue
-        if re.search(
-            rf"(?<!\\w){re.escape(marker)}(?!\\w)",
+    if any(marker in normalized for marker in phrase_markers):
+        return True
+
+    generation_verbs = (
+        "írj",
+        "irj",
+        "rewrite",
+        "translate",
+        "brainstorm",
+        "schreib",
+        "übersetz",
+        "ubersetz",
+    )
+    return any(
+        re.search(
+            rf"(?<!\w){re.escape(marker)}(?!\w)",
             normalized,
             flags=re.IGNORECASE,
-        ):
-            return True
-    return False
+        )
+        for marker in generation_verbs
+    )
 
 
 def answer_requires_web_fallback(user_text, answer):

@@ -1738,3 +1738,40 @@ def test_adaptive_chat_repairs_stale_subject_substitution():
 
     assert errors == []
     assert tokens == ["A Tesla aktualis ara 364 USD."]
+
+
+
+def test_factual_risk_query_validation_seeds_current_user_request():
+    worker = workers.ChatWebWorker(
+        DummyWebClient(),
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Mikor írta Wrong Author a Silver Story című művet?",
+    )
+
+    queries = worker._validated_search_queries([
+        "Silver Story publication date",
+        "Wrong Author Silver Story",
+    ])
+
+    assert queries
+    assert queries[0] == "Mikor írta Wrong Author a Silver Story című művet?"
+    assert len(queries) <= 4
+
+
+def test_factual_risk_query_seed_does_not_duplicate_equivalent_generated_query():
+    prompt = "Who wrote Silver Story?"
+    worker = workers.ChatWebWorker(
+        DummyWebClient(),
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        prompt,
+    )
+
+    queries = worker._validated_search_queries([
+        prompt,
+        "Silver Story author",
+    ])
+
+    assert queries[0] == prompt
+    assert queries.count(prompt) == 1
