@@ -79,3 +79,26 @@ def test_grounded_guard_fails_closed_after_bad_repair():
         )
 
     assert client.calls == 1
+
+
+
+def test_factual_risk_force_verify_checks_relation_even_when_literals_are_known():
+    authority = (
+        "USER REQUEST: Did Wrong Author write Silver Story in 1912?\n"
+        "AUTHORIZED EVIDENCE: Silver Story was written by Correct Author in 1912."
+    )
+    client = RepairClient(
+        "No. Silver Story was written by Correct Author in 1912, not Wrong Author."
+    )
+
+    result = guard_grounded_answer(
+        client,
+        "qwen-test",
+        "Did Wrong Author write Silver Story in 1912?",
+        "Yes. Wrong Author wrote Silver Story in 1912.",
+        authority,
+        force_verify=True,
+    )
+
+    assert result.startswith("No.")
+    assert client.calls == 1
