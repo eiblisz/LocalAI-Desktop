@@ -1,3 +1,7 @@
+import re
+import unicodedata
+
+
 def _clean(value):
     return " ".join(str(value or "").split())
 
@@ -100,9 +104,6 @@ def compact_evidence_authority(
 
 
 def _fold_terms(value):
-    import unicodedata
-    import re
-
     normalized = unicodedata.normalize("NFKD", str(value or "").casefold())
     folded = "".join(
         char for char in normalized
@@ -113,6 +114,109 @@ def _fold_terms(value):
         for term in re.findall(r"[^\W_]+", folded, flags=re.UNICODE)
         if len(term) >= 3
     }
+
+
+def _fold_text(value):
+    normalized = unicodedata.normalize("NFKD", str(value or "").casefold())
+    return "".join(
+        char for char in normalized
+        if not unicodedata.combining(char)
+    )
+
+
+def _temporal_fact_requested(value):
+    folded = " " + re.sub(r"\s+", " ", _fold_text(value)).strip() + " "
+    markers = (
+        " mikor ",
+        " mikorra ",
+        " melyik ev ",
+        " hanyban ",
+        " datum ",
+        " when ",
+        " what year ",
+        " which year ",
+        " date ",
+        " wann ",
+        " welches jahr ",
+        " in welchem jahr ",
+        " datum ",
+    )
+    return any(marker in folded for marker in markers)
+
+
+def _contains_temporal_literal(value):
+    text = str(value or "")
+    return bool(
+        re.search(
+            r"(?<!\d)(?:1[0-9]{3}|20[0-9]{2})(?!\d)"
+            r"|\b\d{4}-\d{2}-\d{2}\b"
+            r"|\b\d{1,2}[./]\d{1,2}[./](?:19|20)\d{2}\b",
+            text,
+        )
+    )
+
+
+def _page_evidence_excerpt(page_text, prompt_terms, *, temporal_requested=False):
+    text = str(page_text or "").strip()
+    if not text:
+        return ""
+
+    text = text[:24000]
+    raw_segments = [
+        _clean(segment)
+        for segment in re.split(r"(?<=[.!?])\s+|[\r\n]+", text)
+        if _clean(segment)
+    ]
+    if not raw_segments:
+        return _clean(text)
+
+    candidates = []
+    for index, segment in enumerate(raw_segments):
+        windows = [segment]
+        if index + 1 < len(raw_segments):
+            windows.append(segment + " " + raw_segments[index + 1])
+        for window in windows:
+            terms = _fold_terms(window)
+            overlap = len(prompt_terms.intersection(terms))
+            temporal_bonus = (
+                6
+                if temporal_requested and _contains_temporal_literal(window)
+                else 0
+            )
+            score = (overlap * 3) + temporal_bonus
+            candidates.append((score, -index, window))
+
+    candidates.sort(reverse=True)
+    best = candidates[0][2] if candidates else ""
+    return _clean(best)
+
+
+def _result_relevant_text(
+    result,
+    prompt_terms,
+    *,
+    temporal_requested=False,
+    max_chars=420,
+):
+    snippet = _clean(result.get("snippet"))
+    page_excerpt = _page_evidence_excerpt(
+        result.get("page_text"),
+        prompt_terms,
+        temporal_requested=temporal_requested,
+    )
+
+    parts = []
+    if snippet:
+        parts.append(snippet)
+    if (
+        page_excerpt
+        and _fold_text(page_excerpt) not in _fold_text(snippet)
+        and _fold_text(snippet) not in _fold_text(page_excerpt)
+    ):
+        parts.append("Page evidence: " + page_excerpt)
+
+    relevant = " | ".join(parts) or page_excerpt
+    return relevant[: max(120, int(max_chars or 420))].rstrip()
 
 
 def compact_evidence_bundle(
@@ -134,6 +238,7 @@ def compact_evidence_bundle(
     one total character budget across the whole factual verification context.
     """
     prompt_terms = _fold_terms(user_prompt)
+    temporal_requested = _temporal_fact_requested(user_prompt)
     candidates = []
     seen_urls = set()
     order = 0
@@ -146,8 +251,12 @@ def compact_evidence_bundle(
         for result in payload.get("results") or []:
             url = str(result.get("url") or "").strip()
             title = _clean(result.get("title"))
-            snippet = _clean(result.get("snippet"))
-            relevant = snippet or _clean(result.get("page_text"))
+            relevant = _result_relevant_text(
+                result,
+                prompt_terms,
+                temporal_requested=temporal_requested,
+                max_chars=max_text_chars,
+            )
             if not url or not title or not relevant or url in seen_urls:
                 continue
             seen_urls.add(url)
