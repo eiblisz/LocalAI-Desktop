@@ -1401,7 +1401,9 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
         page_fetch_timeout = min(float(timeout), 15.0)
     else:
         try:
-            page_fetch_limit = max(1, min(int(fetch_pages or 0), 6))
+            # ``0`` is a meaningful snippet-first contract: retrieve provider
+            # evidence only and leave any page fetch to a later bounded stage.
+            page_fetch_limit = max(0, min(int(fetch_pages or 0), 6))
             should_fetch_pages = page_fetch_limit > 0
         except (TypeError, ValueError):
             should_fetch_pages = bool(fetch_pages)

@@ -100,3 +100,41 @@ def test_boolean_fetch_pages_keeps_legacy_six_page_budget(monkeypatch):
 
     assert fetch_calls == [(6, 15.0)]
     assert payload["timing"]["page_fetch_count"] == 6
+
+
+def test_zero_page_budget_keeps_direct_lookup_snippet_first(monkeypatch):
+    monkeypatch.setattr(web_search_tool, "brave_context_mode", lambda: "legacy")
+    monkeypatch.setattr(web_search_tool, "brave_search_configured", lambda: True)
+    monkeypatch.setattr(
+        web_search_tool,
+        "_search_brave_api",
+        lambda query, limit, timeout: {
+            "provider": "Brave Search API",
+            "results": [{
+                "title": "Example source",
+                "url": "https://example.com/source",
+                "snippet": "Snippet-only evidence",
+            }],
+        },
+    )
+    monkeypatch.setattr(
+        web_search_tool,
+        "_filter_relevant_results",
+        lambda query, items, plan=None, require_verified=True: list(items),
+    )
+    monkeypatch.setattr(
+        web_search_tool,
+        "rank_authoritative_results",
+        lambda query, items: list(items),
+    )
+    monkeypatch.setattr(
+        web_search_tool,
+        "_fetch_top_pages",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("snippet-first lookup must not fetch a page")
+        ),
+    )
+
+    payload = web_search_tool.search_web("Example topic", fetch_pages=0)
+
+    assert payload["timing"]["page_fetch_count"] == 0
