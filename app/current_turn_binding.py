@@ -15,11 +15,22 @@ def _fold(value):
     )
 
 
+_QUESTION_WORDS = {
+    "ki", "mi", "mit", "melyik", "mikor", "hol", "hogyan", "miert",
+    "who", "what", "which", "when", "where", "how", "why",
+    "wer", "was", "welche", "welcher", "welches", "wann", "wo", "wie", "warum",
+}
+
+
 def prompt_entity_anchors(user_prompt):
     anchors = []
     for item in extract_entity_anchors(user_prompt):
         folded = _fold(item).strip()
-        if folded and folded not in anchors:
+        if (
+            folded
+            and folded not in _QUESTION_WORDS
+            and folded not in anchors
+        ):
             anchors.append(folded)
     return tuple(anchors)
 
