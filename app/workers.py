@@ -44,6 +44,7 @@ from .runtime_control import ExecutionBudget, ExecutionControl
 from .scheduled_task_executor import ScheduledTaskExecutor
 from .weather_tool import get_weather, weather_context_text
 from .web_intent import answer_requires_web_fallback, is_factual_risk_request
+from .web_evidence import compact_evidence_authority
 from .web_research_pipeline import WebResearchPipeline
 from .web_search_tool import (
     authoritative_current_fact,
@@ -918,6 +919,7 @@ class ChatWebWorker(QObject):
             generic_shopping_queries = []
             generic_shopping_providers = []
             contexts = []
+            factual_authorities = []
             urls = []
             entries = []
             successful_queries = []
@@ -1013,6 +1015,15 @@ class ChatWebWorker(QObject):
                             continue
                         verification_queries.append(query)
                         context_body = evidence_ledger_context_text(payload)
+
+                compact_authority = compact_evidence_authority(
+                    payload,
+                    authoritative_fact=fact,
+                )
+                if compact_authority:
+                    factual_authorities.append(
+                        f"SEARCH QUERY: {query}\n{compact_authority}"
+                    )
 
                 query_urls = source_urls(payload)
                 if not query_urls:
@@ -1202,6 +1213,10 @@ class ChatWebWorker(QObject):
             if self.trace is not None:
                 self.trace.begin("evidence_context_build")
             context_text = "\n\n===== NEXT SEARCH =====\n\n".join(contexts)
+            factual_authority_text = (
+                "\n\n===== NEXT EVIDENCE SET =====\n\n".join(factual_authorities)
+                or context_text[:5000]
+            )
             failure_text = ""
             if failed_queries:
                 failure_text = (
@@ -1264,22 +1279,31 @@ class ChatWebWorker(QObject):
             )
             answer = self._compact_grounded_answer(answer)
             answer = self._compact_market_quote_answer(answer)
+            has_authoritative_current_fact = bool(
+                self._canonical_authoritative_fact(authoritative_facts)
+            )
             answer = guard_grounded_answer(
                 self.client,
                 self.model,
                 self.user_prompt,
                 answer,
-                self.user_prompt + "\n\n" + context_text,
+                self.user_prompt + "\n\n" + factual_authority_text,
                 trace=self.trace,
-                force_verify=is_factual_risk_request(self.user_prompt),
+                force_verify=(
+                    is_factual_risk_request(self.user_prompt)
+                    and not has_authoritative_current_fact
+                ),
             )
-            if is_factual_risk_request(self.user_prompt):
+            if (
+                is_factual_risk_request(self.user_prompt)
+                and not has_authoritative_current_fact
+            ):
                 answer = guard_current_turn_binding(
                     self.client,
                     self.model,
                     self.user_prompt,
                     answer,
-                    context_text,
+                    factual_authority_text,
                     trace=self.trace,
                 )
 
