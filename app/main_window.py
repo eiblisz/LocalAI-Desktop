@@ -58,6 +58,7 @@ from .document_tools import (
 from .desktop_preferences import DesktopPreferences
 from .artifact_themes import document_preset_labels, workbook_preset_labels
 from .browser_navigation_authority import BrowserNavigationAuthority
+from .chat_orchestration import plan_chat_actions
 from .chat_extensions_dialog import ChatExtensionsDialog
 from .discord_bot_bridge import DiscordBotBridge, DiscordBotSettings
 from .extension_authority import (
