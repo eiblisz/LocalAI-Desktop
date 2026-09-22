@@ -134,7 +134,7 @@ def test_sidebar_lists_only_saved_tasks_not_predeclared_categories():
 
 
 
-def test_normal_chat_has_web_auto_on_off_modes():
+def test_normal_chat_has_web_on_auto_off_modes():
     from app.main_window import MainWindow
 
     init_source = inspect.getsource(MainWindow.__init__)
@@ -144,8 +144,8 @@ def test_normal_chat_has_web_auto_on_off_modes():
     send = inspect.getsource(MainWindow._send)
     run = inspect.getsource(MainWindow._run_next_action_contract)
 
-    assert 'self.web_mode = "AUTO"' in init_source
-    assert 'QPushButton("WEB AUTO")' in build
+    assert "self.web_mode = self.desktop_preferences.web_mode()" in init_source
+    assert 'QPushButton("WEB ON")' in build
     assert "setCheckable(False)" in build
     assert "clicked.connect(self._cycle_web_mode)" in build
     assert 'modes = ("AUTO", "ON", "OFF")' in cycle
@@ -923,26 +923,24 @@ def test_local_model_hub_lists_all_ollama_models_and_supports_refresh():
     assert 'self.status.setText(f"Model: {model}")' in changed_source
 
 
-def test_model_refresh_prefers_qwen30b_at_startup_then_preserves_chat_selection():
+def test_model_refresh_prefers_saved_chat_selection_then_gemma_default():
     from app.main_window import MainWindow
 
     source = inspect.getsource(MainWindow._refresh_local_model_hub)
 
     assert 'saved = str(self.current_chat.get("model") or "").strip()' in source
-    assert "self._startup_model_selection and PREFERRED_LOCAL_MODEL" in source
-    assert "preferred = PREFERRED_LOCAL_MODEL" in source
     assert "preferred = saved or previous or PREFERRED_LOCAL_MODEL" in source
     assert "self.model_combo.findText(preferred)" in source
     assert "self.model_combo.setCurrentIndex(index)" in source
 
 
-def test_preferred_local_model_is_qwen3_coder_30b():
+def test_preferred_local_model_is_gemma4_26b():
     import app.config as config
 
-    assert config.PREFERRED_LOCAL_MODEL == "qwen3-coder:30b-a3b-q8_0"
+    assert config.PREFERRED_LOCAL_MODEL == "gemma4:26b"
 
 
-def test_startup_prefers_qwen3_coder_30b_over_alphabetical_first_model():
+def test_startup_prefers_gemma4_26b_over_alphabetical_first_model():
     from app.main_window import MainWindow
 
     source = inspect.getsource(MainWindow._refresh_local_model_hub)
@@ -952,14 +950,12 @@ def test_startup_prefers_qwen3_coder_30b_over_alphabetical_first_model():
     assert "self.model_combo.findText(PREFERRED_LOCAL_MODEL)" in source
 
 
-def test_existing_chat_forces_qwen30b_on_startup_then_keeps_explicit_model():
+def test_existing_chat_keeps_explicit_model_on_startup():
     from app.main_window import MainWindow
 
     source = inspect.getsource(MainWindow._ensure_chat)
 
     assert 'saved_model = str(self.current_chat.get("model") or "").strip()' in source
-    assert "self._startup_model_selection" in source
-    assert "selected_model = PREFERRED_LOCAL_MODEL" in source
     assert "selected_model = saved_model or self._default_local_model()" in source
     assert "self.model_combo.findText(PREFERRED_LOCAL_MODEL)" in source
     assert "self.model_combo.blockSignals(True)" in source
@@ -1186,7 +1182,7 @@ def test_desktop_artifact_action_uses_bounded_artifact_worker():
     assert "self.last_artifact_path = created[-1]" in finished
 
 
-def test_new_chat_uses_preferred_qwen3_coder_30b_when_available():
+def test_new_chat_uses_preferred_gemma4_26b_when_available():
     from app.main_window import MainWindow
 
     helper_source = inspect.getsource(MainWindow._default_local_model)

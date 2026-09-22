@@ -55,6 +55,7 @@ from .document_tools import (
     conversation_text,
     topic_title,
 )
+from .desktop_preferences import DesktopPreferences
 from .artifact_themes import document_preset_labels, workbook_preset_labels
 from .browser_navigation_authority import BrowserNavigationAuthority
 from .chat_extensions_dialog import ChatExtensionsDialog
@@ -156,7 +157,8 @@ class MainWindow(QMainWindow):
         self.worker = None
         self.partial_assistant = ""
         self.current_chat_uses_web = False
-        self.web_mode = "AUTO"
+        self.desktop_preferences = DesktopPreferences()
+        self.web_mode = self.desktop_preferences.web_mode()
         self.generation_chat_id = ""
         self.pending_action_contracts = []
         self.active_action_contract = None
@@ -467,7 +469,7 @@ class MainWindow(QMainWindow):
         self.chat_extensions_button.clicked.connect(self._open_chat_extensions)
         input_row.addWidget(self.chat_extensions_button)
 
-        self.web_button = QPushButton("WEB AUTO")
+        self.web_button = QPushButton("WEB ON")
         self.web_button.setCheckable(False)
         self.web_button.clicked.connect(self._cycle_web_mode)
         self._apply_web_mode_ui()
@@ -617,10 +619,7 @@ class MainWindow(QMainWindow):
             self.model_combo.clear()
             self.model_combo.addItems(models)
 
-            if self._startup_model_selection and PREFERRED_LOCAL_MODEL:
-                preferred = PREFERRED_LOCAL_MODEL
-            else:
-                preferred = saved or previous or PREFERRED_LOCAL_MODEL
+            preferred = saved or previous or PREFERRED_LOCAL_MODEL
             index = self.model_combo.findText(preferred) if preferred else -1
             if index < 0 and PREFERRED_LOCAL_MODEL:
                 index = self.model_combo.findText(PREFERRED_LOCAL_MODEL)
@@ -714,13 +713,7 @@ class MainWindow(QMainWindow):
             self.current_chat = chats[0]
             saved_model = str(self.current_chat.get("model") or "").strip()
 
-            if (
-                self._startup_model_selection
-                and self.model_combo.findText(PREFERRED_LOCAL_MODEL) >= 0
-            ):
-                selected_model = PREFERRED_LOCAL_MODEL
-            else:
-                selected_model = saved_model or self._default_local_model()
+            selected_model = saved_model or self._default_local_model()
 
             index = (
                 self.model_combo.findText(selected_model)
@@ -994,18 +987,20 @@ class MainWindow(QMainWindow):
 
     def _cycle_web_mode(self):
         modes = ("AUTO", "ON", "OFF")
-        current = str(getattr(self, "web_mode", "AUTO") or "AUTO").upper()
+        current = str(getattr(self, "web_mode", "ON") or "ON").upper()
         try:
             index = modes.index(current)
         except ValueError:
             index = 0
-        self.web_mode = modes[(index + 1) % len(modes)]
+        self.web_mode = self.desktop_preferences.set_web_mode(
+            modes[(index + 1) % len(modes)]
+        )
         self._apply_web_mode_ui()
 
     def _apply_web_mode_ui(self):
-        mode = str(getattr(self, "web_mode", "AUTO") or "AUTO").upper()
+        mode = str(getattr(self, "web_mode", "ON") or "ON").upper()
         if mode not in {"AUTO", "ON", "OFF"}:
-            mode = "AUTO"
+            mode = "ON"
             self.web_mode = mode
 
         if mode == "ON":

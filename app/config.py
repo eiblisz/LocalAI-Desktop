@@ -5,7 +5,7 @@ from .runtime_paths import ensure_runtime_layout, migrate_legacy_runtime_data, r
 
 APP_NAME = "LOCAL AI"
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"
-PREFERRED_LOCAL_MODEL = "qwen3-coder:30b-a3b-q8_0"
+PREFERRED_LOCAL_MODEL = "gemma4:26b"
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 RUNTIME_DIR = runtime_root()
