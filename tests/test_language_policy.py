@@ -69,3 +69,10 @@ def test_detects_general_hungarian_instruction_prompt():
 
 def test_detects_hungarian_command_without_special_oo_uu_markers():
     assert detect_user_language("Irj magyarul reszletes elemzest.") == "hu"
+
+
+
+def test_common_hungarian_factual_question_is_detected_as_hungarian():
+    assert detect_user_language(
+        "Mikor írta Arany Janos a Janos vitez cimu verset?"
+    ) == "hu"
