@@ -96,3 +96,129 @@ def compact_evidence_authority(
             break
 
     return "\n".join(lines).strip() if accepted else ""
+
+
+
+def _fold_terms(value):
+    import unicodedata
+    import re
+
+    normalized = unicodedata.normalize("NFKD", str(value or "").casefold())
+    folded = "".join(
+        char for char in normalized
+        if not unicodedata.combining(char)
+    )
+    return {
+        term
+        for term in re.findall(r"[^\W_]+", folded, flags=re.UNICODE)
+        if len(term) >= 3
+    }
+
+
+def compact_evidence_bundle(
+    payloads,
+    *,
+    user_prompt="",
+    authoritative_facts=(),
+    max_sources=8,
+    max_total_chars=7000,
+    max_text_chars=420,
+):
+    """
+    Build one globally bounded evidence authority across all search queries.
+
+    The previous verifier concatenated a separate bounded authority per query.
+    With up to four searches that could still become large enough to crowd a
+    small local-model context window. This bundle ranks provider-neutral
+    evidence by overlap with the current request, deduplicates URLs, and applies
+    one total character budget across the whole factual verification context.
+    """
+    prompt_terms = _fold_terms(user_prompt)
+    candidates = []
+    seen_urls = set()
+    order = 0
+
+    for payload in list(payloads or []):
+        provider = _clean(payload.get("provider"))
+        query = _clean(payload.get("query"))
+        retrieved_at = _clean(payload.get("retrieved_at"))
+
+        for result in payload.get("results") or []:
+            url = str(result.get("url") or "").strip()
+            title = _clean(result.get("title"))
+            snippet = _clean(result.get("snippet"))
+            relevant = snippet or _clean(result.get("page_text"))
+            if not url or not title or not relevant or url in seen_urls:
+                continue
+            seen_urls.add(url)
+
+            title_terms = _fold_terms(title)
+            text_terms = _fold_terms(relevant)
+            title_overlap = len(prompt_terms.intersection(title_terms))
+            text_overlap = len(prompt_terms.intersection(text_terms))
+            score = (title_overlap * 3) + text_overlap
+
+            candidates.append({
+                "score": score,
+                "order": order,
+                "provider": provider,
+                "query": query,
+                "retrieved_at": retrieved_at,
+                "title": title,
+                "url": url,
+                "relevant": relevant,
+                "published": _clean(result.get("published")),
+            })
+            order += 1
+
+    candidates.sort(key=lambda item: (-item["score"], item["order"]))
+
+    lines = []
+    for fact in list(authoritative_facts or []):
+        fact = dict(fact or {})
+        if not fact.get("value"):
+            continue
+        lines.extend([
+            "AUTHORITATIVE CURRENT FACT",
+            f"Kind: {_clean(fact.get('kind'))}",
+            f"Value: {_clean(fact.get('value'))}",
+            f"Authority: {_clean(fact.get('authority'))}",
+            f"Source: {_clean(fact.get('title'))}",
+            f"Source URL: {str(fact.get('url') or '').strip()}",
+            "",
+        ])
+
+    accepted = 0
+    budget = max(1200, int(max_total_chars or 7000))
+    per_source = max(120, int(max_text_chars or 420))
+
+    for item in candidates:
+        if accepted >= max(1, int(max_sources or 8)):
+            break
+
+        relevant = item["relevant"][:per_source].rstrip()
+        block = [
+            f"Provider: {item['provider']}",
+            f"Query: {item['query']}",
+            f"Retrieved: {item['retrieved_at']}",
+            f"Title: {item['title']}",
+            f"URL: {item['url']}",
+            f"Relevant text: {relevant}",
+        ]
+        if item["published"]:
+            block.append(f"Published: {item['published']}")
+        block.append("")
+
+        candidate_text = "\n".join(lines + block).strip()
+        if len(candidate_text) > budget:
+            if accepted == 0:
+                remaining = max(120, budget - len("\n".join(lines)) - 260)
+                block[5] = f"Relevant text: {relevant[:remaining].rstrip()}"
+                lines.extend(block)
+                accepted += 1
+            break
+
+        lines.extend(block)
+        accepted += 1
+
+    return "\n".join(lines).strip() if accepted or lines else ""
