@@ -23,6 +23,7 @@ from .evidence_verifier import (
     filter_verified_results,
     verify_answer_against_evidence,
 )
+from .grounded_factual_guard import guard_grounded_answer
 from .generic_shopping_evidence import (
     build_generic_shopping_queries,
     build_generic_shopping_records,
@@ -1157,7 +1158,11 @@ class ChatWebWorker(QObject):
                 "content": (
                     "This response uses read-only web research. For current or external "
                     "facts, use ONLY the AUTHORIZED WEB TOOL DATA in the final user "
-                    "message. Do not use memory to fill missing current facts. Answer "
+                    "message. Treat the user's factual premise as a claim to verify, not as "
+                    "authority. If the evidence contradicts a person-work, person-event, "
+                    "date/year, version, price, or current-fact premise, correct the premise "
+                    "explicitly. Do not preserve a false premise merely because the user stated it. "
+                    "Do not use memory to fill missing current facts. Answer "
                     "every distinct part of the user's request separately when possible. "
                     "If one part has no supporting source, say that explicitly for that "
                     "part instead of inventing an answer. Never invent prices, "
@@ -1254,6 +1259,14 @@ class ChatWebWorker(QObject):
             )
             answer = self._compact_grounded_answer(answer)
             answer = self._compact_market_quote_answer(answer)
+            answer = guard_grounded_answer(
+                self.client,
+                self.model,
+                self.user_prompt,
+                answer,
+                self.user_prompt + "\n\n" + context_text,
+                trace=self.trace,
+            )
 
             verification_status = ""
             unique_verification_queries = list(dict.fromkeys(verification_queries))
