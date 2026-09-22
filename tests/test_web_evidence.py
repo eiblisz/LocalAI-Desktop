@@ -188,3 +188,64 @@ def test_compact_evidence_bundle_has_one_global_budget_across_many_queries():
     assert authority
     assert len(authority) <= 2400
     assert authority.count("Title:") <= 8
+
+
+
+def test_compact_bundle_keeps_page_year_when_snippet_has_relation_but_omits_time():
+    payloads = [{
+        "provider": "Brave Search API",
+        "query": "Mikor írta Wrong Author a Silver Story című művet?",
+        "retrieved_at": "2026-09-22T10:00:00",
+        "results": [{
+            "title": "Correct Author: Silver Story",
+            "url": "https://example.com/silver-story",
+            "snippet": "Silver Story is a work by Correct Author.",
+            "page_text": (
+                "Navigation and unrelated introduction. "
+                "Silver Story is a work by Correct Author. "
+                "Correct Author wrote the work in 1912. "
+                "Further unrelated material from 1988."
+            ),
+        }],
+    }]
+
+    authority = compact_evidence_bundle(
+        payloads,
+        user_prompt="Mikor írta Wrong Author a Silver Story című művet?",
+        max_sources=3,
+        max_total_chars=1800,
+        max_text_chars=420,
+    )
+
+    assert "Correct Author" in authority
+    assert "1912" in authority
+    assert "Page evidence:" in authority
+    assert "1988" not in authority
+
+
+def test_compact_bundle_does_not_pull_unrelated_page_year_for_non_temporal_question():
+    payloads = [{
+        "provider": "Brave Search API",
+        "query": "Who wrote Silver Story?",
+        "retrieved_at": "2026-09-22T10:00:00",
+        "results": [{
+            "title": "Correct Author: Silver Story",
+            "url": "https://example.com/silver-story",
+            "snippet": "Silver Story is a work by Correct Author.",
+            "page_text": (
+                "Silver Story is a work by Correct Author. "
+                "An unrelated archive note from 1988 appears much later."
+            ),
+        }],
+    }]
+
+    authority = compact_evidence_bundle(
+        payloads,
+        user_prompt="Who wrote Silver Story?",
+        max_sources=3,
+        max_total_chars=1800,
+        max_text_chars=240,
+    )
+
+    assert "Correct Author" in authority
+    assert "1988" not in authority
