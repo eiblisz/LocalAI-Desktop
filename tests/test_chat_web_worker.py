@@ -1992,3 +1992,30 @@ def test_direct_factual_request_uses_one_grounded_model_call_not_forced_second_p
     ]
     snapshot = trace.snapshot()
     assert snapshot["metadata"]["generation_strategy"] == "factual_single_pass"
+
+
+
+def test_hungarian_language_repair_uses_native_instruction():
+    class RepairClient:
+        def __init__(self):
+            self.messages = None
+
+        def chat_once(self, model, messages, timeout=600.0, **kwargs):
+            self.messages = messages
+            return "A Pokolgép 1980-ban alakult Budapesten."
+
+    client = RepairClient()
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "mikor alakult a pokolgep?",
+    )
+
+    repaired = worker._repair_response_language(
+        "The band Pokolgép was formed in 1980 in Budapest."
+    )
+
+    assert repaired == "A Pokolgép 1980-ban alakult Budapesten."
+    assert client.messages is not None
+    assert "kizárólag magyar" in client.messages[0]["content"].casefold()

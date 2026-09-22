@@ -39,6 +39,7 @@ from .language_policy import (
     detect_user_language,
     response_language_instruction,
     response_language_matches,
+    response_language_repair_instruction,
 )
 from .ollama_client import OllamaClient
 from .response_guard import guard_response
@@ -470,26 +471,20 @@ class ChatWebWorker(QObject):
             return answer
 
         expected = detect_user_language(language_source)
-        language_name = {
-            "hu": "Hungarian",
-            "de": "German",
-            "en": "English",
-        }.get(expected)
-        if not language_name:
+        if expected not in {"hu", "de", "en"}:
             return answer
+
+        if self.trace is not None:
+            self.trace.begin("language_repair")
+        self.phase.emit("Nyelvi javítás")
 
         repaired = self.client.chat_once(
             model=self.model,
             messages=[
                 {
                     "role": "system",
-                    "content": (
-                        f"Rewrite the supplied answer in {language_name}. "
-                        "Preserve every URL, number, product name, proper name, and factual claim "
-                        "exactly. Preserve the exact spelling, diacritics, and token order of proper "
-                        "names as they appear in the supplied answer; do not translate or reorder "
-                        "personal names. Do not add, remove, infer, or correct facts. "
-                        "Return only the rewritten answer."
+                    "content": response_language_repair_instruction(
+                        language_source
                     ),
                 },
                 {
@@ -498,6 +493,9 @@ class ChatWebWorker(QObject):
                 },
             ],
         ).strip()
+
+        if self.trace is not None:
+            self.trace.end("language_repair")
 
         if repaired and response_language_matches(language_source, repaired):
             return repaired

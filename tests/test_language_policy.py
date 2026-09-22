@@ -1,4 +1,9 @@
-from app.language_policy import detect_user_language, response_language_instruction
+from app.language_policy import (
+    detect_user_language,
+    response_language_instruction,
+    response_language_matches,
+    response_language_repair_instruction,
+)
 
 
 def test_detects_short_hungarian_identity_question():
@@ -19,8 +24,8 @@ def test_detects_english_question():
 
 def test_hungarian_instruction_forces_hungarian_response():
     instruction = response_language_instruction("ki Zsofia?")
-    assert "Hungarian" in instruction
-    assert "Answer in Hungarian" in instruction
+    assert "Kizárólag magyarul" in instruction
+    assert "Hungarian only" in instruction
     assert "Do not switch to English" in instruction
 
 
@@ -76,3 +81,29 @@ def test_common_hungarian_factual_question_is_detected_as_hungarian():
     assert detect_user_language(
         "Mikor írta Arany Janos a Janos vitez cimu verset?"
     ) == "hu"
+
+
+
+def test_short_hungarian_band_fact_answer_is_accepted():
+    assert response_language_matches(
+        "mikor alakult a pokolgep?",
+        "A Pokolgép 1980-ban alakult Budapesten, és a magyar heavy metal egyik "
+        "meghatározó zenekara lett.",
+    )
+
+
+def test_english_answer_with_hungarian_proper_name_is_rejected():
+    assert not response_language_matches(
+        "mikor alakult a pokolgep?",
+        "The band Pokolgép was formed in 1980 and is one of the best known "
+        "Hungarian heavy metal groups.",
+    )
+
+
+def test_hungarian_repair_instruction_is_itself_hungarian_and_strict():
+    instruction = response_language_repair_instruction(
+        "mikor alakult a pokolgep?"
+    )
+    assert "kizárólag magyar" in instruction.casefold()
+    assert "személynevek" in instruction
+    assert "csak a magyarra átírt választ" in instruction.casefold()

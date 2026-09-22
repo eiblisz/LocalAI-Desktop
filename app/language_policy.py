@@ -77,15 +77,21 @@ _GERMAN_WORDS = {
 }
 
 _ENGLISH_WORDS = {
-    "the", "and", "or", "with", "is", "are", "price", "prices", "buy",
+    "the", "and", "or", "with", "is", "are", "was", "were", "be", "been",
+    "in", "of", "to", "from", "by", "on", "as", "this", "that", "it", "one",
+    "formed", "founded", "known", "group", "band", "price", "prices", "buy",
     "search", "find", "verified", "product", "products", "source", "sources",
 }
 
 _HUNGARIAN_RESPONSE_WORDS = {
-    "a", "az", "es", "és", "vagy", "van", "vannak", "arat", "árat", "arak",
-    "árak", "termek", "termék", "termekek", "termékek", "forras", "forrás",
-    "forrasok", "források", "talalat", "találat", "talalatok", "találatok",
-    "ellenorzott", "ellenőrzött", "csak", "olyan", "nem", "tudtam", "lehetett",
+    "a", "az", "es", "és", "egy", "vagy", "van", "volt", "lett", "vannak",
+    "amely", "aki", "hogy", "nem", "csak", "olyan", "azonban", "majd", "mar",
+    "már", "ota", "óta", "szerint", "kozott", "között", "elott", "előtt",
+    "utan", "után", "evben", "évben", "alakult", "irta", "írta", "jelent",
+    "jelent meg", "magyar", "zenekar", "mu", "mű", "cimu", "című",
+    "arat", "árat", "arak", "árak", "termek", "termék", "termekek", "termékek",
+    "forras", "forrás", "forrasok", "források", "talalat", "találat",
+    "talalatok", "találatok", "ellenorzott", "ellenőrzött", "tudtam", "lehetett",
 }
 
 
@@ -153,12 +159,43 @@ def detect_user_language(text):
     return "unknown"
 
 
+def response_language_repair_instruction(text):
+    language = detect_user_language(text)
+    if language == "hu":
+        return (
+            "Rewrite the supplied answer in Hungarian. "
+            "Írd át az alábbi választ kizárólag magyar nyelvre. "
+            "A tényeket, számokat, URL-eket, termékneveket és tulajdonneveket "
+            "pontosan őrizd meg. A személynevek írásmódját és szórendjét ne változtasd meg. "
+            "Ne adj hozzá és ne vegyél el információt. Csak a magyarra átírt választ add vissza."
+        )
+    if language == "de":
+        return (
+            "Schreibe die folgende Antwort ausschließlich auf Deutsch um. "
+            "Bewahre Fakten, Zahlen, URLs, Produktnamen und Eigennamen exakt. "
+            "Ändere weder Schreibweise noch Reihenfolge von Personennamen. "
+            "Füge keine Informationen hinzu und entferne keine. "
+            "Gib nur die deutsch umgeschriebene Antwort zurück."
+        )
+    if language == "en":
+        return (
+            "Rewrite the following answer in English only. Preserve every fact, "
+            "number, URL, product name and proper name exactly. Do not add or remove "
+            "information. Return only the English answer."
+        )
+    return (
+        "Rewrite the supplied answer in the same language as the current user message. "
+        "Preserve all facts, numbers, URLs and proper names exactly. Return only the answer."
+    )
+
+
 def response_language_instruction(text):
     language = detect_user_language(text)
     if language == "hu":
         return (
-            "RESPONSE LANGUAGE: The current user message is Hungarian. "
-            "Answer in Hungarian. Do not switch to English unless the user explicitly asks for English."
+            "VÁLASZ NYELVE: Kizárólag magyarul válaszolj az elejétől a végéig. "
+            "RESPONSE LANGUAGE: Hungarian only. Answer in Hungarian. "
+            "Do not switch to English unless the user explicitly asks for English."
         )
     if language == "en":
         return (
@@ -167,8 +204,9 @@ def response_language_instruction(text):
         )
     if language == "de":
         return (
-            "RESPONSE LANGUAGE: The current user message is German. "
-            "Answer in German unless the user explicitly asks for another language."
+            "ANTWORTSPRACHE: Antworte ausschließlich auf Deutsch. "
+            "RESPONSE LANGUAGE: German only unless the user explicitly asks "
+            "for another language."
         )
     return (
         "RESPONSE LANGUAGE: Answer in the same language as the current user message. "
