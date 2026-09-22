@@ -6,12 +6,14 @@ import socket
 import re
 import xml.etree.ElementTree as ET
 from datetime import datetime
+from time import perf_counter
 from urllib.parse import parse_qs, unquote, urlparse
 
 import requests
 from bs4 import BeautifulSoup
 
 from .browser_web_tool import browser_read_pages, browser_search
+from .brave_llm_context import context_mode as brave_context_mode, search_brave_llm_context
 from .web_research_pipeline import (
     filter_relevant_results as pipeline_filter_relevant_results,
     specialize_provider_query,
@@ -1384,6 +1386,7 @@ def _fetch_top_pages(results, timeout):
 
 
 def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
+    total_started = perf_counter()
     clean = " ".join(str(query).strip().split())
     if not clean:
         raise WebSearchError("A web search query is required.")
@@ -1392,6 +1395,19 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
     provider_query = build_provider_query(search_plan)
     limit = max(1, min(int(max_results or 6), 10))
     attempts = []
+    mode = brave_context_mode()
+    if brave_search_configured() and mode == "llm_context":
+        attempts.append(
+            (
+                "Brave LLM Context",
+                lambda: search_brave_llm_context(
+                    provider_query,
+                    api_key=_brave_api_key(),
+                    limit=limit,
+                    timeout=min(float(timeout), 30.0),
+                ),
+            )
+        )
     if brave_search_configured():
         attempts.append(
             (
@@ -1411,8 +1427,10 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
     errors = []
 
     for name, provider_call in attempts:
+        provider_started = perf_counter()
         try:
             payload = provider_call()
+            provider_ms = round((perf_counter() - provider_started) * 1000, 2)
             results = payload.get("results") or []
             if not results:
                 errors.append(f"{name}: no results")
@@ -1431,8 +1449,13 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
                 )
                 continue
 
-            if fetch_pages:
+            page_fetch_ms = 0.0
+            page_fetch_count = 0
+            if fetch_pages and not bool(payload.get("pre_extracted_context")):
+                page_started = perf_counter()
+                page_fetch_count = min(6, len(results))
                 _fetch_top_pages(results, timeout)
+                page_fetch_ms = round((perf_counter() - page_started) * 1000, 2)
                 results = _filter_relevant_results(
                     provider_query,
                     results,
@@ -1446,6 +1469,10 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
                     )
                     continue
 
+            context_chars = sum(
+                len(str(item.get("page_text") or item.get("snippet") or ""))
+                for item in results
+            )
             return {
                 "provider": payload.get("provider", name),
                 "query": clean,
@@ -1454,6 +1481,16 @@ def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
                 "retrieved_at": datetime.now().isoformat(timespec="seconds"),
                 "results": results,
                 "provider_chain_errors": list(errors),
+                "context_mode": payload.get("context_mode", "legacy"),
+                "pre_extracted_context": bool(payload.get("pre_extracted_context")),
+                "timing": {
+                    "provider_ms": provider_ms,
+                    "page_fetch_ms": page_fetch_ms,
+                    "total_search_ms": round((perf_counter() - total_started) * 1000, 2),
+                    "page_fetch_count": page_fetch_count,
+                    "context_chars": context_chars,
+                    "usable_sources": len(results),
+                },
             }
         except Exception as exc:
             errors.append(f"{name}: {exc}")
