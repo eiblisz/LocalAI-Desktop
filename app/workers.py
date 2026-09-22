@@ -365,7 +365,12 @@ class ChatWebWorker(QObject):
                 "status": "accepted",
                 "rejections": rejected,
             }
-            return accepted[: self.request_profile.query_budget]
+            query_limit = (
+                4
+                if self._has_multiple_research_topics()
+                else self.request_profile.query_budget
+            )
+            return accepted[:query_limit]
 
         repair = validate_search_query(
             self._search_constraint_authority(),
