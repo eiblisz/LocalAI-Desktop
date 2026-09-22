@@ -27,13 +27,19 @@ def _critical_literals(text):
         for match in re.finditer(pattern, value, flags=re.IGNORECASE):
             tokens.add(match.group(0).rstrip(".,;:"))
 
-    # Conservative proper-name guard: only multiword title-case names.
+    # Conservative proper-name guard: retain multiword title-case sequences
+    # and their adjacent pairs so question starters such as "Did Wrong Author"
+    # do not hide the actual named entity "Wrong Author".
     for match in re.finditer(
         r"\b[A-ZÁÉÍÓÖŐÚÜŰ][A-Za-zÁÉÍÓÖŐÚÜŰáéíóöőúüű-]{2,}"
         r"(?:\s+[A-ZÁÉÍÓÖŐÚÜŰ][A-Za-zÁÉÍÓÖŐÚÜŰáéíóöőúüű-]{2,})+\b",
         value,
     ):
-        tokens.add(match.group(0))
+        sequence = match.group(0)
+        tokens.add(sequence)
+        parts = sequence.split()
+        for index in range(len(parts) - 1):
+            tokens.add(parts[index] + " " + parts[index + 1])
 
     return tokens
 
