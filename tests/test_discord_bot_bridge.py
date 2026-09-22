@@ -314,7 +314,10 @@ def test_remote_web_request_uses_grounded_desktop_web_runtime(tmp_path: Path, mo
         token="T" * 40,
     )
 
-    answer, chat_id = bridge._answer_prompt("Keress nekem 4 TB-os SSD-t")
+    answer, chat_id = bridge._answer_prompt(
+        "Keress nekem 4 TB-os SSD-t",
+        use_web=True,
+    )
 
     assert "Shopping evidence: PASS" in answer
     assert calls
@@ -1141,3 +1144,111 @@ def test_prometheusz_uses_action_planner_v2_contracts_before_execution():
     assert "for contract in contracts:" in source
     assert "contract.prompt" in source
     assert "contract.plan" in source
+
+
+
+def test_discord_web_mode_provider_matches_desktop_modes(tmp_path: Path):
+    settings = DiscordBotSettings(
+        extension_id="ext-mode",
+        name="Prometheusz",
+        guild_id=111111111111111111,
+        channel_id=222222222222222222,
+        allowed_user_id=333333333333333333,
+        model="qwen3-coder:30b",
+    )
+    state = {"mode": "ON"}
+    bridge = DiscordBotBridge(
+        ollama_client=SimpleNamespace(),
+        chat_store=ChatStore(tmp_path / "chats"),
+        settings=settings,
+        token="T" * 40,
+        web_mode_provider=lambda: state["mode"],
+    )
+
+    assert bridge._current_web_mode() == "ON"
+    state["mode"] = "OFF"
+    assert bridge._current_web_mode() == "OFF"
+    state["mode"] = "AUTO"
+    assert bridge._current_web_mode() == "AUTO"
+
+
+def test_discord_web_off_disables_automatic_web_fallback(tmp_path: Path, monkeypatch):
+    import app.discord_bot_bridge as bridge_module
+
+    monkeypatch.setattr(
+        bridge_module,
+        "run_chat_web_request",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("WEB OFF must not invoke web fallback")
+        ),
+    )
+
+    class UncertainOllama:
+        def chat_once(self, model, messages):
+            return "Nem tudom, nincs friss információm."
+
+    settings = DiscordBotSettings(
+        extension_id="ext-off",
+        name="Prometheusz",
+        guild_id=111111111111111111,
+        channel_id=222222222222222222,
+        allowed_user_id=333333333333333333,
+        model="qwen3-coder:30b",
+    )
+    bridge = DiscordBotBridge(
+        ollama_client=UncertainOllama(),
+        chat_store=ChatStore(tmp_path / "chats"),
+        settings=settings,
+        token="T" * 40,
+        web_mode_provider=lambda: "OFF",
+    )
+
+    answer, _chat_id = bridge._answer_prompt(
+        "Mesélj röviden egy stabil témáról.",
+        use_web=False,
+        allow_web_fallback=False,
+    )
+
+    assert "nincs friss információm" in answer
+
+
+def test_discord_web_on_uses_same_common_web_worker(tmp_path: Path, monkeypatch):
+    import app.discord_bot_bridge as bridge_module
+    from app.chat_orchestration import plan_chat_actions
+
+    calls = []
+
+    def fake_web(client, model, messages, prompt, **kwargs):
+        calls.append(prompt)
+        return "Grounded answer\n\n---\nWeb results / sources:\n- https://example.com"
+
+    monkeypatch.setattr(bridge_module, "run_chat_web_request", fake_web)
+
+    settings = DiscordBotSettings(
+        extension_id="ext-on",
+        name="Prometheusz",
+        guild_id=111111111111111111,
+        channel_id=222222222222222222,
+        allowed_user_id=333333333333333333,
+        model="qwen3-coder:30b",
+    )
+    bridge = DiscordBotBridge(
+        ollama_client=SimpleNamespace(),
+        chat_store=ChatStore(tmp_path / "chats"),
+        settings=settings,
+        token="T" * 40,
+        web_mode_provider=lambda: "ON",
+    )
+    contracts = plan_chat_actions(
+        bridge.action_runtime,
+        "Mikor írta Nimbus Szerző a Csillag Történetét?",
+        web_mode=bridge._current_web_mode(),
+    )
+
+    result = bridge._execute_planned_action(
+        contracts[0].prompt,
+        contracts[0].plan,
+    )
+
+    assert calls == ["Mikor írta Nimbus Szerző a Csillag Történetét?"]
+    assert "Grounded answer" in result["messages"][0]
