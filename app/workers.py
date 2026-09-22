@@ -42,7 +42,7 @@ from .response_guard import guard_response
 from .runtime_control import ExecutionBudget, ExecutionControl
 from .scheduled_task_executor import ScheduledTaskExecutor
 from .weather_tool import get_weather, weather_context_text
-from .web_intent import answer_requires_web_fallback
+from .web_intent import answer_requires_web_fallback, is_factual_risk_request
 from .web_research_pipeline import WebResearchPipeline
 from .web_search_tool import (
     authoritative_current_fact,
@@ -1266,6 +1266,7 @@ class ChatWebWorker(QObject):
                 answer,
                 self.user_prompt + "\n\n" + context_text,
                 trace=self.trace,
+                force_verify=is_factual_risk_request(self.user_prompt),
             )
 
             verification_status = ""
