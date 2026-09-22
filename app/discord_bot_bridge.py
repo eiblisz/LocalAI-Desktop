@@ -673,6 +673,13 @@ class DiscordBotBridge(QObject):
     def _grounded_web_answer(self, prompt, trace=None):
         chat = self._load_remote_chat()
         messages = self._messages_for_prompt(chat, prompt)
+        if trace is None:
+            return run_chat_web_request(
+                self.ollama_client,
+                self.settings.model,
+                messages,
+                prompt,
+            ).strip()
         return run_chat_web_request(
             self.ollama_client,
             self.settings.model,
@@ -843,13 +850,21 @@ class DiscordBotBridge(QObject):
                         prompt,
                     ).strip()
             else:
-                answer = run_chat_web_request(
-                    self.ollama_client,
-                    self.settings.model,
-                    messages,
-                    prompt,
-                    trace=trace,
-                ).strip()
+                if trace is None:
+                    answer = run_chat_web_request(
+                        self.ollama_client,
+                        self.settings.model,
+                        messages,
+                        prompt,
+                    ).strip()
+                else:
+                    answer = run_chat_web_request(
+                        self.ollama_client,
+                        self.settings.model,
+                        messages,
+                        prompt,
+                        trace=trace,
+                    ).strip()
         else:
             if trace is not None:
                 trace.begin("model_inference")
@@ -860,13 +875,21 @@ class DiscordBotBridge(QObject):
             if trace is not None:
                 trace.end("model_inference")
             if allow_web_fallback and answer_requires_web_fallback(prompt, answer):
-                answer = run_chat_web_request(
-                    self.ollama_client,
-                    self.settings.model,
-                    messages,
-                    prompt,
-                    trace=trace,
-                ).strip()
+                if trace is None:
+                    answer = run_chat_web_request(
+                        self.ollama_client,
+                        self.settings.model,
+                        messages,
+                        prompt,
+                    ).strip()
+                else:
+                    answer = run_chat_web_request(
+                        self.ollama_client,
+                        self.settings.model,
+                        messages,
+                        prompt,
+                        trace=trace,
+                    ).strip()
 
         if not answer:
             answer = "A helyi modell ures valaszt adott."
