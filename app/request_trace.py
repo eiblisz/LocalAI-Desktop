@@ -39,6 +39,15 @@ class RequestTrace:
         with self._lock:
             self._durations[str(phase)] = round(float(milliseconds or 0.0), 2)
 
+    def add_duration(self, phase, milliseconds):
+        with self._lock:
+            key = str(phase)
+            current = float(self._durations.get(key, 0.0) or 0.0)
+            self._durations[key] = round(
+                current + float(milliseconds or 0.0),
+                2,
+            )
+
     def add_metadata(self, **metadata):
         for key, value in metadata.items():
             lowered = str(key).casefold()
