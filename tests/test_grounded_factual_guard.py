@@ -192,3 +192,37 @@ def test_grounded_guard_matches_accented_and_unaccented_name_literals():
     )
 
     assert unsupported == ()
+
+
+
+def test_grounded_guard_accepts_accented_name_when_ascii_form_is_in_full_authority_text():
+    authority = (
+        "USER REQUEST:\n"
+        "Mikor írta Arany Janos a Janos vitez cimu verset?\n\n"
+        "AUTHORIZED EVIDENCE:\n"
+        "Petőfi Sándor: János vitéz. 1844."
+    )
+
+    unsupported = unsupported_grounded_literals(
+        "A János vitézt nem Arany János, hanem Petőfi Sándor írta 1844-ben.",
+        authority,
+    )
+
+    assert "Arany János" not in unsupported
+    assert unsupported == ()
+
+
+def test_grounded_guard_still_rejects_new_name_absent_from_full_authority_text():
+    authority = (
+        "USER REQUEST:\n"
+        "Mikor írta Arany Janos a Janos vitez cimu verset?\n\n"
+        "AUTHORIZED EVIDENCE:\n"
+        "Petőfi Sándor: János vitéz. 1844."
+    )
+
+    unsupported = unsupported_grounded_literals(
+        "A művet Arany János helyett Kitalált Szerző írta 1844-ben.",
+        authority,
+    )
+
+    assert "Kitalált Szerző" in unsupported
