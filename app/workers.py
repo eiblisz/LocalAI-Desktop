@@ -23,6 +23,7 @@ from .evidence_verifier import (
     filter_verified_results,
     verify_answer_against_evidence,
 )
+from .grounded_factual_guard import guard_grounded_answer
 from .generic_shopping_evidence import (
     build_generic_shopping_queries,
     build_generic_shopping_records,
@@ -41,7 +42,7 @@ from .response_guard import guard_response
 from .runtime_control import ExecutionBudget, ExecutionControl
 from .scheduled_task_executor import ScheduledTaskExecutor
 from .weather_tool import get_weather, weather_context_text
-from .web_intent import answer_requires_web_fallback
+from .web_intent import answer_requires_web_fallback, is_factual_risk_request
 from .web_research_pipeline import WebResearchPipeline
 from .web_search_tool import (
     authoritative_current_fact,
@@ -257,6 +258,7 @@ class ChatWebWorker(QObject):
         user_prompt: str,
         *,
         compact_market_quote: bool = False,
+        trace=None,
     ):
         super().__init__()
         self.client = client
@@ -264,6 +266,7 @@ class ChatWebWorker(QObject):
         self.messages = [dict(message) for message in messages]
         self.user_prompt = str(user_prompt or "").strip()
         self.compact_market_quote = bool(compact_market_quote)
+        self.trace = trace
         self._stop_event = threading.Event()
         self.web_research_pipeline = WebResearchPipeline(self)
         self._latest_evidence_ledgers = []
@@ -897,6 +900,9 @@ class ChatWebWorker(QObject):
             if not self.user_prompt:
                 raise RuntimeError("Web chat request is empty.")
 
+            if self.trace is not None:
+                self.trace.begin("search")
+
             generic_shopping_mode = (
                 is_generic_shopping_request(self.user_prompt)
                 and not self._has_multiple_research_topics()
@@ -933,6 +939,17 @@ class ChatWebWorker(QObject):
                         max_results=10 if generic_shopping_mode else 6,
                         fetch_pages=True,
                     )
+                    if self.trace is not None:
+                        timing = dict(payload.get("timing") or {})
+                        self.trace.add_duration(
+                            "page_fetch",
+                            timing.get("page_fetch_ms", 0.0),
+                        )
+                        if payload.get("context_mode") == "llm_context":
+                            self.trace.add_duration(
+                                "llm_context",
+                                timing.get("provider_ms", 0.0),
+                            )
                 except Exception as exc:
                     failed_queries.append(
                         f"{query}: {self._compact_web_error(exc)}"
@@ -1023,6 +1040,17 @@ class ChatWebWorker(QObject):
                         item["url"] for item in entries
                     }:
                         entries.append(entry)
+
+            if self.trace is not None:
+                self.trace.end(
+                    "search",
+                    successful_queries=len(
+                        successful_queries or generic_shopping_queries
+                    ),
+                    provider_count=len(
+                        successful_providers or generic_shopping_providers
+                    ),
+                )
 
             if generic_shopping_mode:
                 answer = render_generic_shopping_answer(
@@ -1134,7 +1162,11 @@ class ChatWebWorker(QObject):
                 "content": (
                     "This response uses read-only web research. For current or external "
                     "facts, use ONLY the AUTHORIZED WEB TOOL DATA in the final user "
-                    "message. Do not use memory to fill missing current facts. Answer "
+                    "message. Treat the user's factual premise as a claim to verify, not as "
+                    "authority. If the evidence contradicts a person-work, person-event, "
+                    "date/year, version, price, or current-fact premise, correct the premise "
+                    "explicitly. Do not preserve a false premise merely because the user stated it. "
+                    "Do not use memory to fill missing current facts. Answer "
                     "every distinct part of the user's request separately when possible. "
                     "If one part has no supporting source, say that explicitly for that "
                     "part instead of inventing an answer. Never invent prices, "
@@ -1166,6 +1198,8 @@ class ChatWebWorker(QObject):
                 ),
             }
 
+            if self.trace is not None:
+                self.trace.begin("evidence_context_build")
             context_text = "\n\n===== NEXT SEARCH =====\n\n".join(contexts)
             failure_text = ""
             if failed_queries:
@@ -1190,6 +1224,14 @@ class ChatWebWorker(QObject):
                 + [grounded_user]
             )
 
+            if self.trace is not None:
+                self.trace.end(
+                    "evidence_context_build",
+                    context_chars=len(context_text),
+                    usable_sources=len(entries or urls),
+                )
+                self.trace.begin("model_inference")
+
             answer_parts = []
             self.client.chat_stream(
                 model=self.model,
@@ -1201,6 +1243,10 @@ class ChatWebWorker(QObject):
             if self._stop_event.is_set():
                 self.finished.emit()
                 return
+
+            if self.trace is not None:
+                self.trace.end("model_inference")
+                self.trace.begin("post_processing")
 
             answer = "".join(answer_parts).strip()
             if not answer:
@@ -1217,6 +1263,15 @@ class ChatWebWorker(QObject):
             )
             answer = self._compact_grounded_answer(answer)
             answer = self._compact_market_quote_answer(answer)
+            answer = guard_grounded_answer(
+                self.client,
+                self.model,
+                self.user_prompt,
+                answer,
+                self.user_prompt + "\n\n" + context_text,
+                trace=self.trace,
+                force_verify=is_factual_risk_request(self.user_prompt),
+            )
 
             verification_status = ""
             unique_verification_queries = list(dict.fromkeys(verification_queries))
@@ -1243,6 +1298,9 @@ class ChatWebWorker(QObject):
                         )
                 else:
                     verification_status = "Evidence + answer verification: PASS"
+
+            if self.trace is not None:
+                self.trace.end("post_processing")
 
             self.token.emit(answer)
 
@@ -1275,12 +1333,21 @@ class ChatWebWorker(QObject):
                 )
 
             fallback_footer = ""
+            llm_context_fallback = [
+                note for note in provider_fallback_notes
+                if note.startswith("Brave LLM Context:")
+            ]
             brave_fallback = [
                 note for note in provider_fallback_notes
                 if note.startswith("Brave Search API:")
             ]
+            if llm_context_fallback:
+                fallback_footer += (
+                    "\nLLM Context fallback: "
+                    + llm_context_fallback[0].split(":", 1)[1].strip()
+                )
             if brave_fallback:
-                fallback_footer = (
+                fallback_footer += (
                     "\nBrave fallback: "
                     + brave_fallback[0].split(":", 1)[1].strip()
                 )
@@ -1325,7 +1392,7 @@ def _run_web_worker(worker):
     return answer
 
 
-def run_chat_web_request(client, model, messages, user_prompt):
+def run_chat_web_request(client, model, messages, user_prompt, *, trace=None):
     """Run the existing grounded web worker synchronously and collect its answer."""
     return _run_web_worker(
         ChatWebWorker(
@@ -1333,11 +1400,12 @@ def run_chat_web_request(client, model, messages, user_prompt):
             model,
             messages,
             user_prompt,
+            trace=trace,
         )
     )
 
 
-def run_market_web_request(client, model, messages, user_prompt):
+def run_market_web_request(client, model, messages, user_prompt, *, trace=None):
     """Run concise grounded web fallback for a live market-value lookup."""
     return _run_web_worker(
         ChatWebWorker(
@@ -1346,6 +1414,7 @@ def run_market_web_request(client, model, messages, user_prompt):
             messages,
             user_prompt,
             compact_market_quote=True,
+            trace=trace,
         )
     )
 
@@ -1372,6 +1441,7 @@ class AdaptiveChatWorker(QObject):
         *,
         allow_web_fallback: bool = True,
         constraints=None,
+        trace=None,
     ):
         super().__init__()
         self.client = client
@@ -1380,6 +1450,7 @@ class AdaptiveChatWorker(QObject):
         self.user_prompt = str(user_prompt or "").strip()
         self.allow_web_fallback = bool(allow_web_fallback)
         self.constraints = constraints
+        self.trace = trace
         self._stop_event = threading.Event()
         self.execution_control = ExecutionControl()
         self.used_web_fallback = False
@@ -1390,6 +1461,9 @@ class AdaptiveChatWorker(QObject):
             if self._stop_event.is_set():
                 self.finished.emit()
                 return
+
+            if self.trace is not None:
+                self.trace.begin("model_inference")
 
             if isinstance(self.client, OllamaClient):
                 draft_parts = []
@@ -1407,18 +1481,35 @@ class AdaptiveChatWorker(QObject):
                     messages=self.messages,
                 ).strip()
 
+            if self.trace is not None:
+                self.trace.end("model_inference")
+                self.trace.begin("post_processing")
+
             if (
                 self.allow_web_fallback
                 and not self._stop_event.is_set()
                 and answer_requires_web_fallback(self.user_prompt, draft)
             ):
                 self.used_web_fallback = True
-                final = run_chat_web_request(
-                    self.client,
-                    self.model,
-                    self.messages,
-                    self.user_prompt,
-                ).strip()
+                if self.trace is not None:
+                    self.trace.end("post_processing")
+                if self.trace is None:
+                    final = run_chat_web_request(
+                        self.client,
+                        self.model,
+                        self.messages,
+                        self.user_prompt,
+                    ).strip()
+                else:
+                    final = run_chat_web_request(
+                        self.client,
+                        self.model,
+                        self.messages,
+                        self.user_prompt,
+                        trace=self.trace,
+                    ).strip()
+                if self.trace is not None:
+                    self.trace.begin("post_processing")
             else:
                 final = draft
 
@@ -1445,6 +1536,8 @@ class AdaptiveChatWorker(QObject):
                 self.finished.emit()
                 return
 
+            if self.trace is not None:
+                self.trace.end("post_processing")
             if final:
                 self.token.emit(final)
             self.finished.emit()

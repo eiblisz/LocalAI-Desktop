@@ -8,7 +8,13 @@ import discord
 import requests
 from PySide6.QtCore import QObject, Signal
 
-from .action_runtime import ActionRuntime
+from .action_runtime import (
+    ActionRuntime,
+    ROUTE_CRYPTO_MARKET,
+    ROUTE_MARKET_WEB,
+    ROUTE_MULTI_ASSET_MARKET,
+)
+from .chat_orchestration import normalize_web_mode, plan_chat_actions
 from .artifact_service import (
     ArtifactPlanItem,
     create_artifact,
@@ -36,6 +42,7 @@ from .document_tools import (
 from .language_policy import response_language_instruction
 from .memory_answers import direct_user_memory_answer
 from .memory_runtime import remember_explicit_request
+from .request_trace import RequestTrace
 from .web_intent import (
     ACTION_ARTIFACT,
     ACTION_MEMORY_WRITE,
@@ -171,6 +178,7 @@ class DiscordBotBridge(QObject):
         token,
         memory_store=None,
         extension_store=None,
+        web_mode_provider=None,
         parent=None,
     ):
         super().__init__(parent)
@@ -184,6 +192,7 @@ class DiscordBotBridge(QObject):
             else None
         )
         self.action_runtime = ActionRuntime()
+        self.web_mode_provider = web_mode_provider
         self.settings = settings
         self.token = validate_bot_token(token)
         self._thread = None
@@ -194,6 +203,24 @@ class DiscordBotBridge(QObject):
     @property
     def fingerprint(self):
         return self.settings.fingerprint
+
+    def _current_web_mode(self):
+        provider = self.web_mode_provider
+        if callable(provider):
+            try:
+                return normalize_web_mode(provider())
+            except Exception:
+                return "AUTO"
+        return "AUTO"
+
+    def _market_capabilities_for_prompt(self, prompt):
+        crypto_available = False
+        multi_asset_available = False
+        if is_crypto_quote_request(prompt):
+            crypto_available = self._crypto_market_extension() is not None
+        elif is_multi_asset_quote_request(prompt):
+            multi_asset_available = self._multi_asset_market_extension() is not None
+        return crypto_available, multi_asset_available
 
     def is_running(self):
         return bool(self._thread and self._thread.is_alive())
@@ -263,17 +290,21 @@ class DiscordBotBridge(QObject):
                 return
 
             async with request_lock:
+                trace = RequestTrace("discord")
+                trace.begin("request_received")
+                trace.end("request_received")
                 try:
-                    contracts = self.action_runtime.plan_many(
-                        content,
-                        crypto_market_available=(
-                            self._crypto_market_extension() is not None
-                        ),
-                        multi_asset_market_available=(
-                            self._multi_asset_market_extension() is not None
-                        ),
+                    crypto_available, multi_asset_available = (
+                        self._market_capabilities_for_prompt(content)
                     )
-                    contracts = self.action_runtime.validate_many(contracts)
+                    contracts = plan_chat_actions(
+                        self.action_runtime,
+                        content,
+                        web_mode=self._current_web_mode(),
+                        crypto_market_available=crypto_available,
+                        multi_asset_market_available=multi_asset_available,
+                        trace=trace,
+                    )
 
                     last_chat_id = ""
                     for contract in contracts:
@@ -282,6 +313,7 @@ class DiscordBotBridge(QObject):
                                 self._execute_planned_action,
                                 contract.prompt,
                                 contract.plan,
+                                trace,
                             )
 
                         last_chat_id = str(result.get("chat_id", "") or last_chat_id)
@@ -295,8 +327,11 @@ class DiscordBotBridge(QObject):
                                 mention_author=False,
                             )
 
+                    trace.begin("response_send")
                     if last_chat_id:
                         self.chat_updated.emit(last_chat_id)
+                    trace.end("response_send")
+                    trace.emit_if_enabled()
                 except Exception as exc:
                     compact = " ".join(str(exc).split())[:500]
                     self.status_changed.emit(f"Discord request failed: {compact}")
@@ -648,14 +683,22 @@ class DiscordBotBridge(QObject):
         messages.extend(history)
         return messages
 
-    def _grounded_web_answer(self, prompt):
+    def _grounded_web_answer(self, prompt, trace=None):
         chat = self._load_remote_chat()
         messages = self._messages_for_prompt(chat, prompt)
+        if trace is None:
+            return run_chat_web_request(
+                self.ollama_client,
+                self.settings.model,
+                messages,
+                prompt,
+            ).strip()
         return run_chat_web_request(
             self.ollama_client,
             self.settings.model,
             messages,
             prompt,
+            trace=trace,
         ).strip()
 
     def _crypto_market_extension(self):
@@ -676,7 +719,7 @@ class DiscordBotBridge(QObject):
             ExtensionExecutionContext.discord_remote(),
         )
 
-    def _grounded_external_answer(self, prompt):
+    def _grounded_external_answer(self, prompt, trace=None):
         if is_crypto_quote_request(prompt):
             crypto_extension = self._crypto_market_extension()
             if crypto_extension is not None:
@@ -697,7 +740,7 @@ class DiscordBotBridge(QObject):
                     ).strip()
                 except Exception:
                     pass
-        return self._grounded_web_answer(prompt)
+        return self._grounded_web_answer(prompt, trace=trace)
 
     def _remember_remote(self, prompt):
         if self.memory_store is None:
@@ -723,7 +766,7 @@ class DiscordBotBridge(QObject):
         self.chat_store.save(chat)
         return answer, str(chat.get("id", ""))
 
-    def _execute_planned_action(self, prompt, action_plan):
+    def _execute_planned_action(self, prompt, action_plan, trace=None):
         if action_plan.has(ACTION_MEMORY_WRITE):
             answer, chat_id = self._remember_remote(prompt)
             return {"chat_id": chat_id, "messages": [answer], "artifacts": []}
@@ -731,7 +774,7 @@ class DiscordBotBridge(QObject):
         if action_plan.has(ACTION_ARTIFACT):
             source_context = ""
             if action_plan.has(ACTION_WEB_RESEARCH):
-                source_context = self._grounded_external_answer(prompt)
+                source_context = self._grounded_external_answer(prompt, trace=trace)
 
             chat_id, artifact_results = self._create_remote_artifacts(
                 prompt,
@@ -746,11 +789,45 @@ class DiscordBotBridge(QObject):
 
         answer, chat_id = self._answer_prompt(
             prompt,
-            force_web=action_plan.has(ACTION_WEB_RESEARCH),
+            use_web=action_plan.has(ACTION_WEB_RESEARCH),
+            allow_web_fallback=self._current_web_mode() != "OFF",
+            trace=trace,
         )
         return {"chat_id": chat_id, "messages": [answer], "artifacts": []}
 
-    def _answer_prompt(self, prompt, force_web=False):
+    def _answer_prompt(
+        self,
+        prompt,
+        use_web=None,
+        allow_web_fallback=None,
+        trace=None,
+    ):
+        if use_web is None:
+            crypto_available, multi_asset_available = (
+                self._market_capabilities_for_prompt(prompt)
+            )
+            planned = plan_chat_actions(
+                self.action_runtime,
+                prompt,
+                web_mode=self._current_web_mode(),
+                crypto_market_available=crypto_available,
+                multi_asset_market_available=multi_asset_available,
+                trace=trace,
+            )
+            use_web = bool(
+                planned
+                and (
+                    planned[0].use_web
+                    or planned[0].route in {
+                        ROUTE_CRYPTO_MARKET,
+                        ROUTE_MULTI_ASSET_MARKET,
+                        ROUTE_MARKET_WEB,
+                    }
+                )
+            )
+        if allow_web_fallback is None:
+            allow_web_fallback = self._current_web_mode() != "OFF"
+
         chat = self._load_remote_chat()
         chat["model"] = self.settings.model
         chat["messages"].append({"role": "user", "content": prompt})
@@ -765,9 +842,8 @@ class DiscordBotBridge(QObject):
             return direct_answer, str(chat.get("id", ""))
 
         messages = self._messages_for_prompt(chat, prompt)
-        action_plan = plan_user_action(prompt, force_web=force_web)
 
-        if action_plan.has(ACTION_WEB_RESEARCH):
+        if use_web:
             if is_crypto_quote_request(prompt):
                 crypto_extension = self._crypto_market_extension()
                 if crypto_extension is not None:
@@ -813,24 +889,46 @@ class DiscordBotBridge(QObject):
                         prompt,
                     ).strip()
             else:
-                answer = run_chat_web_request(
-                    self.ollama_client,
-                    self.settings.model,
-                    messages,
-                    prompt,
-                ).strip()
+                if trace is None:
+                    answer = run_chat_web_request(
+                        self.ollama_client,
+                        self.settings.model,
+                        messages,
+                        prompt,
+                    ).strip()
+                else:
+                    answer = run_chat_web_request(
+                        self.ollama_client,
+                        self.settings.model,
+                        messages,
+                        prompt,
+                        trace=trace,
+                    ).strip()
         else:
+            if trace is not None:
+                trace.begin("model_inference")
             answer = self.ollama_client.chat_once(
                 model=self.settings.model,
                 messages=messages,
             ).strip()
-            if answer_requires_web_fallback(prompt, answer):
-                answer = run_chat_web_request(
-                    self.ollama_client,
-                    self.settings.model,
-                    messages,
-                    prompt,
-                ).strip()
+            if trace is not None:
+                trace.end("model_inference")
+            if allow_web_fallback and answer_requires_web_fallback(prompt, answer):
+                if trace is None:
+                    answer = run_chat_web_request(
+                        self.ollama_client,
+                        self.settings.model,
+                        messages,
+                        prompt,
+                    ).strip()
+                else:
+                    answer = run_chat_web_request(
+                        self.ollama_client,
+                        self.settings.model,
+                        messages,
+                        prompt,
+                        trace=trace,
+                    ).strip()
 
         if not answer:
             answer = "A helyi modell ures valaszt adott."

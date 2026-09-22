@@ -43,6 +43,65 @@ def _fold(text):
     return " ".join(str(text or "").casefold().split())
 
 
+def is_factual_risk_request(text):
+    """
+    Return True for concrete relation/date questions where a plausible local-model
+    completion is risky even when the fact is not current.
+
+    This is entity-agnostic: it detects question/relation structure, not named QA
+    examples or hardcoded people/works.
+    """
+    raw = str(text or "").strip()
+    normalized = _fold(raw)
+    if not normalized or _looks_non_factual(raw):
+        return False
+
+    relation_markers = (
+        "ki írta",
+        "ki irta",
+        "ki a szerző",
+        "ki a szerzo",
+        "ki alkotta",
+        "ki rendezte",
+        "ki alapította",
+        "ki alapitotta",
+        "mikor írta",
+        "mikor irta",
+        "mikor született",
+        "mikor szuletett",
+        "mikor történt",
+        "mikor tortent",
+        "melyik évben",
+        "melyik evben",
+        "szerzője",
+        "szerzoje",
+        "who wrote",
+        "who authored",
+        "who created",
+        "who founded",
+        "when did",
+        "when was",
+        "what year",
+        "wer schrieb",
+        "wer verfasste",
+        "wer gründete",
+        "wer grundete",
+        "wann wurde",
+        "wann schrieb",
+    )
+    if not any(marker in normalized for marker in relation_markers):
+        return False
+
+    # A proper-name/title cue keeps generic educational questions local.
+    named_tokens = re.findall(
+        r"(?<!\w)[A-ZÁÉÍÓÖŐÚÜŰ][A-Za-zÁÉÍÓÖŐÚÜŰáéíóöőúüű0-9_-]{2,}",
+        raw,
+    )
+    quoted_title = bool(re.search(r'["„”«»][^"„”«»]{2,}["„”«»]', raw))
+    year_literal = bool(re.search(r"(?<!\d)(?:1[0-9]{3}|20[0-9]{2})(?!\d)", raw))
+    return bool(named_tokens or quoted_title or year_literal)
+
+
 def looks_like_web_request(text):
     normalized = " ".join(str(text or "").lower().split())
     markers = [
@@ -102,6 +161,7 @@ def looks_like_web_request(text):
         any(marker in normalized for marker in markers)
         or bool(re.search(r"\bkeress\w*\b", normalized, flags=re.IGNORECASE))
         or is_freshness_sensitive_request(text)
+        or is_factual_risk_request(text)
     )
 
 
