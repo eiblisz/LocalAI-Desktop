@@ -43,6 +43,12 @@ from .language_policy import (
 )
 from .ollama_client import OllamaClient
 from .response_guard import guard_response
+from .request_semantics import (
+    TASK_DIRECT_FACT,
+    TASK_ENTITY_OVERVIEW,
+    classify_request,
+    request_profile_instruction,
+)
 from .search_query_validation import validate_search_queries, validate_search_query
 from .runtime_control import ExecutionBudget, ExecutionControl
 from .scheduled_task_executor import ScheduledTaskExecutor
@@ -280,6 +286,7 @@ class ChatWebWorker(QObject):
             self.followup_resolution.resolved_intent
             or self.original_user_prompt
         )
+        self.request_profile = classify_request(self.user_prompt)
         self.compact_market_quote = bool(compact_market_quote)
         self.trace = trace
         self._stop_event = threading.Event()
@@ -310,6 +317,12 @@ class ChatWebWorker(QObject):
             "context_modes": list(context_modes),
             "verification_status": str(verification_status or ""),
             "evidence_diagnostic": str(evidence_diagnostic or ""),
+            "request_kind": self.request_profile.kind,
+            "response_depth": self.request_profile.response_depth,
+            "research_breadth": self.request_profile.research_breadth,
+            "query_budget": self.request_profile.query_budget,
+            "source_budget": self.request_profile.source_budget,
+            "page_fetch_budget": self.request_profile.page_fetch_budget,
         }
 
     def _followup_clarification(self):
@@ -352,7 +365,7 @@ class ChatWebWorker(QObject):
                 "status": "accepted",
                 "rejections": rejected,
             }
-            return accepted
+            return accepted[: self.request_profile.query_budget]
 
         repair = validate_search_query(
             self._search_constraint_authority(),
@@ -798,39 +811,7 @@ class ChatWebWorker(QObject):
 
 
     def _wants_detailed_web_answer(self):
-        normalized = self._fold_text(self.user_prompt)
-        detail_markers = (
-            "részletes",
-            "reszletes",
-            "részletesen",
-            "reszletesen",
-            "magyarázd el",
-            "magyarazd el",
-            "elemezd",
-            "elemzés",
-            "elemzes",
-            "összefoglaló",
-            "osszefoglalo",
-            "riport",
-            "report",
-            "detailed",
-            "in detail",
-            "explain",
-            "analysis",
-            "analyze",
-            "compare",
-            "comparison",
-            "list all",
-            "vollständig",
-            "vollstaendig",
-            "ausführlich",
-            "ausfuhrlich",
-            "erkläre",
-            "erklaere",
-            "analyse",
-            "bericht",
-        )
-        return any(marker in normalized for marker in detail_markers)
+        return self.request_profile.response_depth != "concise"
 
     @staticmethod
     def _numeric_fact_tokens(text):
@@ -1056,6 +1037,15 @@ class ChatWebWorker(QObject):
                 if self.trace is not None:
                     self.trace.mark_duration("query_generation", 0.0)
                     self.trace.add_metadata(query_strategy="factual_direct")
+            elif (
+                self.followup_resolution.status == "direct"
+                and self.request_profile.kind == TASK_ENTITY_OVERVIEW
+                and not self._has_multiple_research_topics()
+            ):
+                generated_queries = [self.user_prompt]
+                if self.trace is not None:
+                    self.trace.mark_duration("query_generation", 0.0)
+                    self.trace.add_metadata(query_strategy="entity_overview_direct")
             else:
                 if self.trace is not None:
                     self.trace.begin("query_generation")
@@ -1103,8 +1093,16 @@ class ChatWebWorker(QObject):
                 try:
                     payload = search_web(
                         query,
-                        max_results=10 if generic_shopping_mode else 6,
-                        fetch_pages=True,
+                        max_results=(
+                            10
+                            if generic_shopping_mode
+                            else self.request_profile.source_budget
+                        ),
+                        fetch_pages=(
+                            True
+                            if generic_shopping_mode
+                            else self.request_profile.page_fetch_budget
+                        ),
                     )
                     if self.trace is not None:
                         timing = dict(payload.get("timing") or {})
@@ -1206,7 +1204,10 @@ class ChatWebWorker(QObject):
                     if url not in urls:
                         urls.append(url)
 
-                for entry in source_entries(payload, limit=6):
+                for entry in source_entries(
+                    payload,
+                    limit=min(self.request_profile.source_budget, 12),
+                ):
                     if entry["url"] not in {
                         item["url"] for item in entries
                     }:
@@ -1318,18 +1319,15 @@ class ChatWebWorker(QObject):
                     "When AUTHORITATIVE CURRENT FACT data is present, preserve its exact "
                     "value for the requested latest/current fact and prefer that first-party "
                     "authority over conflicting secondary sources or model priors. "
-                    "For ordinary factual web questions, answer the user's exact question "
-                    "immediately and keep the primary answer concise: normally one to three "
-                    "short sentences. Do not replace a requested value with advice about where "
+                    "Do not replace a requested value with advice about where "
                     "to look when the authorized evidence already contains that value. "
-                    "Only provide a long explanation, report, analysis, comparison, or list "
-                    "when the user explicitly asks for that level of detail. Do not produce "
-                    "timelines, key-highlights sections, ecosystem summaries, API change lists, "
-                    "or research-process narration by default; the host appends the search/source "
-                    "appendix separately. For a simple latest/current version question, preserve "
-                    "the direct authoritative answer. Do not say you cannot browse "
-                    "the web; the authorized web data has already "
-                    "been collected for you. "
+                    "Do not narrate the research process; the host appends source metadata "
+                    "separately. Shape answer breadth and depth according to the canonical "
+                    "request profile below. "
+                    + request_profile_instruction(self.request_profile)
+                    + " For a simple latest/current version question, preserve the direct "
+                    "authoritative answer. Do not say you cannot browse the web; the authorized "
+                    "web data has already been collected for you. "
                     + self._conversation_language_instruction()
                 ),
             }
@@ -1343,6 +1341,7 @@ class ChatWebWorker(QObject):
             )
             direct_factual_candidate = (
                 self.followup_resolution.status == "direct"
+                and self.request_profile.kind == TASK_DIRECT_FACT
                 and is_factual_risk_request(self.user_prompt)
                 and not self._has_multiple_research_topics()
                 and not self._wants_detailed_web_answer()
@@ -1408,6 +1407,12 @@ class ChatWebWorker(QObject):
                         if direct_factual_candidate
                         else "standard"
                     ),
+                    request_kind=self.request_profile.kind,
+                    response_depth=self.request_profile.response_depth,
+                    research_breadth=self.request_profile.research_breadth,
+                    request_query_budget=self.request_profile.query_budget,
+                    request_source_budget=self.request_profile.source_budget,
+                    request_page_fetch_budget=self.request_profile.page_fetch_budget,
                 )
             self.phase.emit(f"{self.model} gondolkodik")
 
