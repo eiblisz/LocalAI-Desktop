@@ -1,4 +1,8 @@
-from app.direct_fact import derive_premise_neutral_query, requested_fact_supported
+from app.direct_fact import (
+    derive_premise_neutral_query,
+    deterministic_hungarian_fact_fallback,
+    requested_fact_supported,
+)
 
 
 def test_marked_work_title_produces_entity_neutral_temporal_query():
@@ -28,3 +32,13 @@ def test_temporal_sufficiency_requires_a_date_like_literal():
 
     assert requested_fact_supported(no_date, "temporal") is False
     assert requested_fact_supported(with_date, "temporal") is True
+
+
+def test_hungarian_fallback_only_repeats_a_supported_requested_literal():
+    fallback = deterministic_hungarian_fact_fallback(
+        "Relevant text: Sample Band formed in 1980.",
+        "temporal",
+    )
+
+    assert fallback == "A rendelkezésre álló források alapján a kért időpont: 1980."
+    assert deterministic_hungarian_fact_fallback("No date here", "temporal") == ""

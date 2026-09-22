@@ -1386,6 +1386,38 @@ def _fetch_top_pages(results, timeout):
                 item["page_text"] = browser_pages.get(item["url"], "")
 
 
+def fetch_result_pages(payload, page_fetch_budget=1, timeout=8.0):
+    """Add a bounded page-evidence stage to an existing provider result set.
+
+    Direct factual lookups call this only after provider snippets fail the
+    semantic sufficiency gate, so the provider search itself is not repeated.
+    """
+    updated = dict(payload or {})
+    results = [dict(item) for item in updated.get("results") or []]
+    limit = max(0, min(int(page_fetch_budget or 0), 6, len(results)))
+    if not limit:
+        return updated
+
+    started = perf_counter()
+    _fetch_top_pages(results[:limit], min(float(timeout), 8.0))
+    elapsed_ms = round((perf_counter() - started) * 1000, 2)
+    updated["results"] = results
+    timing = dict(updated.get("timing") or {})
+    timing["page_fetch_ms"] = round(
+        float(timing.get("page_fetch_ms", 0.0) or 0.0) + elapsed_ms,
+        2,
+    )
+    timing["page_fetch_count"] = int(
+        timing.get("page_fetch_count", 0) or 0
+    ) + limit
+    timing["total_search_ms"] = round(
+        float(timing.get("total_search_ms", 0.0) or 0.0) + elapsed_ms,
+        2,
+    )
+    updated["timing"] = timing
+    return updated
+
+
 def search_web(query, max_results=6, fetch_pages=True, timeout=20.0):
     total_started = perf_counter()
     clean = " ".join(str(query).strip().split())

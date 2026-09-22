@@ -1874,11 +1874,11 @@ def test_single_factual_risk_request_skips_model_query_generation(monkeypatch):
     assert tokens
     assert "Correct Author" in tokens[0]
     assert "1912" in tokens[0]
-    assert search_calls == [prompt]
+    assert search_calls == ["Silver Story creation publication date year"]
 
     snapshot = trace.snapshot()
     assert snapshot["phases_ms"]["query_generation"] == 0.0
-    assert snapshot["metadata"]["query_strategy"] == "factual_direct"
+    assert snapshot["metadata"]["query_strategy"] == "premise_neutral_title_relation"
 
 
 
@@ -1926,7 +1926,7 @@ def test_direct_factual_request_uses_one_grounded_model_call_not_forced_second_p
             )
 
     def fake_search(query, max_results=6, fetch_pages=True):
-        assert query == prompt
+        assert query == "Silver Story creation publication date year"
         return {
             "provider": "Brave Search API",
             "query": query,
@@ -2005,6 +2005,77 @@ def test_direct_factual_request_uses_one_grounded_model_call_not_forced_second_p
     assert snapshot["metadata"]["generation_strategy"] == "factual_single_pass"
     assert snapshot["metadata"]["factual_authority_profile"] == "direct_compact"
     assert snapshot["metadata"]["factual_authority_chars"] <= 3000
+
+
+def test_direct_fact_fetches_one_page_only_when_snippets_lack_requested_date(
+    monkeypatch,
+):
+    prompt = "Mikor írta Wrong Author a Silver Story című művet?"
+    fetched = []
+
+    class Client:
+        def chat_once(self, model, messages, timeout=600.0, **kwargs):
+            return "A Silver Story című művet Correct Author írta, és 1912-ben jelent meg."
+
+    monkeypatch.setattr(
+        workers,
+        "search_web",
+        lambda query, max_results=6, fetch_pages=True: {
+            "provider": "Brave Search API",
+            "query": query,
+            "retrieved_at": "2026-09-22T10:00:00",
+            "results": [{
+                "title": "Silver Story",
+                "url": "https://example.com/silver-story",
+                "snippet": "Silver Story was written by Correct Author.",
+            }],
+        },
+    )
+
+    def fetch_one(payload, page_fetch_budget=1, timeout=8.0):
+        fetched.append((page_fetch_budget, timeout))
+        payload = dict(payload)
+        payload["results"] = [dict(payload["results"][0])]
+        payload["results"][0]["page_text"] = "Published in 1912."
+        return payload
+
+    monkeypatch.setattr(workers, "fetch_result_pages", fetch_one)
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: ["https://example.com/silver-story"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_entries",
+        lambda payload, limit=6: [{
+            "title": "Silver Story",
+            "url": "https://example.com/silver-story",
+        }],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: "Silver Story was written by Correct Author and published in 1912.",
+    )
+
+    worker = workers.ChatWebWorker(
+        Client(),
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        prompt,
+    )
+    tokens = []
+    errors = []
+    worker.token.connect(tokens.append)
+    worker.failed.connect(errors.append)
+    worker.run()
+
+    assert errors == []
+    assert tokens
+    assert fetched and fetched[0][0] == 1
+    assert worker.execution_control.budget.search_calls == 1
+    assert worker.execution_control.budget.page_fetches == 1
 
 
 

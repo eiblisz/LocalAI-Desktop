@@ -138,3 +138,30 @@ def test_zero_page_budget_keeps_direct_lookup_snippet_first(monkeypatch):
     payload = web_search_tool.search_web("Example topic", fetch_pages=0)
 
     assert payload["timing"]["page_fetch_count"] == 0
+
+
+def test_existing_payload_can_fetch_one_page_without_repeating_search(monkeypatch):
+    calls = []
+
+    def capture_fetch(items, timeout):
+        calls.append((len(items), timeout))
+        items[0]["page_text"] = "Fetched follow-up evidence"
+
+    monkeypatch.setattr(web_search_tool, "_fetch_top_pages", capture_fetch)
+
+    updated = web_search_tool.fetch_result_pages(
+        {
+            "results": [{
+                "title": "Example source",
+                "url": "https://example.com/source",
+                "snippet": "Initial snippet",
+            }],
+            "timing": {"page_fetch_count": 0, "page_fetch_ms": 0.0},
+        },
+        page_fetch_budget=1,
+        timeout=30.0,
+    )
+
+    assert calls == [(1, 8.0)]
+    assert updated["results"][0]["page_text"] == "Fetched follow-up evidence"
+    assert updated["timing"]["page_fetch_count"] == 1

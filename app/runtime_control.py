@@ -156,7 +156,7 @@ class ExecutionControl:
             budget = ExecutionBudget(
                 timeout_seconds=90.0,
                 max_model_calls=4,
-                max_search_calls=3,
+                max_search_calls=4,
                 max_page_fetches=3,
                 max_repairs=2,
             )

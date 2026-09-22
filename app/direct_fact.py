@@ -96,3 +96,29 @@ def requested_fact_supported(payload, requested_fact="general"):
     }
     pattern = checks.get(requested_fact)
     return bool(re.search(pattern, text)) if pattern else True
+
+
+def deterministic_hungarian_fact_fallback(authority_text, requested_fact="general"):
+    """Return a minimal Hungarian fallback only for an explicit supported literal.
+
+    This is intentionally not a translator or answer generator.  It is used
+    only after one failed language repair, and only when the requested fact is
+    an unambiguous host-extractable literal already present in evidence.
+    """
+    text = str(authority_text or "")
+    requested_fact = str(requested_fact or "general")
+    patterns = {
+        "temporal": r"(?<!\d)(?:1[0-9]{3}|20[0-9]{2})(?!\d)|\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}[./]\d{1,2}[./](?:19|20)\d{2}\b",
+        "quantity": r"\b\d+(?:[.,]\d+)?\b",
+        "current_value": r"\b\d+(?:[.,]\d+)?\b",
+    }
+    pattern = patterns.get(requested_fact)
+    if not pattern:
+        return ""
+    match = re.search(pattern, text)
+    if not match:
+        return ""
+    value = match.group(0)
+    if requested_fact == "temporal":
+        return f"A rendelkezésre álló források alapján a kért időpont: {value}."
+    return f"A rendelkezésre álló források alapján a kért érték: {value}."
