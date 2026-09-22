@@ -93,7 +93,11 @@ class ExecutionBudget:
             raise ExecutionBudgetExceeded(
                 f"Execution exceeded {self.timeout_seconds:.0f}s deadline."
             )
-        return max(float(floor), min(float(default), remaining))
+        configured_cap = max(1.0, float(self.timeout_seconds))
+        return max(
+            float(floor),
+            min(float(default), configured_cap, remaining),
+        )
 
 
 @dataclass
