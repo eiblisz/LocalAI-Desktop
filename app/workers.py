@@ -1033,7 +1033,8 @@ class ChatWebWorker(QObject):
                     self.trace.mark_duration("query_generation", 0.0)
                     self.trace.add_metadata(query_strategy="generic_shopping")
             elif (
-                is_factual_risk_request(self.user_prompt)
+                self.followup_resolution.status == "direct"
+                and is_factual_risk_request(self.user_prompt)
                 and not self._has_multiple_research_topics()
             ):
                 generated_queries = [self.user_prompt]
