@@ -785,10 +785,27 @@ class DiscordBotBridge(QObject):
     def _answer_prompt(
         self,
         prompt,
-        use_web=False,
-        allow_web_fallback=True,
+        use_web=None,
+        allow_web_fallback=None,
         trace=None,
     ):
+        if use_web is None:
+            planned = plan_chat_actions(
+                self.action_runtime,
+                prompt,
+                web_mode=self._current_web_mode(),
+                crypto_market_available=(
+                    self._crypto_market_extension() is not None
+                ),
+                multi_asset_market_available=(
+                    self._multi_asset_market_extension() is not None
+                ),
+                trace=trace,
+            )
+            use_web = bool(planned and planned[0].use_web)
+        if allow_web_fallback is None:
+            allow_web_fallback = self._current_web_mode() != "OFF"
+
         chat = self._load_remote_chat()
         chat["model"] = self.settings.model
         chat["messages"].append({"role": "user", "content": prompt})
