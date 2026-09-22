@@ -176,4 +176,4 @@ def test_grounded_repair_prompt_preserves_evidence_name_form_and_order():
     assert result == "Correct Author írta a Silver Storyt 1912-ben."
     system = client.messages[0]["content"]
     assert "Preserve proper-name spelling, diacritics, and token order" in system
-    assert "do not translate or reorder" not in system.lower() or "proper" in system.lower()
+    assert "use the form conventional in the requested answer language" in system
