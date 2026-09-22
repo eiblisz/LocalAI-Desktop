@@ -1166,18 +1166,17 @@ class MainWindow(QMainWindow):
         crypto_market_extension = self._crypto_market_extension()
         multi_asset_market_extension = self._multi_asset_market_extension()
 
-        contracts = self.action_runtime.plan_many(
-            text,
-            model_context_suffix=context_suffix,
-            force_web=self.web_mode == "ON",
-            disable_web=self.web_mode == "OFF",
-            crypto_market_available=crypto_market_extension is not None,
-            multi_asset_market_available=(
-                multi_asset_market_extension is not None
-            ),
-        )
         try:
-            contracts = self.action_runtime.validate_many(contracts)
+            contracts = plan_chat_actions(
+                self.action_runtime,
+                text,
+                web_mode=self.web_mode,
+                model_context_suffix=context_suffix,
+                crypto_market_available=crypto_market_extension is not None,
+                multi_asset_market_available=(
+                    multi_asset_market_extension is not None
+                ),
+            )
         except PermissionError as exc:
             self.status.setText("Action blocked")
             QMessageBox.warning(self, "Action authority", str(exc))
