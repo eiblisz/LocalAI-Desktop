@@ -1,5 +1,6 @@
 from app.language_policy import (
     detect_user_language,
+    effective_response_language,
     response_language_instruction,
     response_language_matches,
     response_language_repair_instruction,
@@ -31,8 +32,16 @@ def test_hungarian_instruction_forces_hungarian_response():
 
 def test_unknown_language_still_forbids_unrequested_switching():
     instruction = response_language_instruction("Zsofia?")
-    assert "same language as the current user message" in instruction
-    assert "Do not switch languages" in instruction
+    assert "Hungarian only" in instruction
+
+
+def test_ambiguous_turn_uses_hungarian_as_the_canonical_default():
+    assert effective_response_language("Zsofia?") == "hu"
+    assert response_language_matches("Zsofia?", "A válasz magyarul érkezett.")
+    assert not response_language_matches(
+        "Zsofia?",
+        "The answer remains entirely in English with several words.",
+    )
 
 
 def test_german_umlaut_alone_is_not_misclassified_as_hungarian():

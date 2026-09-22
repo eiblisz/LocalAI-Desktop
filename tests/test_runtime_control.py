@@ -50,3 +50,19 @@ def test_request_timeout_is_bounded_by_remaining_deadline():
     timeout = budget.request_timeout(default=600)
 
     assert 1 <= timeout <= 30
+
+
+def test_direct_fact_profile_gets_a_narrow_request_scoped_budget():
+    from app.request_semantics import classify_request
+
+    control = ExecutionControl.for_request_profile(
+        classify_request("Mikor írta Sample Author a Sample Work című művet?")
+    )
+
+    assert control.budget.timeout_seconds == 45
+    assert control.budget.max_model_calls == 2
+    assert control.claim_search() == 1
+    assert control.claim_page_fetch() == 1
+    assert control.claim_repair() == 1
+    with pytest.raises(ExecutionBudgetExceeded):
+        control.claim_search()

@@ -94,6 +94,8 @@ _HUNGARIAN_RESPONSE_WORDS = {
     "talalatok", "találatok", "ellenorzott", "ellenőrzött", "tudtam", "lehetett",
 }
 
+PREFERRED_RESPONSE_LANGUAGE = "hu"
+
 
 def _fold(value):
     text = unicodedata.normalize("NFKD", str(value or "").casefold())
@@ -159,6 +161,14 @@ def detect_user_language(text):
     return "unknown"
 
 
+def effective_response_language(text, default=PREFERRED_RESPONSE_LANGUAGE):
+    """Resolve a response language without leaving short/ambiguous turns unset."""
+    detected = detect_user_language(text)
+    if detected in {"hu", "de", "en"}:
+        return detected
+    return str(default or PREFERRED_RESPONSE_LANGUAGE)
+
+
 def response_language_repair_instruction(text):
     language = detect_user_language(text)
     if language == "hu":
@@ -190,7 +200,7 @@ def response_language_repair_instruction(text):
 
 
 def response_language_instruction(text):
-    language = detect_user_language(text)
+    language = effective_response_language(text)
     if language == "hu":
         return (
             "VÁLASZ NYELVE: Kizárólag magyarul válaszolj az elejétől a végéig. "
@@ -209,8 +219,8 @@ def response_language_instruction(text):
             "for another language."
         )
     return (
-        "RESPONSE LANGUAGE: Answer in the same language as the current user message. "
-        "Do not switch languages without an explicit user request."
+        "VÁLASZ NYELVE: Alapértelmezetten kizárólag magyarul válaszolj. "
+        "RESPONSE LANGUAGE: Hungarian only unless the user explicitly asks for another language."
     )
 
 
@@ -236,9 +246,7 @@ def _response_language_scores(text):
 
 
 def response_language_matches(user_text, response_text):
-    expected = detect_user_language(user_text)
-    if expected not in {"hu", "de", "en"}:
-        return True
+    expected = effective_response_language(user_text)
 
     scores = _response_language_scores(response_text)
     expected_score = scores.get(expected, 0)

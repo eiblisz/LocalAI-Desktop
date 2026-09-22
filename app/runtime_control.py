@@ -60,8 +60,14 @@ class CancellationToken:
 class ExecutionBudget:
     timeout_seconds: float = 300.0
     max_model_calls: int = 6
+    max_search_calls: int = 4
+    max_page_fetches: int = 6
+    max_repairs: int = 2
     started_at: float = field(default_factory=time.monotonic)
     model_calls: int = 0
+    search_calls: int = 0
+    page_fetches: int = 0
+    repairs: int = 0
 
     @property
     def deadline(self):
@@ -87,6 +93,27 @@ class ExecutionBudget:
         self.model_calls += 1
         return self.model_calls
 
+    def _claim(self, count_name, maximum_name, label, cancellation=None):
+        self.check(cancellation)
+        current = int(getattr(self, count_name))
+        maximum = int(getattr(self, maximum_name))
+        if current >= maximum:
+            raise ExecutionBudgetExceeded(
+                f"Execution exceeded {label} budget ({maximum})."
+            )
+        current += 1
+        setattr(self, count_name, current)
+        return current
+
+    def claim_search(self, cancellation=None):
+        return self._claim("search_calls", "max_search_calls", "search-call", cancellation)
+
+    def claim_page_fetch(self, cancellation=None):
+        return self._claim("page_fetches", "max_page_fetches", "page-fetch", cancellation)
+
+    def claim_repair(self, cancellation=None):
+        return self._claim("repairs", "max_repairs", "repair", cancellation)
+
     def request_timeout(self, default=600.0, floor=1.0):
         remaining = self.remaining_seconds()
         if remaining <= 0:
@@ -104,12 +131,51 @@ class ExecutionBudget:
 class ExecutionControl:
     cancellation: CancellationToken = field(default_factory=CancellationToken)
     budget: ExecutionBudget = field(default_factory=ExecutionBudget)
+    request_profile: object = None
+
+    @classmethod
+    def for_request_profile(cls, profile):
+        kind = str(getattr(profile, "kind", "") or "")
+        if kind == "direct_fact":
+            budget = ExecutionBudget(
+                timeout_seconds=45.0,
+                max_model_calls=2,
+                max_search_calls=1,
+                max_page_fetches=1,
+                max_repairs=1,
+            )
+        elif kind == "deep_research":
+            budget = ExecutionBudget(
+                timeout_seconds=180.0,
+                max_model_calls=5,
+                max_search_calls=4,
+                max_page_fetches=6,
+                max_repairs=2,
+            )
+        else:
+            budget = ExecutionBudget(
+                timeout_seconds=90.0,
+                max_model_calls=4,
+                max_search_calls=3,
+                max_page_fetches=3,
+                max_repairs=2,
+            )
+        return cls(budget=budget, request_profile=profile)
 
     def check(self):
         self.budget.check(self.cancellation)
 
     def claim_model_call(self):
         return self.budget.claim_model_call(self.cancellation)
+
+    def claim_search(self):
+        return self.budget.claim_search(self.cancellation)
+
+    def claim_page_fetch(self):
+        return self.budget.claim_page_fetch(self.cancellation)
+
+    def claim_repair(self):
+        return self.budget.claim_repair(self.cancellation)
 
     def request_timeout(self, default=600.0):
         self.check()
