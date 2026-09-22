@@ -1946,6 +1946,14 @@ def test_direct_factual_request_uses_one_grounded_model_call_not_forced_second_p
             }],
         }
 
+    bundle_kwargs = {}
+    real_bundle = workers.compact_evidence_bundle
+
+    def capture_bundle(*args, **kwargs):
+        bundle_kwargs.update(kwargs)
+        return real_bundle(*args, **kwargs)
+
+    monkeypatch.setattr(workers, "compact_evidence_bundle", capture_bundle)
     monkeypatch.setattr(workers, "search_web", fake_search)
     monkeypatch.setattr(
         workers,
@@ -1986,9 +1994,16 @@ def test_direct_factual_request_uses_one_grounded_model_call_not_forced_second_p
     assert errors == []
     assert len(client.once_calls) == 1
     assert client.stream_calls == []
+    system_prompt = client.once_calls[0][1][0]["content"]
+    assert "MANDATORY OUTPUT LANGUAGE: Hungarian only." in system_prompt
+    assert bundle_kwargs["max_sources"] == 4
+    assert bundle_kwargs["max_total_chars"] == 2400
+    assert bundle_kwargs["max_text_chars"] == 280
     assert tokens == [
         "A Silver Story című művet nem Wrong Author, hanem Correct Author "
         "írta, és 1912-ben jelent meg."
     ]
     snapshot = trace.snapshot()
     assert snapshot["metadata"]["generation_strategy"] == "factual_single_pass"
+    assert snapshot["metadata"]["factual_authority_profile"] == "direct_compact"
+    assert snapshot["metadata"]["factual_authority_chars"] <= 2400
