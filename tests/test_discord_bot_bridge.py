@@ -1139,8 +1139,8 @@ def test_prometheusz_uses_action_planner_v2_contracts_before_execution():
     init_source = inspect.getsource(DiscordBotBridge.__init__)
 
     assert "self.action_runtime = ActionRuntime()" in init_source
-    assert "self.action_runtime.plan_many(" in source
-    assert "self.action_runtime.validate_many(contracts)" in source
+    assert "plan_chat_actions(" in source
+    assert "web_mode=self._current_web_mode()" in source
     assert "for contract in contracts:" in source
     assert "contract.prompt" in source
     assert "contract.plan" in source
