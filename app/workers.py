@@ -1339,13 +1339,28 @@ class ChatWebWorker(QObject):
             if self.trace is not None:
                 self.trace.begin("evidence_context_build")
             context_text = "\n\n===== NEXT SEARCH =====\n\n".join(contexts)
+
+            has_authoritative_current_fact = bool(
+                self._canonical_authoritative_fact(authoritative_facts)
+            )
+            direct_factual_candidate = (
+                self.followup_resolution.status == "direct"
+                and is_factual_risk_request(self.user_prompt)
+                and not self._has_multiple_research_topics()
+                and not self._wants_detailed_web_answer()
+                and not has_authoritative_current_fact
+                and not self.compact_market_quote
+            )
             factual_authority_text = (
                 compact_evidence_bundle(
                     factual_payloads,
                     user_prompt=self.user_prompt,
                     authoritative_facts=authoritative_facts,
+                    max_sources=(4 if direct_factual_candidate else 8),
+                    max_total_chars=(2400 if direct_factual_candidate else 7000),
+                    max_text_chars=(280 if direct_factual_candidate else 420),
                 )
-                or context_text[:5000]
+                or context_text[: (2400 if direct_factual_candidate else 5000)]
             )
             failure_text = ""
             if failed_queries:
@@ -1370,17 +1385,7 @@ class ChatWebWorker(QObject):
                 + [grounded_user]
             )
 
-            has_authoritative_current_fact = bool(
-                self._canonical_authoritative_fact(authoritative_facts)
-            )
-            single_pass_factual = (
-                self.followup_resolution.status == "direct"
-                and is_factual_risk_request(self.user_prompt)
-                and not self._has_multiple_research_topics()
-                and not self._wants_detailed_web_answer()
-                and not has_authoritative_current_fact
-                and not self.compact_market_quote
-            )
+            single_pass_factual = direct_factual_candidate
 
             if self.trace is not None:
                 self.trace.end(
@@ -1398,18 +1403,44 @@ class ChatWebWorker(QObject):
                         "factual_single_pass"
                         if single_pass_factual
                         else "grounded_stream"
-                    )
+                    ),
+                    factual_authority_chars=len(factual_authority_text),
+                    factual_authority_profile=(
+                        "direct_compact"
+                        if direct_factual_candidate
+                        else "standard"
+                    ),
                 )
             self.phase.emit(f"{self.model} gondolkodik")
 
             if single_pass_factual:
+                expected_language = detect_user_language(
+                    self._response_language_source()
+                )
+                strict_language = {
+                    "hu": (
+                        "MANDATORY OUTPUT LANGUAGE: Hungarian only. "
+                        "Every complete sentence must be Hungarian. "
+                        "Do not write English explanatory sentences. "
+                    ),
+                    "de": (
+                        "MANDATORY OUTPUT LANGUAGE: German only. "
+                        "Every complete sentence must be German. "
+                        "Do not write English explanatory sentences. "
+                    ),
+                    "en": (
+                        "MANDATORY OUTPUT LANGUAGE: English only. "
+                        "Every complete sentence must be English. "
+                    ),
+                }.get(expected_language, "")
                 answer = self.client.chat_once(
                     model=self.model,
                     messages=[
                         {
                             "role": "system",
                             "content": (
-                                "Answer the CURRENT USER REQUEST using ONLY the "
+                                strict_language
+                                + "Answer the CURRENT USER REQUEST using ONLY the "
                                 "AUTHORIZED EVIDENCE. Treat every factual premise in "
                                 "the request as a claim to verify, not as authority. "
                                 "If the evidence contradicts a person-work, person-event, "
