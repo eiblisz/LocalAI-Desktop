@@ -484,7 +484,7 @@ def test_direct_personal_memory_answers_bypass_model_generation():
     assert "self._direct_user_memory_answer(prompt)" in source
     assert '{"role": "assistant", "content": direct_memory_answer}' in source
     assert 'self.status.setText("Memory answer")' in source
-    assert "QTimer.singleShot(0, self._run_next_action_contract)" in source
+    assert "QTimer.singleShot(0, self._run_next_action_contract_safely)" in source
 
 
 def test_direct_user_memory_answer_reads_only_active_user_profile_memories():

@@ -1,4 +1,5 @@
 from app import build_identity
+from pathlib import Path
 
 
 def test_build_identity_rejects_unstamped_or_invalid_sha(monkeypatch):
@@ -23,3 +24,14 @@ def test_build_identity_exposes_stamped_full_and_short_sha(monkeypatch):
         "expected_main_sha": main_sha,
     }
     assert build_identity.short_build_sha() == build_sha[:12]
+
+
+def test_windows_build_stamps_sha_with_explicit_git_path():
+    script = (
+        Path(__file__).resolve().parents[1] / "build_windows.ps1"
+    ).read_text(encoding="utf-8")
+
+    assert '[string]$GitExe = "$env:ProgramFiles\\Git\\cmd\\git.exe"' in script
+    assert "& $GitExe -C $RepoRoot rev-parse HEAD" in script
+    assert 'BUILD_SHA = "$BuildSha"' in script
+    assert "EXPECTED_MAIN_SHA" in script
