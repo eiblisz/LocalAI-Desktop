@@ -1352,9 +1352,6 @@ class MainWindow(QMainWindow):
         )
         prompt = contract.prompt
         model = self.pending_action_model
-        self.generation_chat_id = str(
-            (self.current_chat or {}).get("id", "")
-        )
 
         direct_memory_answer = (
             ""
@@ -1667,7 +1664,6 @@ class MainWindow(QMainWindow):
     def _on_failed(self, message):
         self._stop_thinking_indicator()
         self.stop_button.setEnabled(False)
-        title = "Web research error" if self.current_chat_uses_web else "Ollama error"
         self.status.setText(
             "Web research failed" if self.current_chat_uses_web else "Ollama error"
         )
@@ -1681,27 +1677,45 @@ class MainWindow(QMainWindow):
                 diagnostic_failure=full_message[:1000],
             )
             self.pending_request_trace.emit_if_enabled()
+        diagnostic = (
+            self.pending_request_trace.snapshot()
+            if self.pending_request_trace is not None
+            else {}
+        )
 
         target_chat = self.current_chat
+        if self.generation_chat_id:
+            try:
+                target_chat = self.store.load(self.generation_chat_id)
+            except Exception:
+                target_chat = self.current_chat
+
         if target_chat is not None:
             target_chat["messages"].append({
                 "id": uuid.uuid4().hex,
                 "role": "assistant",
                 "content": public.message,
-                "diagnostic": (
-                    self.pending_request_trace.snapshot()
-                    if self.pending_request_trace is not None
-                    else {}
-                ),
+                "diagnostic": diagnostic,
             })
             self.store.save(target_chat)
-            self._render_chat()
 
-        dialog = QMessageBox(self)
-        dialog.setIcon(QMessageBox.Critical)
-        dialog.setWindowTitle(title)
-        dialog.setText(public.message)
-        dialog.exec()
+            current_id = str((self.current_chat or {}).get("id", ""))
+            target_id = str(target_chat.get("id", ""))
+            if current_id == target_id:
+                self.current_chat = target_chat
+                self._render_chat()
+        self._load_chat_list()
+
+        if self.pending_action_batch_size <= 1:
+            dialog = QMessageBox(self)
+            dialog.setIcon(QMessageBox.Critical)
+            dialog.setWindowTitle(
+                "Web research error"
+                if self.current_chat_uses_web
+                else "Ollama error"
+            )
+            dialog.setText(public.message)
+            dialog.exec()
 
     def _cleanup_worker(self):
         if self.worker is not None:
@@ -1711,7 +1725,6 @@ class MainWindow(QMainWindow):
         self.worker = None
         self.thread = None
         self.current_chat_uses_web = False
-        self.generation_chat_id = ""
         self.active_action_contract = None
         self.pending_request_trace = None
         self._stop_thinking_indicator()
@@ -1724,6 +1737,7 @@ class MainWindow(QMainWindow):
             self.pending_action_images = []
             self.pending_action_history_messages = []
             self.pending_action_batch_size = 0
+            self.generation_chat_id = ""
             QTimer.singleShot(0, self._run_pending_scheduled_task)
 
     def _stop_generation(self):
@@ -1851,7 +1865,13 @@ class MainWindow(QMainWindow):
     def _diagnostic_html(self, message, message_index):
         diagnostic = dict(message.get("diagnostic") or {})
         timing = dict(message.get("timing") or {})
-        phases = dict(timing.get("phases_ms") or {})
+        diagnostic_metadata = dict(diagnostic.get("metadata") or {})
+        timing_metadata = dict(timing.get("metadata") or {})
+        phases = dict(
+            timing.get("phases_ms")
+            or diagnostic.get("phases_ms")
+            or {}
+        )
         if not diagnostic and not phases:
             return ""
 
@@ -1868,16 +1888,19 @@ class MainWindow(QMainWindow):
             return content + "</div>"
 
         labels = (
-            ("Profile", diagnostic.get("request_kind") or timing.get("metadata", {}).get("request_kind")),
-            ("Requested fact", diagnostic.get("requested_fact") or timing.get("metadata", {}).get("requested_fact")),
+            ("Request", diagnostic.get("request_id") or timing.get("request_id")),
+            ("Status", diagnostic_metadata.get("child_status") or timing_metadata.get("child_status")),
+            ("Failure code", diagnostic_metadata.get("failure_code") or timing_metadata.get("failure_code")),
+            ("Profile", diagnostic.get("request_kind") or diagnostic_metadata.get("request_kind") or diagnostic_metadata.get("child_profile") or timing_metadata.get("request_kind")),
+            ("Requested fact", diagnostic.get("requested_fact") or diagnostic_metadata.get("requested_fact") or diagnostic_metadata.get("child_requested_fact") or timing_metadata.get("requested_fact")),
             ("Search", phases.get("search_provider_time")),
             ("Page fetch", phases.get("page_fetch")),
             ("Inference", phases.get("model_inference")),
             ("Post-processing", phases.get("post_processing")),
-            ("Model calls", diagnostic.get("model_call_count") or timing.get("metadata", {}).get("model_call_count")),
-            ("Searches", diagnostic.get("search_count") or timing.get("metadata", {}).get("search_count")),
-            ("Pages", diagnostic.get("page_fetch_count") or timing.get("metadata", {}).get("page_fetch_count")),
-            ("Repairs", diagnostic.get("repair_count") or timing.get("metadata", {}).get("repair_count")),
+            ("Model calls", diagnostic.get("model_call_count") or diagnostic_metadata.get("model_call_count") or timing_metadata.get("model_call_count")),
+            ("Searches", diagnostic.get("search_count") or diagnostic_metadata.get("search_count") or timing_metadata.get("search_count")),
+            ("Pages", diagnostic.get("page_fetch_count") or diagnostic_metadata.get("page_fetch_count") or timing_metadata.get("page_fetch_count")),
+            ("Repairs", diagnostic.get("repair_count") or diagnostic_metadata.get("repair_count") or timing_metadata.get("repair_count")),
         )
         content += "<div style='margin-top:5px;padding-left:8px;color:#8F99A6;'>"
         for label, value in labels:
