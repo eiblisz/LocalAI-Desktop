@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from .runtime_paths import ensure_runtime_layout, migrate_legacy_runtime_data, runtime_root
@@ -6,6 +7,15 @@ from .runtime_paths import ensure_runtime_layout, migrate_legacy_runtime_data, r
 APP_NAME = "LOCAL AI"
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 PREFERRED_LOCAL_MODEL = "gemma4:26b"
+# Gemma's hidden reasoning can be expensive for ordinary chat requests.  Keep it
+# off by default, while allowing an explicit operator opt-in for models/tasks
+# where deliberately slower reasoning is wanted.
+OLLAMA_THINKING_ENABLED = os.environ.get("LOCALAI_OLLAMA_THINK", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 RUNTIME_DIR = runtime_root()

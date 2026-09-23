@@ -5,7 +5,7 @@ from typing import Callable
 
 import requests
 
-from .config import OLLAMA_BASE_URL
+from .config import OLLAMA_BASE_URL, OLLAMA_THINKING_ENABLED
 from .ollama_process_control import (
     list_external_ollama_consumers,
     list_ollama_model_processes,
@@ -339,6 +339,11 @@ class OllamaClient:
             "model": model,
             "messages": messages,
             "stream": bool(control is not None),
+            # Recent Ollama thinking-capable models, including the preferred
+            # Gemma model, otherwise spend tokens on hidden reasoning before
+            # they emit a visible answer.  The explicit request is harmless
+            # for ordinary models and can be opt-in overridden by the operator.
+            "think": OLLAMA_THINKING_ENABLED,
         }
         if response_format is not None:
             if not isinstance(response_format, (str, dict)):
@@ -423,6 +428,7 @@ class OllamaClient:
             "model": model,
             "messages": messages,
             "stream": True,
+            "think": OLLAMA_THINKING_ENABLED,
         }
 
         try:

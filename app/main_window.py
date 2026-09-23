@@ -173,7 +173,7 @@ class MainWindow(QMainWindow):
         self.expanded_diagnostic_message_ids = set()
         self.show_closed = False
         self.thinking_phase = 0
-        self.thinking_base_text = "Gondolkodik"
+        self.thinking_base_text = "Feldolgozás folyamatban"
         self.thinking_timer = QTimer(self)
         self.thinking_timer.setInterval(100)
         self.thinking_timer.timeout.connect(self._pulse_thinking_indicator)
@@ -1484,7 +1484,7 @@ class MainWindow(QMainWindow):
             self._on_execution_phase(
                 "Webes keresés"
                 if contract.use_web
-                else f"{self.pending_action_model} gondolkodik"
+                else f"{self.pending_action_model} válaszol"
             )
         else:
             self._start_thinking_indicator(contract.use_web)
@@ -1697,7 +1697,7 @@ class MainWindow(QMainWindow):
             else (
                 "Webes keresés"
                 if use_web
-                else f"{self.pending_action_model} gondolkodik"
+                else f"{self.pending_action_model} válaszol"
             )
         )
         self.thinking_phase = 0

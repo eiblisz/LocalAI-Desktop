@@ -48,6 +48,7 @@ def test_chat_once_forwards_explicit_native_response_format(monkeypatch):
         "model": "qwen-test",
         "messages": [{"role": "user", "content": "test"}],
         "stream": False,
+        "think": False,
         "format": schema,
     }
     assert captured["timeout"] == 600.0
@@ -68,6 +69,25 @@ def test_chat_once_omits_format_when_not_explicitly_selected(monkeypatch):
     )
 
     assert "format" not in captured["json"]
+    assert captured["json"]["think"] is False
+
+
+def test_chat_request_allows_explicit_operator_thinking_opt_in(monkeypatch):
+    captured = {}
+
+    def fake_post(_url, **kwargs):
+        captured.update(kwargs)
+        return _Response()
+
+    monkeypatch.setattr("app.ollama_client.requests.post", fake_post)
+    monkeypatch.setattr("app.ollama_client.OLLAMA_THINKING_ENABLED", True)
+
+    OllamaClient().chat_once(
+        model="reasoning-test",
+        messages=[{"role": "user", "content": "think deliberately"}],
+    )
+
+    assert captured["json"]["think"] is True
 
 
 def _desktop_client(tmp_path):
@@ -388,6 +408,7 @@ def test_controlled_chat_once_uses_streaming_and_honors_budget(monkeypatch):
 
     assert result == "hello world"
     assert captured["json"]["stream"] is True
+    assert captured["json"]["think"] is False
     assert captured["stream"] is True
     assert control.budget.model_calls == 1
 
