@@ -6,6 +6,7 @@ from app.request_semantics import (
     TASK_GENERAL,
     classify_request,
     classify_requested_fact,
+    identity_lookup_subject,
     request_profile_instruction,
 )
 
@@ -30,6 +31,20 @@ def test_entity_formation_date_is_a_narrow_direct_fact():
     assert profile.requested_fact == "temporal"
     assert profile.query_budget == 1
     assert profile.page_fetch_budget == 2
+
+
+def test_short_named_identity_question_uses_direct_fact_profile():
+    profile = classify_request("Ki Sample Musician?")
+
+    assert profile.kind == TASK_DIRECT_FACT
+    assert profile.requested_fact == "identity"
+    assert profile.query_budget == 1
+    assert identity_lookup_subject("Ki Sample Musician?") == "Sample Musician"
+
+
+def test_contextual_or_role_who_questions_are_not_misclassified_as_named_identity():
+    assert identity_lookup_subject("Ki vagy?") == ""
+    assert identity_lookup_subject("Ki a szerző?") == ""
 
 
 def test_entity_overview_profile_is_not_treated_as_direct_fact():

@@ -38,6 +38,55 @@ def _contains_any(text, markers):
     return any(marker in text for marker in markers)
 
 
+def identity_lookup_subject(text):
+    """Return the named subject of a short ``who is`` question, if explicit.
+
+    This is deliberately conservative. It accepts a proper name or a multi-word
+    entity, while keeping pronouns and relation questions such as "Ki a szerző?"
+    out of the web lookup path. The returned value is only a search subject; it
+    does not make any factual assertion about that entity.
+    """
+    raw = " ".join(str(text or "").split())
+    match = re.match(
+        r"^\s*(?:"
+        r"ki(?:csoda)?\s+(?:az\s+)?(?:a\s+)?|"
+        r"who\s+is\s+(?:an?\s+)?|"
+        r"wer\s+ist\s+(?:(?:ein|eine|einen|der|die|das)\s+)?"
+        r")(?P<subject>.+?)\s*[?.!]*\s*$",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return ""
+
+    subject = " ".join(match.group("subject").split())
+    tokens = re.findall(r"[^\W_]+", subject, flags=re.UNICODE)
+    folded_tokens = {_fold(token) for token in tokens}
+    generic_or_contextual = {
+        "te", "en", "o", "you", "he", "she", "they", "it",
+        "this", "that", "vagy", "szerzo", "author", "autor",
+        "baratnoje", "baratja", "ferje", "feleseg", "anyja", "apja",
+        "friend", "wife", "husband", "mother", "father",
+    }
+    if (
+        not tokens
+        or folded_tokens.intersection(generic_or_contextual)
+        or len(" ".join(tokens)) < 3
+    ):
+        return ""
+
+    # A one-word named entity (for example a stage name) is accepted only
+    # when it is visibly name-like. A two-word subject also covers lowercase
+    # user input without guessing at a sentence.
+    looks_named = any(token[:1].isupper() for token in tokens)
+    return subject if looks_named or len(tokens) >= 2 else ""
+
+
+def is_entity_identity_question(text):
+    """Whether a short question explicitly asks to identify a named entity."""
+    return bool(identity_lookup_subject(text))
+
+
 def classify_requested_fact(text):
     """Return the semantic fact requested by a direct lookup, if recognizable.
 
@@ -45,6 +94,9 @@ def classify_requested_fact(text):
     checks what must be supported, without trying to extract or validate a
     particular named entity on the host.
     """
+    if is_entity_identity_question(text):
+        return "identity"
+
     folded = _fold(text)
     patterns = (
         ("temporal", (
@@ -243,6 +295,13 @@ def classify_request(text):
         source_budget = 10
         page_fetch_budget = 2
     elif any(re.search(pattern, folded) for pattern in direct_fact_patterns):
+        kind = TASK_DIRECT_FACT
+        depth = "concise"
+        breadth = "narrow"
+        query_budget = 1
+        source_budget = 4
+        page_fetch_budget = 2
+    elif is_entity_identity_question(raw):
         kind = TASK_DIRECT_FACT
         depth = "concise"
         breadth = "narrow"

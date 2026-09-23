@@ -28,6 +28,13 @@ def test_unmarked_free_form_request_falls_back_to_validated_original():
     )
 
 
+def test_short_named_identity_lookup_uses_the_subject_without_model_query_generation():
+    assert derive_premise_neutral_query("Ki Sample Musician?", "identity") == (
+        "Sample Musician",
+        "identity_lookup_subject",
+    )
+
+
 def test_temporal_sufficiency_requires_a_date_like_literal():
     no_date = {"results": [{"snippet": "Silver Story was written by Correct Author."}]}
     with_date = {"results": [{"snippet": "Silver Story was published in 1912."}]}

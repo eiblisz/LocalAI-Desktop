@@ -8,6 +8,8 @@ checking whether its evidence includes the kind of fact the user asked for.
 import re
 import unicodedata
 
+from .request_semantics import identity_lookup_subject
+
 
 def _clean(value):
     return " ".join(str(value or "").split())
@@ -77,6 +79,10 @@ def derive_premise_neutral_query(prompt, requested_fact="general"):
     guessing an entity boundary.
     """
     clean = _clean(prompt)
+    identity_subject = identity_lookup_subject(clean)
+    if identity_subject:
+        return identity_subject, "identity_lookup_subject"
+
     title = _marked_title(clean)
     if not title:
         return clean, "validated_original"
@@ -163,6 +169,7 @@ def requested_fact_supported(payload, requested_fact="general", request_text="")
         "current_value": r"\b\d+(?:[.,]\d+)?\b",
         "location": r"(?i)\b(?:in|at|from|located|helye|itt|ban|ben)\b",
         "person_relation": r"(?i)\b(?:wrote|written|author|creator|founded|founded by|[ií]rta|szerz[őo]|alkotta|alap[ií]totta)\b",
+        "identity": r"(?i)\b(?:is|was|known|musician|artist|actor|writer|band|egy|az|zen[ée]sz|eloado|sz[ií]nész|iro)\b",
     }
     pattern = checks.get(requested_fact)
     if not pattern or not re.search(pattern, text):
