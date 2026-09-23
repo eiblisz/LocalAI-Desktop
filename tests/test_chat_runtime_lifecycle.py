@@ -91,6 +91,9 @@ class FakeWorker:
     def moveToThread(self, _thread):
         pass
 
+    def run(self):
+        pass
+
     def deleteLater(self):
         self.deleted = True
 
