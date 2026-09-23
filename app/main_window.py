@@ -1867,6 +1867,7 @@ class MainWindow(QMainWindow):
         timing = dict(message.get("timing") or {})
         diagnostic_metadata = dict(diagnostic.get("metadata") or {})
         timing_metadata = dict(timing.get("metadata") or {})
+        metadata = {**timing_metadata, **diagnostic_metadata}
         phases = dict(
             timing.get("phases_ms")
             or diagnostic.get("phases_ms")
@@ -1889,18 +1890,42 @@ class MainWindow(QMainWindow):
 
         labels = (
             ("Request", diagnostic.get("request_id") or timing.get("request_id")),
-            ("Status", diagnostic_metadata.get("child_status") or timing_metadata.get("child_status")),
-            ("Failure code", diagnostic_metadata.get("failure_code") or timing_metadata.get("failure_code")),
-            ("Profile", diagnostic.get("request_kind") or diagnostic_metadata.get("request_kind") or diagnostic_metadata.get("child_profile") or timing_metadata.get("request_kind")),
-            ("Requested fact", diagnostic.get("requested_fact") or diagnostic_metadata.get("requested_fact") or diagnostic_metadata.get("child_requested_fact") or timing_metadata.get("requested_fact")),
+            ("Status", metadata.get("child_status")),
+            ("Failure code", metadata.get("failure_code")),
+            (
+                "Profile",
+                diagnostic.get("request_kind")
+                or metadata.get("request_kind")
+                or metadata.get("child_profile"),
+            ),
+            (
+                "Requested fact",
+                diagnostic.get("requested_fact")
+                or metadata.get("requested_fact")
+                or metadata.get("child_requested_fact"),
+            ),
             ("Search", phases.get("search_provider_time")),
             ("Page fetch", phases.get("page_fetch")),
             ("Inference", phases.get("model_inference")),
             ("Post-processing", phases.get("post_processing")),
-            ("Model calls", diagnostic.get("model_call_count") or diagnostic_metadata.get("model_call_count") or timing_metadata.get("model_call_count")),
-            ("Searches", diagnostic.get("search_count") or diagnostic_metadata.get("search_count") or timing_metadata.get("search_count")),
-            ("Pages", diagnostic.get("page_fetch_count") or diagnostic_metadata.get("page_fetch_count") or timing_metadata.get("page_fetch_count")),
-            ("Repairs", diagnostic.get("repair_count") or diagnostic_metadata.get("repair_count") or timing_metadata.get("repair_count")),
+            (
+                "Model calls",
+                diagnostic.get("model_call_count")
+                or metadata.get("model_call_count"),
+            ),
+            (
+                "Searches",
+                diagnostic.get("search_count") or metadata.get("search_count"),
+            ),
+            (
+                "Pages",
+                diagnostic.get("page_fetch_count")
+                or metadata.get("page_fetch_count"),
+            ),
+            (
+                "Repairs",
+                diagnostic.get("repair_count") or metadata.get("repair_count"),
+            ),
         )
         content += "<div style='margin-top:5px;padding-left:8px;color:#8F99A6;'>"
         for label, value in labels:

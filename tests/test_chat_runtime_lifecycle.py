@@ -214,9 +214,10 @@ def _batch_failure_harness(contracts):
     origin = {
         "id": "chat-origin",
         "title": "Acceptance",
-        "messages": [{"role": "user", "content": "\n".join(
-            contract.prompt for contract in contracts
-        )}],
+        "messages": [{
+            "role": "user",
+            "content": "\n".join(contract.prompt for contract in contracts),
+        }],
     }
     rendered = []
     loaded = []
