@@ -147,6 +147,33 @@ def test_action_runtime_plans_numbered_tasks_independently_in_source_order():
     assert contracts[3].artifact_plans[0].request.format == "html"
 
 
+def test_action_runtime_plans_plain_newline_question_batch_independently():
+    runtime = ActionRuntime()
+    contracts = runtime.plan_many(
+        """Ki Sample Musician?
+Mikor írta Wrong Author a Silver Story című művet?
+Mikor alakult a Sample Band?""",
+        force_web=True,
+    )
+
+    assert [contract.prompt for contract in contracts] == [
+        "Ki Sample Musician?",
+        "Mikor írta Wrong Author a Silver Story című művet?",
+        "Mikor alakult a Sample Band?",
+    ]
+    assert all(contract.route == ROUTE_WEB for contract in contracts)
+
+
+def test_action_runtime_keeps_a_wrapped_question_as_one_request():
+    contracts = ActionRuntime().plan_many(
+        "Mikor alakult\na Sample Band?",
+        force_web=True,
+    )
+
+    assert len(contracts) == 1
+    assert contracts[0].prompt == "Mikor alakult\na Sample Band?"
+
+
 def test_action_runtime_model_context_suffix_can_help_route_each_unit_without_mutating_prompt():
     runtime = ActionRuntime()
     contracts = runtime.plan_many(
