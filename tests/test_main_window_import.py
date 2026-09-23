@@ -333,10 +333,12 @@ def test_chat_generation_is_bound_to_originating_chat():
 
     send_source = inspect.getsource(MainWindow._send)
     finish_source = inspect.getsource(MainWindow._on_finished)
+    target_source = inspect.getsource(MainWindow._generation_target_chat)
     cleanup_source = inspect.getsource(MainWindow._cleanup_worker)
 
     assert 'self.generation_chat_id = str(self.current_chat.get("id", ""))' in send_source
-    assert "self.store.load(self.generation_chat_id)" in finish_source
+    assert "self._generation_target_chat()" in finish_source
+    assert "self.store.load(generation_chat_id)" in target_source
     assert "current_id == target_id" in finish_source
     assert 'self.generation_chat_id = ""' in cleanup_source
 
@@ -401,7 +403,7 @@ def test_memory_write_completion_is_bound_to_originating_chat():
 
     source = inspect.getsource(MainWindow._on_memory_finished)
 
-    assert "self.store.load(self.generation_chat_id)" in source
+    assert "self._generation_target_chat()" in source
     assert 'getattr(self.worker, "saved_count", 0)' in source
     assert "current_id == target_id" in source
     assert "Memory saved" in source

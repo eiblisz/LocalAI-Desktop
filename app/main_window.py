@@ -1324,6 +1324,17 @@ class MainWindow(QMainWindow):
         messages.append(user_message)
         return messages
 
+    def _generation_target_chat(self):
+        target_chat = self.current_chat
+        generation_chat_id = str(self.generation_chat_id or "")
+        if not generation_chat_id:
+            return target_chat
+        try:
+            return self.store.load(generation_chat_id)
+        except Exception:
+            current_id = str((target_chat or {}).get("id", ""))
+            return target_chat if current_id == generation_chat_id else None
+
     def _run_next_action_contract(self):
         if self.worker is not None or self.thread is not None:
             return
@@ -1363,23 +1374,19 @@ class MainWindow(QMainWindow):
             else self._direct_user_memory_answer(prompt)
         )
         if direct_memory_answer:
-            target_chat = self.current_chat
-            if self.generation_chat_id:
-                try:
-                    target_chat = self.store.load(self.generation_chat_id)
-                except Exception:
-                    target_chat = self.current_chat
-
-            target_chat["messages"].append(
-                {"role": "assistant", "content": direct_memory_answer}
-            )
-            self.store.save(target_chat)
+            target_chat = self._generation_target_chat()
+            if target_chat is not None:
+                target_chat["messages"].append(
+                    {"role": "assistant", "content": direct_memory_answer}
+                )
+                self.store.save(target_chat)
             self.status.setText("Memory answer")
-            current_id = str((self.current_chat or {}).get("id", ""))
-            target_id = str(target_chat.get("id", ""))
-            if current_id == target_id:
-                self.current_chat = target_chat
-                self._render_chat()
+            if target_chat is not None:
+                current_id = str((self.current_chat or {}).get("id", ""))
+                target_id = str(target_chat.get("id", ""))
+                if current_id == target_id:
+                    self.current_chat = target_chat
+                    self._render_chat()
             self._load_chat_list()
             self.active_action_contract = None
             QTimer.singleShot(0, self._run_next_action_contract)
@@ -1525,12 +1532,7 @@ class MainWindow(QMainWindow):
 
     def _on_action_artifacts_finished(self, results):
         self._stop_thinking_indicator()
-        target_chat = self.current_chat
-        if self.generation_chat_id:
-            try:
-                target_chat = self.store.load(self.generation_chat_id)
-            except Exception:
-                target_chat = self.current_chat
+        target_chat = self._generation_target_chat()
 
         created = []
         for result in list(results or []):
@@ -1578,13 +1580,7 @@ class MainWindow(QMainWindow):
     def _on_finished(self):
         self._stop_thinking_indicator()
         content = self.partial_assistant.strip()
-        target_chat = self.current_chat
-
-        if self.generation_chat_id:
-            try:
-                target_chat = self.store.load(self.generation_chat_id)
-            except Exception:
-                target_chat = self.current_chat
+        target_chat = self._generation_target_chat()
 
         timing = None
         if self.pending_request_trace is not None:
@@ -1629,12 +1625,7 @@ class MainWindow(QMainWindow):
         self._load_chat_list()
 
     def _on_memory_finished(self):
-        target_chat = self.current_chat
-        if self.generation_chat_id:
-            try:
-                target_chat = self.store.load(self.generation_chat_id)
-            except Exception:
-                target_chat = self.current_chat
+        target_chat = self._generation_target_chat()
 
         saved_count = int(getattr(self.worker, "saved_count", 0) or 0)
         if saved_count > 0:
@@ -1696,12 +1687,7 @@ class MainWindow(QMainWindow):
             else {}
         )
 
-        target_chat = self.current_chat
-        if self.generation_chat_id:
-            try:
-                target_chat = self.store.load(self.generation_chat_id)
-            except Exception:
-                target_chat = self.current_chat
+        target_chat = self._generation_target_chat()
 
         if target_chat is not None:
             target_chat["messages"].append({

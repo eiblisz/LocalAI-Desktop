@@ -267,6 +267,10 @@ def _batch_failure_harness(contracts):
         child_status="running",
     )
     harness._cleanup_worker = MethodType(MainWindow._cleanup_worker, harness)
+    harness._generation_target_chat = MethodType(
+        MainWindow._generation_target_chat,
+        harness,
+    )
     harness._run_next_action_contract = MethodType(
         MainWindow._run_next_action_contract,
         harness,
@@ -385,6 +389,30 @@ def test_failed_child_is_saved_to_originating_chat_when_another_chat_is_open(
     assert len(harness.store.chats["chat-origin"]["messages"]) == 2
     assert harness.store.chats["chat-other"]["messages"] == []
     assert harness.current_chat["id"] == "chat-other"
+    assert rendered == []
+
+
+def test_failed_child_never_falls_back_to_an_unrelated_open_chat(
+    monkeypatch,
+):
+    contract = _chat_contract(1, "Ki James Hetfield?")
+    harness, rendered, _loaded, _scheduled = _batch_failure_harness([contract])
+    other_chat = {"id": "chat-other", "title": "Other", "messages": []}
+    harness.current_chat = deepcopy(other_chat)
+    harness.pending_action_batch_size = 2
+    harness.store.load = lambda _chat_id: (_ for _ in ()).throw(OSError("read"))
+
+    class BlockingDialog:
+        Critical = object()
+
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("batch failure opened a modal")
+
+    monkeypatch.setattr(main_window_module, "QMessageBox", BlockingDialog)
+
+    MainWindow._on_failed(harness, "bounded child failure")
+
+    assert harness.current_chat == other_chat
     assert rendered == []
 
 
