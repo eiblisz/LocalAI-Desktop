@@ -1,5 +1,6 @@
 from app.action_runtime import ActionRuntime, ROUTE_CHAT, ROUTE_WEB
 from app.chat_orchestration import normalize_web_mode, plan_chat_actions
+from app.followup_resolution import resolve_contextual_followup
 
 
 def test_common_orchestrator_preserves_web_modes():
@@ -46,3 +47,37 @@ def test_creative_prompt_remains_local_in_auto():
 
 def test_invalid_mode_normalizes_to_auto():
     assert normalize_web_mode("weird") == "AUTO"
+
+
+def test_multiline_questions_survive_followup_resolution_and_plan_independently():
+    prompt = (
+        "Ki James Hetfield?\n"
+        "Mikor irta Arany Janos a Janos vitez cimu verset?\n"
+        "Mikor alakult a Pokolgep zenekar?"
+    )
+
+    resolution = resolve_contextual_followup(prompt, [])
+
+    assert resolution.resolved_intent == prompt
+    assert resolution.resolved_intent.count("\n") == 2
+
+    contracts = plan_chat_actions(
+        ActionRuntime(),
+        resolution.resolved_intent,
+        web_mode="AUTO",
+    )
+    profiles = [
+        contract.constraints.request_profile
+        for contract in contracts
+    ]
+
+    assert len(contracts) == 3
+    assert [
+        (profile.requested_fact, profile.relation)
+        for profile in profiles
+    ] == [
+        ("identity", "identity"),
+        ("temporal", "authorship_creation"),
+        ("temporal", "formation"),
+    ]
+    assert profiles[1].premise_check_required is True

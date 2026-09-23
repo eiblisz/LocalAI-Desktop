@@ -2,6 +2,7 @@ from dataclasses import dataclass
 import re
 
 from .text_normalization import canonical_match_text
+from .web_intent import split_user_action_units
 
 
 _SHORT_FOLLOWUP_PHRASES = frozenset({
@@ -93,21 +94,25 @@ class FollowupResolution:
 
 
 def resolve_contextual_followup(user_text, messages):
-    original = " ".join(str(user_text or "").split())
-    if not is_contextual_short_followup(original):
-        return FollowupResolution(original, original, "direct")
+    raw_original = str(user_text or "")
+    normalized = " ".join(raw_original.split())
+    if (
+        len(split_user_action_units(raw_original)) > 1
+        or not is_contextual_short_followup(normalized)
+    ):
+        return FollowupResolution(raw_original, raw_original, "direct")
 
     previous_user, previous_assistant = _previous_turn(messages)
     if not previous_user or not previous_assistant:
         return FollowupResolution(
-            original,
+            raw_original,
             "",
             "clarification",
-            _clarification(original),
+            _clarification(normalized),
         )
 
     return FollowupResolution(
-        original,
-        _resolved_intent(original, previous_user, previous_assistant),
+        raw_original,
+        _resolved_intent(normalized, previous_user, previous_assistant),
         "resolved",
     )
