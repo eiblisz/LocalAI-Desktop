@@ -1324,6 +1324,17 @@ class MainWindow(QMainWindow):
         messages.append(user_message)
         return messages
 
+    def _generation_target_chat(self):
+        target_chat = self.current_chat
+        generation_chat_id = str(self.generation_chat_id or "")
+        if not generation_chat_id:
+            return target_chat
+        try:
+            return self.store.load(generation_chat_id)
+        except Exception:
+            current_id = str((target_chat or {}).get("id", ""))
+            return target_chat if current_id == generation_chat_id else None
+
     def _run_next_action_contract(self):
         if self.worker is not None or self.thread is not None:
             return
@@ -1334,6 +1345,10 @@ class MainWindow(QMainWindow):
             self.pending_action_original_text = ""
             self.pending_action_context_suffix = ""
             self.pending_action_images = []
+            self.pending_action_history_messages = []
+            self.pending_action_batch_size = 0
+            self.pending_request_trace = None
+            self.generation_chat_id = ""
             self.status.setText("Ollama connected")
             QTimer.singleShot(0, self._run_pending_scheduled_task)
             return
@@ -1352,9 +1367,6 @@ class MainWindow(QMainWindow):
         )
         prompt = contract.prompt
         model = self.pending_action_model
-        self.generation_chat_id = str(
-            (self.current_chat or {}).get("id", "")
-        )
 
         direct_memory_answer = (
             ""
@@ -1362,12 +1374,19 @@ class MainWindow(QMainWindow):
             else self._direct_user_memory_answer(prompt)
         )
         if direct_memory_answer:
-            self.current_chat["messages"].append(
-                {"role": "assistant", "content": direct_memory_answer}
-            )
-            self.store.save(self.current_chat)
+            target_chat = self._generation_target_chat()
+            if target_chat is not None:
+                target_chat["messages"].append(
+                    {"role": "assistant", "content": direct_memory_answer}
+                )
+                self.store.save(target_chat)
             self.status.setText("Memory answer")
-            self._render_chat()
+            if target_chat is not None:
+                current_id = str((self.current_chat or {}).get("id", ""))
+                target_id = str(target_chat.get("id", ""))
+                if current_id == target_id:
+                    self.current_chat = target_chat
+                    self._render_chat()
             self._load_chat_list()
             self.active_action_contract = None
             QTimer.singleShot(0, self._run_next_action_contract)
@@ -1513,12 +1532,7 @@ class MainWindow(QMainWindow):
 
     def _on_action_artifacts_finished(self, results):
         self._stop_thinking_indicator()
-        target_chat = self.current_chat
-        if self.generation_chat_id:
-            try:
-                target_chat = self.store.load(self.generation_chat_id)
-            except Exception:
-                target_chat = self.current_chat
+        target_chat = self._generation_target_chat()
 
         created = []
         for result in list(results or []):
@@ -1566,13 +1580,7 @@ class MainWindow(QMainWindow):
     def _on_finished(self):
         self._stop_thinking_indicator()
         content = self.partial_assistant.strip()
-        target_chat = self.current_chat
-
-        if self.generation_chat_id:
-            try:
-                target_chat = self.store.load(self.generation_chat_id)
-            except Exception:
-                target_chat = self.current_chat
+        target_chat = self._generation_target_chat()
 
         timing = None
         if self.pending_request_trace is not None:
@@ -1617,12 +1625,7 @@ class MainWindow(QMainWindow):
         self._load_chat_list()
 
     def _on_memory_finished(self):
-        target_chat = self.current_chat
-        if self.generation_chat_id:
-            try:
-                target_chat = self.store.load(self.generation_chat_id)
-            except Exception:
-                target_chat = self.current_chat
+        target_chat = self._generation_target_chat()
 
         saved_count = int(getattr(self.worker, "saved_count", 0) or 0)
         if saved_count > 0:
@@ -1648,28 +1651,25 @@ class MainWindow(QMainWindow):
         self._load_chat_list()
 
     def _on_memory_failed(self, message):
-        self.stop_button.setEnabled(False)
-        self.status.setText("Memory save failed")
+        self._on_failed(
+            message,
+            title="Memory error",
+            status_text="Memory save failed",
+        )
 
-        full_message = " ".join(str(message or "").split())
-        summary = full_message
-        if len(summary) > 520:
-            summary = summary[:517].rstrip() + "..."
-
-        dialog = QMessageBox(self)
-        dialog.setIcon(QMessageBox.Critical)
-        dialog.setWindowTitle("Memory error")
-        dialog.setText(summary or "Unknown memory error")
-        if full_message and full_message != summary:
-            dialog.setDetailedText(full_message)
-        dialog.exec()
-
-    def _on_failed(self, message):
+    def _on_failed(self, message, *, title=None, status_text=None):
         self._stop_thinking_indicator()
         self.stop_button.setEnabled(False)
-        title = "Web research error" if self.current_chat_uses_web else "Ollama error"
-        self.status.setText(
-            "Web research failed" if self.current_chat_uses_web else "Ollama error"
+        failure_status = (
+            "Web research failed"
+            if self.current_chat_uses_web
+            else "Ollama error"
+        )
+        self.status.setText(status_text or failure_status)
+        title = title or (
+            "Web research error"
+            if self.current_chat_uses_web
+            else "Ollama error"
         )
 
         full_message = " ".join(str(message or "").split())
@@ -1681,27 +1681,36 @@ class MainWindow(QMainWindow):
                 diagnostic_failure=full_message[:1000],
             )
             self.pending_request_trace.emit_if_enabled()
+        diagnostic = (
+            self.pending_request_trace.snapshot()
+            if self.pending_request_trace is not None
+            else {}
+        )
 
-        target_chat = self.current_chat
+        target_chat = self._generation_target_chat()
+
         if target_chat is not None:
             target_chat["messages"].append({
                 "id": uuid.uuid4().hex,
                 "role": "assistant",
                 "content": public.message,
-                "diagnostic": (
-                    self.pending_request_trace.snapshot()
-                    if self.pending_request_trace is not None
-                    else {}
-                ),
+                "diagnostic": diagnostic,
             })
             self.store.save(target_chat)
-            self._render_chat()
 
-        dialog = QMessageBox(self)
-        dialog.setIcon(QMessageBox.Critical)
-        dialog.setWindowTitle(title)
-        dialog.setText(public.message)
-        dialog.exec()
+            current_id = str((self.current_chat or {}).get("id", ""))
+            target_id = str(target_chat.get("id", ""))
+            if current_id == target_id:
+                self.current_chat = target_chat
+                self._render_chat()
+        self._load_chat_list()
+
+        if self.pending_action_batch_size <= 1:
+            dialog = QMessageBox(self)
+            dialog.setIcon(QMessageBox.Critical)
+            dialog.setWindowTitle(title)
+            dialog.setText(public.message)
+            dialog.exec()
 
     def _cleanup_worker(self):
         if self.worker is not None:
@@ -1711,7 +1720,6 @@ class MainWindow(QMainWindow):
         self.worker = None
         self.thread = None
         self.current_chat_uses_web = False
-        self.generation_chat_id = ""
         self.active_action_contract = None
         self.pending_request_trace = None
         self._stop_thinking_indicator()
@@ -1724,6 +1732,7 @@ class MainWindow(QMainWindow):
             self.pending_action_images = []
             self.pending_action_history_messages = []
             self.pending_action_batch_size = 0
+            self.generation_chat_id = ""
             QTimer.singleShot(0, self._run_pending_scheduled_task)
 
     def _stop_generation(self):
@@ -1851,7 +1860,14 @@ class MainWindow(QMainWindow):
     def _diagnostic_html(self, message, message_index):
         diagnostic = dict(message.get("diagnostic") or {})
         timing = dict(message.get("timing") or {})
-        phases = dict(timing.get("phases_ms") or {})
+        diagnostic_metadata = dict(diagnostic.get("metadata") or {})
+        timing_metadata = dict(timing.get("metadata") or {})
+        metadata = {**timing_metadata, **diagnostic_metadata}
+        phases = dict(
+            timing.get("phases_ms")
+            or diagnostic.get("phases_ms")
+            or {}
+        )
         if not diagnostic and not phases:
             return ""
 
@@ -1868,16 +1884,43 @@ class MainWindow(QMainWindow):
             return content + "</div>"
 
         labels = (
-            ("Profile", diagnostic.get("request_kind") or timing.get("metadata", {}).get("request_kind")),
-            ("Requested fact", diagnostic.get("requested_fact") or timing.get("metadata", {}).get("requested_fact")),
+            ("Request", diagnostic.get("request_id") or timing.get("request_id")),
+            ("Status", metadata.get("child_status")),
+            ("Failure code", metadata.get("failure_code")),
+            (
+                "Profile",
+                diagnostic.get("request_kind")
+                or metadata.get("request_kind")
+                or metadata.get("child_profile"),
+            ),
+            (
+                "Requested fact",
+                diagnostic.get("requested_fact")
+                or metadata.get("requested_fact")
+                or metadata.get("child_requested_fact"),
+            ),
             ("Search", phases.get("search_provider_time")),
             ("Page fetch", phases.get("page_fetch")),
             ("Inference", phases.get("model_inference")),
             ("Post-processing", phases.get("post_processing")),
-            ("Model calls", diagnostic.get("model_call_count") or timing.get("metadata", {}).get("model_call_count")),
-            ("Searches", diagnostic.get("search_count") or timing.get("metadata", {}).get("search_count")),
-            ("Pages", diagnostic.get("page_fetch_count") or timing.get("metadata", {}).get("page_fetch_count")),
-            ("Repairs", diagnostic.get("repair_count") or timing.get("metadata", {}).get("repair_count")),
+            (
+                "Model calls",
+                diagnostic.get("model_call_count")
+                or metadata.get("model_call_count"),
+            ),
+            (
+                "Searches",
+                diagnostic.get("search_count") or metadata.get("search_count"),
+            ),
+            (
+                "Pages",
+                diagnostic.get("page_fetch_count")
+                or metadata.get("page_fetch_count"),
+            ),
+            (
+                "Repairs",
+                diagnostic.get("repair_count") or metadata.get("repair_count"),
+            ),
         )
         content += "<div style='margin-top:5px;padding-left:8px;color:#8F99A6;'>"
         for label, value in labels:

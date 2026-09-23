@@ -333,10 +333,12 @@ def test_chat_generation_is_bound_to_originating_chat():
 
     send_source = inspect.getsource(MainWindow._send)
     finish_source = inspect.getsource(MainWindow._on_finished)
+    target_source = inspect.getsource(MainWindow._generation_target_chat)
     cleanup_source = inspect.getsource(MainWindow._cleanup_worker)
 
     assert 'self.generation_chat_id = str(self.current_chat.get("id", ""))' in send_source
-    assert "self.store.load(self.generation_chat_id)" in finish_source
+    assert "self._generation_target_chat()" in finish_source
+    assert "self.store.load(generation_chat_id)" in target_source
     assert "current_id == target_id" in finish_source
     assert 'self.generation_chat_id = ""' in cleanup_source
 
@@ -401,21 +403,20 @@ def test_memory_write_completion_is_bound_to_originating_chat():
 
     source = inspect.getsource(MainWindow._on_memory_finished)
 
-    assert "self.store.load(self.generation_chat_id)" in source
+    assert "self._generation_target_chat()" in source
     assert 'getattr(self.worker, "saved_count", 0)' in source
     assert "current_id == target_id" in source
     assert "Memory saved" in source
 
 
-def test_memory_write_failure_has_distinct_bounded_error_dialog():
+def test_memory_write_failure_uses_shared_safe_child_failure_handling():
     from app.main_window import MainWindow
 
     source = inspect.getsource(MainWindow._on_memory_failed)
 
-    assert 'self.status.setText("Memory save failed")' in source
-    assert 'dialog.setWindowTitle("Memory error")' in source
-    assert "len(summary) > 520" in source
-    assert "setDetailedText(full_message)" in source
+    assert "self._on_failed(" in source
+    assert 'status_text="Memory save failed"' in source
+    assert 'title="Memory error"' in source
 
 def test_memory_context_explains_relationship_semantics():
     from app.main_window import MainWindow
