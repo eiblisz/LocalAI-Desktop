@@ -407,15 +407,14 @@ def test_memory_write_completion_is_bound_to_originating_chat():
     assert "Memory saved" in source
 
 
-def test_memory_write_failure_has_distinct_bounded_error_dialog():
+def test_memory_write_failure_uses_shared_safe_child_failure_handling():
     from app.main_window import MainWindow
 
     source = inspect.getsource(MainWindow._on_memory_failed)
 
-    assert 'self.status.setText("Memory save failed")' in source
-    assert 'dialog.setWindowTitle("Memory error")' in source
-    assert "len(summary) > 520" in source
-    assert "setDetailedText(full_message)" in source
+    assert "self._on_failed(" in source
+    assert 'status_text="Memory save failed"' in source
+    assert 'title="Memory error"' in source
 
 def test_memory_context_explains_relationship_semantics():
     from app.main_window import MainWindow

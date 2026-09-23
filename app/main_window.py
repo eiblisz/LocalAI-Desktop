@@ -1334,6 +1334,10 @@ class MainWindow(QMainWindow):
             self.pending_action_original_text = ""
             self.pending_action_context_suffix = ""
             self.pending_action_images = []
+            self.pending_action_history_messages = []
+            self.pending_action_batch_size = 0
+            self.pending_request_trace = None
+            self.generation_chat_id = ""
             self.status.setText("Ollama connected")
             QTimer.singleShot(0, self._run_pending_scheduled_task)
             return
@@ -1359,12 +1363,23 @@ class MainWindow(QMainWindow):
             else self._direct_user_memory_answer(prompt)
         )
         if direct_memory_answer:
-            self.current_chat["messages"].append(
+            target_chat = self.current_chat
+            if self.generation_chat_id:
+                try:
+                    target_chat = self.store.load(self.generation_chat_id)
+                except Exception:
+                    target_chat = self.current_chat
+
+            target_chat["messages"].append(
                 {"role": "assistant", "content": direct_memory_answer}
             )
-            self.store.save(self.current_chat)
+            self.store.save(target_chat)
             self.status.setText("Memory answer")
-            self._render_chat()
+            current_id = str((self.current_chat or {}).get("id", ""))
+            target_id = str(target_chat.get("id", ""))
+            if current_id == target_id:
+                self.current_chat = target_chat
+                self._render_chat()
             self._load_chat_list()
             self.active_action_contract = None
             QTimer.singleShot(0, self._run_next_action_contract)
@@ -1645,27 +1660,25 @@ class MainWindow(QMainWindow):
         self._load_chat_list()
 
     def _on_memory_failed(self, message):
-        self.stop_button.setEnabled(False)
-        self.status.setText("Memory save failed")
+        self._on_failed(
+            message,
+            title="Memory error",
+            status_text="Memory save failed",
+        )
 
-        full_message = " ".join(str(message or "").split())
-        summary = full_message
-        if len(summary) > 520:
-            summary = summary[:517].rstrip() + "..."
-
-        dialog = QMessageBox(self)
-        dialog.setIcon(QMessageBox.Critical)
-        dialog.setWindowTitle("Memory error")
-        dialog.setText(summary or "Unknown memory error")
-        if full_message and full_message != summary:
-            dialog.setDetailedText(full_message)
-        dialog.exec()
-
-    def _on_failed(self, message):
+    def _on_failed(self, message, *, title=None, status_text=None):
         self._stop_thinking_indicator()
         self.stop_button.setEnabled(False)
-        self.status.setText(
-            "Web research failed" if self.current_chat_uses_web else "Ollama error"
+        failure_status = (
+            "Web research failed"
+            if self.current_chat_uses_web
+            else "Ollama error"
+        )
+        self.status.setText(status_text or failure_status)
+        title = title or (
+            "Web research error"
+            if self.current_chat_uses_web
+            else "Ollama error"
         )
 
         full_message = " ".join(str(message or "").split())
@@ -1709,11 +1722,7 @@ class MainWindow(QMainWindow):
         if self.pending_action_batch_size <= 1:
             dialog = QMessageBox(self)
             dialog.setIcon(QMessageBox.Critical)
-            dialog.setWindowTitle(
-                "Web research error"
-                if self.current_chat_uses_web
-                else "Ollama error"
-            )
+            dialog.setWindowTitle(title)
             dialog.setText(public.message)
             dialog.exec()
 

@@ -307,7 +307,7 @@ def test_failed_first_child_persists_diagnostic_and_batch_continues_in_order(
 
     monkeypatch.setattr(main_window_module, "QMessageBox", BlockingDialog)
 
-    raw_failure = "provider token=secret-value no usable public sources"
+    raw_failure = "provider timeout no usable public sources"
     MainWindow._on_failed(harness, raw_failure)
 
     saved = harness.store.chats["chat-origin"]["messages"][-1]
@@ -417,3 +417,31 @@ def test_single_request_failure_keeps_safe_error_dialog(monkeypatch):
 
     assert shown == ["A kérés feldolgozása most nem sikerült. Próbáld meg újra."]
     assert "internal traceback" not in shown[0]
+
+
+def test_memory_child_failure_uses_same_safe_nonblocking_batch_result(
+    monkeypatch,
+):
+    contract = _chat_contract(1, "Jegyezd meg, hogy a kedvenc színem a kék.")
+    harness, _rendered, _loaded, _scheduled = _batch_failure_harness([contract])
+    harness.pending_action_batch_size = 2
+    harness._on_failed = MethodType(MainWindow._on_failed, harness)
+
+    class BlockingDialog:
+        Critical = object()
+
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("memory child failure opened a modal")
+
+    monkeypatch.setattr(main_window_module, "QMessageBox", BlockingDialog)
+
+    MainWindow._on_memory_failed(harness, "database connection details")
+
+    saved = harness.store.chats["chat-origin"]["messages"][-1]
+    assert harness.status.text == "Memory save failed"
+    assert saved["content"] == (
+        "A kérés feldolgozása most nem sikerült. Próbáld meg újra."
+    )
+    assert saved["diagnostic"]["metadata"]["child_status"] == "failed"
+    assert saved["diagnostic"]["metadata"]["failure_code"] == "execution_failed"
+    assert "database connection details" not in saved["content"]
