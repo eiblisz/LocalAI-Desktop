@@ -4,6 +4,7 @@ import ipaddress
 import os
 import socket
 import re
+import unicodedata
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from time import perf_counter
@@ -549,10 +550,18 @@ def _query_terms(query):
 
 
 def _normalized_spec_text(value):
+    normalized = unicodedata.normalize(
+        "NFKD",
+        str(value or "").casefold().replace("×", "x"),
+    )
+    accent_folded = "".join(
+        character for character in normalized
+        if not unicodedata.combining(character)
+    )
     return re.sub(
         r"[^a-z0-9]+",
         "",
-        str(value or "").lower().replace("×", "x"),
+        accent_folded,
     )
 
 
