@@ -44,6 +44,7 @@ from .language_policy import response_language_instruction
 from .memory_answers import direct_user_memory_answer
 from .memory_runtime import remember_explicit_request
 from .request_trace import RequestTrace
+from .user_error_messages import public_error
 from .web_intent import (
     ACTION_ARTIFACT,
     ACTION_MEMORY_WRITE,
@@ -369,9 +370,15 @@ class DiscordBotBridge(QObject):
                 except Exception as exc:
                     compact = " ".join(str(exc).split())[:500]
                     self.status_changed.emit(f"Discord request failed: {compact}")
+                    public = public_error(compact)
+                    trace.add_metadata(
+                        failure_code=public.code,
+                        diagnostic_failure=compact,
+                    )
+                    trace.emit_if_enabled()
                     try:
                         await message.reply(
-                            f"LocalAI hiba: {compact}",
+                            public.message,
                             mention_author=False,
                         )
                     except Exception:

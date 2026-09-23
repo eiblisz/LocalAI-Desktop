@@ -510,15 +510,8 @@ class ChatWebWorker(QObject):
 
     @staticmethod
     def _fold_text(value):
-        normalized = unicodedata.normalize(
-            "NFKD",
-            str(value or "").lower(),
-        )
-        ascii_text = "".join(
-            char for char in normalized
-            if not unicodedata.combining(char)
-        )
-        return " ".join(ascii_text.split())
+        from .text_normalization import canonical_match_text
+        return canonical_match_text(value)
 
     def _is_research_followup(self):
         normalized = self._fold_text(self.user_prompt)
@@ -1089,6 +1082,17 @@ class ChatWebWorker(QObject):
             legacy_failure=self._safe_evidence_failure_base,
         )
 
+    def _safe_no_public_sources(self):
+        if self.request_profile.response_language == "hu":
+            return (
+                "Most nem találtam elég megbízható nyilvános forrást a válaszhoz. "
+                "Próbáld meg később vagy pontosabb kulcsszavakkal."
+            )
+        return (
+            "I could not find enough reliable public sources for this answer. "
+            "Please try again later or use more specific keywords."
+        )
+
     @staticmethod
     def _evidence_diagnostic(ledgers, limit=6):
         lines = []
@@ -1477,9 +1481,16 @@ class ChatWebWorker(QObject):
                     evidence_ledger_count=len(evidence_ledgers),
                     context_modes=context_modes,
                 )
-                raise RuntimeError(
-                    "Web research returned no usable public sources."
-                )
+                # A provider shortfall is a normal research outcome, not a raw
+                # application error. Preserve the reason for diagnostics but
+                # deliver a safe response through the common chat path.
+                self.diagnostic_metadata.update({
+                    "failure_code": "no_usable_public_sources",
+                    "failure_detail": "Web research returned no usable public sources.",
+                })
+                self.token.emit(self._safe_no_public_sources())
+                self.finished.emit()
+                return
 
             history = [dict(message) for message in self.messages]
             if history and history[-1].get("role") == "user":
