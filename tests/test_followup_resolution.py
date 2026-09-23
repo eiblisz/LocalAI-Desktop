@@ -61,3 +61,12 @@ def test_wrapped_short_followup_still_resolves_from_previous_context():
     assert result.status == "resolved"
     assert "sample item" in result.resolved_intent
     assert "10 euros" in result.resolved_intent
+
+
+def test_concise_bulleted_actions_are_not_misclassified_as_one_followup():
+    prompt = "- Explain this\n- Summarize it"
+
+    result = resolve_contextual_followup(prompt, [])
+
+    assert result.status == "direct"
+    assert result.resolved_intent == prompt

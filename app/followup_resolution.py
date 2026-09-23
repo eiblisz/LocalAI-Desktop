@@ -2,6 +2,7 @@ from dataclasses import dataclass
 import re
 
 from .text_normalization import canonical_match_text
+from .web_intent import split_user_action_units
 
 
 _SHORT_FOLLOWUP_PHRASES = frozenset({
@@ -95,16 +96,8 @@ class FollowupResolution:
 def resolve_contextual_followup(user_text, messages):
     raw_original = str(user_text or "")
     normalized = " ".join(raw_original.split())
-    nonempty_lines = [
-        line for line in raw_original.splitlines()
-        if line.strip()
-    ]
-    is_multiline_question_batch = (
-        len(nonempty_lines) > 1
-        and all(line.strip().endswith("?") for line in nonempty_lines)
-    )
     if (
-        is_multiline_question_batch
+        len(split_user_action_units(raw_original)) > 1
         or not is_contextual_short_followup(normalized)
     ):
         return FollowupResolution(raw_original, raw_original, "direct")
