@@ -49,6 +49,26 @@ Or:
 .\run.ps1
 ```
 
+## Verifiable Windows build identity
+
+Packaged builds show their commit SHA in the Desktop header and include the
+build identity in request diagnostics. Build with a real Git executable rather
+than a PATH-resolved command:
+
+```powershell
+$Git = "C:\Program Files\Git\cmd\git.exe"
+& $Git fetch origin main
+$ExpectedMainSha = (& $Git rev-parse origin/main).Trim()
+$CheckoutHead = (& $Git rev-parse HEAD).Trim()
+.\build_windows.ps1 -GitExe $Git -ExpectedMainSha $ExpectedMainSha
+"Runtime build SHA: check the Desktop Build label"
+"Checkout HEAD: $CheckoutHead"
+"Expected main SHA: $ExpectedMainSha"
+.\dist\LocalAI-Desktop\LocalAI-Desktop.exe
+```
+
+The build script stamps metadata before packaging and removes the temporary
+source file afterward. The Desktop never invokes Git at runtime.
 
 
 ## Extensions foundation

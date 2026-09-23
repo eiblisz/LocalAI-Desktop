@@ -12,6 +12,19 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+      - name: Verify exact checkout
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:EXPECTED_SHA) {
+            throw "Checkout mismatch: expected $env:EXPECTED_SHA, got $actual"
+          }
+          "Exact checkout HEAD: $actual"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"

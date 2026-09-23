@@ -56,9 +56,15 @@ def _benchmark_parent_binding():
     )
     contracts = ActionRuntime().plan_many(prompt)
     _assert(len(contracts) == 3, "planner did not preserve three subtasks")
-    parent = contracts[0].constraints.parent_intent
-    _assert(all(item.constraints.parent_intent == parent for item in contracts),
-            "split subtasks lost the canonical parent task")
+    _assert(all(item.explicit_batch_child for item in contracts),
+            "split subtasks were not marked as explicit batch children")
+    _assert(
+        all(
+            item.constraints.parent_intent == item.prompt
+            for item in contracts
+        ),
+        "sibling entities leaked into child context authority",
+    )
     _assert(all(item.constraints.response_language == "hu" for item in contracts),
             "split subtasks lost Hungarian response language")
 

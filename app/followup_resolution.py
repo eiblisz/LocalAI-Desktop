@@ -93,10 +93,17 @@ class FollowupResolution:
         return self.status == "clarification"
 
 
-def resolve_contextual_followup(user_text, messages):
+def resolve_contextual_followup(
+    user_text,
+    messages,
+    *,
+    explicit_batch_child=False,
+):
     raw_original = str(user_text or "")
     normalized = " ".join(raw_original.split())
     if (
+        explicit_batch_child
+        or
         len(split_user_action_units(raw_original)) > 1
         or not is_contextual_short_followup(normalized)
     ):

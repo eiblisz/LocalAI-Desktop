@@ -2,6 +2,7 @@ import json
 import re
 import asyncio
 import threading
+import uuid
 from dataclasses import dataclass
 
 import discord
@@ -340,61 +341,16 @@ class DiscordBotBridge(QObject):
                         trace=trace,
                     )
 
-                    last_chat_id = ""
                     batch_history = list(
                         self._load_remote_chat().get("messages", [])
                     )
-                    for contract in contracts:
-                        child_trace = RequestTrace("discord")
-                        profile = contract.constraints.request_profile
-                        child_trace.add_metadata(
-                            batch_size=len(contracts),
-                            child_index=contract.index,
-                            child_status="running",
-                            child_profile=profile.kind,
-                            child_requested_fact=profile.requested_fact,
-                            child_relation=profile.relation,
-                        )
-                        try:
-                            async with message.channel.typing():
-                                result = await asyncio.to_thread(
-                                    self._execute_planned_action,
-                                    contract.prompt,
-                                    contract.plan,
-                                    child_trace,
-                                    original_prompt=content,
-                                    isolated_history=batch_history,
-                                )
-                            child_trace.add_metadata(child_status="passed")
-                        except Exception as child_exc:
-                            compact = " ".join(str(child_exc).split())[:500]
-                            public = public_error(
-                                compact,
-                                language=contract.constraints.response_language,
-                            )
-                            child_trace.add_metadata(
-                                child_status="failed",
-                                failure_code=public.code,
-                                diagnostic_failure=compact,
-                            )
-                            await message.reply(
-                                public.message,
-                                mention_author=False,
-                            )
-                            child_trace.emit_if_enabled()
-                            continue
-
-                        last_chat_id = str(result.get("chat_id", "") or last_chat_id)
-                        for reply_text in result.get("messages", []):
-                            for chunk in split_discord_text(reply_text):
-                                await message.reply(chunk, mention_author=False)
-                        for answer, artifact_path in result.get("artifacts", []):
-                            await message.reply(
-                                answer,
-                                file=discord.File(str(artifact_path)),
-                                mention_author=False,
-                            )
-                        child_trace.emit_if_enabled()
+                    last_chat_id = await self._run_action_batch(
+                        message,
+                        content,
+                        contracts,
+                        trace,
+                        batch_history,
+                    )
 
                     trace.begin("response_send")
                     if last_chat_id:
@@ -419,6 +375,133 @@ class DiscordBotBridge(QObject):
                         pass
 
         await client.start(self.token)
+
+    async def _reply_best_effort(self, message, content, **kwargs):
+        try:
+            await message.reply(content, mention_author=False, **kwargs)
+            return True
+        except Exception as exc:
+            compact = " ".join(str(exc).split())[:500]
+            self.status_changed.emit(f"Discord reply failed: {compact}")
+            return False
+
+    def _persist_child_failure(self, original_prompt, public, child_trace):
+        chat = self._load_remote_chat()
+        chat["model"] = self.settings.model
+        stored_prompt = str(original_prompt or "")
+        if not any(
+            item.get("role") == "user"
+            and str(item.get("content") or "") == stored_prompt
+            for item in chat.get("messages", [])[-8:]
+        ):
+            chat["messages"].append({"role": "user", "content": stored_prompt})
+        snapshot = child_trace.snapshot()
+        chat["messages"].append({
+            "id": uuid.uuid4().hex,
+            "role": "assistant",
+            "content": public.message,
+            "failure_code": public.code,
+            "diagnostic": snapshot,
+            "child_trace": snapshot,
+        })
+        self.chat_store.save(chat)
+        return str(chat.get("id", ""))
+
+    def _persist_child_trace(self, chat_id, child_trace):
+        if not chat_id:
+            return
+        chat = self.chat_store.load(chat_id)
+        for item in reversed(chat.get("messages", [])):
+            if item.get("role") == "assistant":
+                snapshot = child_trace.snapshot()
+                item["timing"] = snapshot
+                item["child_trace"] = snapshot
+                self.chat_store.save(chat)
+                return
+
+    async def _run_action_batch(
+        self,
+        message,
+        content,
+        contracts,
+        batch_trace,
+        batch_history,
+    ):
+        last_chat_id = ""
+        contracts = tuple(contracts)
+        for contract in contracts:
+            child_trace = RequestTrace(
+                "discord",
+                batch_trace_id=batch_trace.request_id,
+                child_index=contract.index,
+                batch_size=len(contracts),
+            )
+            profile = contract.constraints.request_profile
+            child_trace.add_metadata(
+                child_status="running",
+                child_profile=profile.kind,
+                child_requested_fact=profile.requested_fact,
+                child_relation=profile.relation,
+                explicit_batch_child=contract.explicit_batch_child,
+            )
+            try:
+                async with message.channel.typing():
+                    result = await asyncio.to_thread(
+                        self._execute_planned_action,
+                        contract.prompt,
+                        contract.plan,
+                        child_trace,
+                        original_prompt=content,
+                        isolated_history=batch_history,
+                        explicit_batch_child=contract.explicit_batch_child,
+                    )
+                child_trace.add_metadata(child_status="passed")
+                last_chat_id = str(
+                    result.get("chat_id", "") or last_chat_id
+                )
+                self._persist_child_trace(last_chat_id, child_trace)
+            except Exception as child_exc:
+                compact = " ".join(str(child_exc).split())[:500]
+                public = public_error(
+                    compact,
+                    language=contract.constraints.response_language,
+                )
+                child_trace.add_metadata(
+                    child_status="failed",
+                    failure_code=public.code,
+                    diagnostic_failure=compact,
+                )
+                last_chat_id = (
+                    self._persist_child_failure(
+                        content,
+                        public,
+                        child_trace,
+                    )
+                    or last_chat_id
+                )
+                await self._reply_best_effort(message, public.message)
+                child_trace.emit_if_enabled()
+                continue
+
+            for reply_text in result.get("messages", []):
+                for chunk in split_discord_text(reply_text):
+                    await self._reply_best_effort(message, chunk)
+            for answer, artifact_path in result.get("artifacts", []):
+                try:
+                    attachment = discord.File(str(artifact_path))
+                except Exception as exc:
+                    compact = " ".join(str(exc).split())[:500]
+                    self.status_changed.emit(
+                        f"Discord reply failed: {compact}"
+                    )
+                    continue
+                await self._reply_best_effort(
+                    message,
+                    answer,
+                    file=attachment,
+                )
+            child_trace.emit_if_enabled()
+        return last_chat_id
 
     def _message_allowed(self, message):
         author = getattr(message, "author", None)
@@ -763,23 +846,62 @@ class DiscordBotBridge(QObject):
         messages.extend(history)
         return messages
 
-    def _grounded_web_answer(self, prompt, trace=None):
-        chat = self._load_remote_chat()
-        messages = self._messages_for_prompt(chat, prompt)
-        if trace is None:
-            return run_chat_web_request(
-                self.ollama_client,
-                self.settings.model,
-                messages,
-                prompt,
-            ).strip()
+    def _run_chat_web(
+        self,
+        messages,
+        prompt,
+        *,
+        trace=None,
+        explicit_batch_child=False,
+    ):
+        kwargs = {}
+        if trace is not None:
+            kwargs["trace"] = trace
+        if explicit_batch_child:
+            kwargs["explicit_batch_child"] = True
         return run_chat_web_request(
             self.ollama_client,
             self.settings.model,
             messages,
             prompt,
-            trace=trace,
+            **kwargs,
         ).strip()
+
+    def _run_market_web(
+        self,
+        messages,
+        prompt,
+        *,
+        explicit_batch_child=False,
+    ):
+        kwargs = (
+            {"explicit_batch_child": True}
+            if explicit_batch_child
+            else {}
+        )
+        return run_market_web_request(
+            self.ollama_client,
+            self.settings.model,
+            messages,
+            prompt,
+            **kwargs,
+        ).strip()
+
+    def _grounded_web_answer(
+        self,
+        prompt,
+        trace=None,
+        *,
+        explicit_batch_child=False,
+    ):
+        chat = self._load_remote_chat()
+        messages = self._messages_for_prompt(chat, prompt)
+        return self._run_chat_web(
+            messages,
+            prompt,
+            trace=trace,
+            explicit_batch_child=explicit_batch_child,
+        )
 
     def _crypto_market_extension(self):
         if self.extension_authority is None:
@@ -799,7 +921,13 @@ class DiscordBotBridge(QObject):
             ExtensionExecutionContext.discord_remote(),
         )
 
-    def _grounded_external_answer(self, prompt, trace=None):
+    def _grounded_external_answer(
+        self,
+        prompt,
+        trace=None,
+        *,
+        explicit_batch_child=False,
+    ):
         if is_crypto_quote_request(prompt):
             crypto_extension = self._crypto_market_extension()
             if crypto_extension is not None:
@@ -820,7 +948,11 @@ class DiscordBotBridge(QObject):
                     ).strip()
                 except Exception:
                     pass
-        return self._grounded_web_answer(prompt, trace=trace)
+        return self._grounded_web_answer(
+            prompt,
+            trace=trace,
+            explicit_batch_child=explicit_batch_child,
+        )
 
     def _remember_remote(self, prompt):
         if self.memory_store is None:
@@ -853,6 +985,7 @@ class DiscordBotBridge(QObject):
         trace=None,
         original_prompt=None,
         isolated_history=None,
+        explicit_batch_child=False,
     ):
         if action_plan.has(ACTION_MEMORY_WRITE):
             answer, chat_id = self._remember_remote(prompt)
@@ -861,7 +994,11 @@ class DiscordBotBridge(QObject):
         if action_plan.has(ACTION_ARTIFACT):
             source_context = ""
             if action_plan.has(ACTION_WEB_RESEARCH):
-                source_context = self._grounded_external_answer(prompt, trace=trace)
+                source_context = self._grounded_external_answer(
+                    prompt,
+                    trace=trace,
+                    explicit_batch_child=explicit_batch_child,
+                )
 
             chat_id, artifact_results = self._create_remote_artifacts(
                 prompt,
@@ -881,6 +1018,7 @@ class DiscordBotBridge(QObject):
             trace=trace,
             original_prompt=original_prompt,
             isolated_history=isolated_history,
+            explicit_batch_child=explicit_batch_child,
         )
         return {"chat_id": chat_id, "messages": [answer], "artifacts": []}
 
@@ -892,6 +1030,7 @@ class DiscordBotBridge(QObject):
         trace=None,
         original_prompt=None,
         isolated_history=None,
+        explicit_batch_child=False,
     ):
         if use_web is None:
             crypto_available, multi_asset_available = (
@@ -960,19 +1099,17 @@ class DiscordBotBridge(QObject):
                             prompt,
                         ).strip()
                     except Exception:
-                        answer = run_market_web_request(
-                            self.ollama_client,
-                            self.settings.model,
+                        answer = self._run_market_web(
                             messages,
                             prompt,
-                        ).strip()
+                            explicit_batch_child=explicit_batch_child,
+                        )
                 else:
-                    answer = run_market_web_request(
-                        self.ollama_client,
-                        self.settings.model,
+                    answer = self._run_market_web(
                         messages,
                         prompt,
-                    ).strip()
+                        explicit_batch_child=explicit_batch_child,
+                    )
             elif is_multi_asset_quote_request(prompt):
                 multi_asset_extension = self._multi_asset_market_extension()
                 if multi_asset_extension is not None:
@@ -982,35 +1119,24 @@ class DiscordBotBridge(QObject):
                             prompt,
                         ).strip()
                     except Exception:
-                        answer = run_market_web_request(
-                            self.ollama_client,
-                            self.settings.model,
+                        answer = self._run_market_web(
                             messages,
                             prompt,
-                        ).strip()
+                            explicit_batch_child=explicit_batch_child,
+                        )
                 else:
-                    answer = run_market_web_request(
-                        self.ollama_client,
-                        self.settings.model,
+                    answer = self._run_market_web(
                         messages,
                         prompt,
-                    ).strip()
+                        explicit_batch_child=explicit_batch_child,
+                    )
             else:
-                if trace is None:
-                    answer = run_chat_web_request(
-                        self.ollama_client,
-                        self.settings.model,
-                        messages,
-                        prompt,
-                    ).strip()
-                else:
-                    answer = run_chat_web_request(
-                        self.ollama_client,
-                        self.settings.model,
-                        messages,
-                        prompt,
-                        trace=trace,
-                    ).strip()
+                answer = self._run_chat_web(
+                    messages,
+                    prompt,
+                    trace=trace,
+                    explicit_batch_child=explicit_batch_child,
+                )
         else:
             if trace is not None:
                 trace.begin("model_inference")
@@ -1021,21 +1147,12 @@ class DiscordBotBridge(QObject):
             if trace is not None:
                 trace.end("model_inference")
             if allow_web_fallback and answer_requires_web_fallback(prompt, answer):
-                if trace is None:
-                    answer = run_chat_web_request(
-                        self.ollama_client,
-                        self.settings.model,
-                        messages,
-                        prompt,
-                    ).strip()
-                else:
-                    answer = run_chat_web_request(
-                        self.ollama_client,
-                        self.settings.model,
-                        messages,
-                        prompt,
-                        trace=trace,
-                    ).strip()
+                answer = self._run_chat_web(
+                    messages,
+                    prompt,
+                    trace=trace,
+                    explicit_batch_child=explicit_batch_child,
+                )
 
         if not answer:
             answer = "A helyi modell ures valaszt adott."

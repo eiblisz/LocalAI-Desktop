@@ -5,6 +5,7 @@ __pycache__/
 dist/
 build/
 *.spec
+app/_build_metadata.py
 data/chats/*.json
 !data/chats/.gitkeep
 output/*

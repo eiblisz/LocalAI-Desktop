@@ -58,6 +58,7 @@ from .document_tools import (
 from .desktop_preferences import DesktopPreferences
 from .artifact_themes import document_preset_labels, workbook_preset_labels
 from .browser_navigation_authority import BrowserNavigationAuthority
+from .build_identity import build_identity, short_build_sha
 from .chat_orchestration import plan_chat_actions
 from .chat_extensions_dialog import ChatExtensionsDialog
 from .discord_bot_bridge import DiscordBotBridge, DiscordBotSettings
@@ -171,6 +172,7 @@ class MainWindow(QMainWindow):
         self.pending_action_images = []
         self.pending_action_history_messages = []
         self.pending_action_batch_size = 0
+        self.pending_batch_trace = None
         self.pending_request_trace = None
         self.expanded_source_message_ids = set()
         self.expanded_diagnostic_message_ids = set()
@@ -306,6 +308,15 @@ class MainWindow(QMainWindow):
         )
         self.refresh_models_button.clicked.connect(self._refresh_desktop)
         top_layout.addWidget(self.refresh_models_button)
+
+        identity = build_identity()
+        self.build_label = QLabel(f"Build {short_build_sha()}")
+        self.build_label.setObjectName("muted")
+        self.build_label.setToolTip(
+            f"Runtime build SHA: {identity['build_sha']}\n"
+            f"Expected main SHA: {identity['expected_main_sha']}"
+        )
+        top_layout.addWidget(self.build_label)
 
         self.status = QLabel("Ollama: checking...")
         self.status.setObjectName("muted")
@@ -1198,9 +1209,10 @@ class MainWindow(QMainWindow):
 
         crypto_market_extension = self._crypto_market_extension()
         multi_asset_market_extension = self._multi_asset_market_extension()
-        self.pending_request_trace = RequestTrace("desktop")
-        self.pending_request_trace.begin("request_received")
-        self.pending_request_trace.end("request_received")
+        self.pending_batch_trace = RequestTrace("desktop")
+        self.pending_request_trace = self.pending_batch_trace
+        self.pending_batch_trace.begin("request_received")
+        self.pending_batch_trace.end("request_received")
         self._start_thinking_indicator(
             False,
             base_text="Útvonal kiválasztása",
@@ -1220,12 +1232,14 @@ class MainWindow(QMainWindow):
             )
         except PermissionError as exc:
             self._stop_thinking_indicator()
+            self.pending_batch_trace = None
             self.pending_request_trace = None
             self.status.setText("Action blocked")
             QMessageBox.warning(self, "Action authority", str(exc))
             return
         except Exception as exc:
             self._stop_thinking_indicator()
+            self.pending_batch_trace = None
             self.pending_request_trace = None
             self.status.setText("Request planning failed")
             self.status.setToolTip(" ".join(str(exc).split()))
@@ -1239,6 +1253,7 @@ class MainWindow(QMainWindow):
         self.pending_action_contracts = list(contracts)
         if not self.pending_action_contracts:
             self._stop_thinking_indicator()
+            self.pending_batch_trace = None
             self.pending_request_trace = None
             self.status.setText("No executable action")
             QMessageBox.warning(
@@ -1252,34 +1267,16 @@ class MainWindow(QMainWindow):
         self.pending_action_history_messages = list(
             (self.current_chat or {}).get("messages", [])
         )[:-1]
-        if self.pending_request_trace is not None:
-            self.pending_request_trace.add_metadata(
+        if self.pending_batch_trace is not None:
+            self.pending_batch_trace.add_metadata(
                 batch_size=self.pending_action_batch_size,
             )
-            self.pending_request_trace.emit_if_enabled()
+            self.pending_batch_trace.emit_if_enabled()
         self.pending_action_model = model
         self.pending_action_original_text = text
         self.pending_action_context_suffix = context_suffix
         self.pending_action_images = list(image_payloads)
-        try:
-            self._run_next_action_contract()
-        except Exception as exc:
-            self.pending_action_contracts = []
-            self.active_action_contract = None
-            self.worker = None
-            if self.thread is not None and not self.thread.isRunning():
-                self.thread.deleteLater()
-                self.thread = None
-            self._stop_thinking_indicator()
-            self.pending_request_trace = None
-            self.stop_button.setEnabled(False)
-            self.status.setText("Request start failed")
-            self.status.setToolTip(" ".join(str(exc).split()))
-            QMessageBox.critical(
-                self,
-                "Request start error",
-                " ".join(str(exc).split()) or "Unknown request start error",
-            )
+        MainWindow._run_next_action_contract_safely(self)
 
     def _action_messages_for_model(self, prompt, constraints=None):
         prompt = str(prompt or "").strip()
@@ -1348,6 +1345,7 @@ class MainWindow(QMainWindow):
             self.pending_action_history_messages = []
             self.pending_action_batch_size = 0
             self.pending_request_trace = None
+            self.pending_batch_trace = None
             self.generation_chat_id = ""
             self.status.setText("Ollama connected")
             QTimer.singleShot(0, self._run_pending_scheduled_task)
@@ -1355,7 +1353,17 @@ class MainWindow(QMainWindow):
 
         contract = self.pending_action_contracts.pop(0)
         self.active_action_contract = contract
-        self.pending_request_trace = RequestTrace("desktop")
+        batch_trace = getattr(self, "pending_batch_trace", None)
+        self.pending_request_trace = RequestTrace(
+            "desktop",
+            batch_trace_id=(
+                batch_trace.request_id
+                if batch_trace is not None
+                else None
+            ),
+            child_index=contract.index,
+            batch_size=self.pending_action_batch_size,
+        )
         profile = contract.constraints.request_profile
         self.pending_request_trace.add_metadata(
             batch_size=self.pending_action_batch_size,
@@ -1364,6 +1372,11 @@ class MainWindow(QMainWindow):
             child_profile=profile.kind,
             child_requested_fact=profile.requested_fact,
             child_relation=profile.relation,
+            explicit_batch_child=getattr(
+                contract,
+                "explicit_batch_child",
+                False,
+            ),
         )
         prompt = contract.prompt
         model = self.pending_action_model
@@ -1389,7 +1402,7 @@ class MainWindow(QMainWindow):
                     self._render_chat()
             self._load_chat_list()
             self.active_action_contract = None
-            QTimer.singleShot(0, self._run_next_action_contract)
+            QTimer.singleShot(0, self._run_next_action_contract_safely)
             return
 
         messages_for_model = self._action_messages_for_model(
@@ -1436,6 +1449,11 @@ class MainWindow(QMainWindow):
                 contract.artifact_plans,
                 use_web=contract.use_web,
                 constraints=contract.constraints,
+                explicit_batch_child=getattr(
+                    contract,
+                    "explicit_batch_child",
+                    False,
+                ),
             )
             self.worker.moveToThread(self.thread)
             self.thread.started.connect(self.worker.run)
@@ -1490,6 +1508,11 @@ class MainWindow(QMainWindow):
                 execution_text,
                 compact_market_quote=contract.market_fallback,
                 trace=self.pending_request_trace,
+                explicit_batch_child=getattr(
+                    contract,
+                    "explicit_batch_child",
+                    False,
+                ),
             )
         elif contract.route == ROUTE_CHAT:
             self.worker = AdaptiveChatWorker(
@@ -1500,6 +1523,11 @@ class MainWindow(QMainWindow):
                 allow_web_fallback=self.web_mode != "OFF",
                 constraints=contract.constraints,
                 trace=self.pending_request_trace,
+                explicit_batch_child=getattr(
+                    contract,
+                    "explicit_batch_child",
+                    False,
+                ),
             )
         else:
             self.thread = None
@@ -1529,6 +1557,40 @@ class MainWindow(QMainWindow):
         else:
             self._start_thinking_indicator(contract.use_web)
         self.thread.start()
+
+    def _run_next_action_contract_safely(self):
+        try:
+            self._run_next_action_contract()
+        except Exception as exc:
+            if self.pending_request_trace is not None:
+                self.pending_request_trace.add_metadata(
+                    child_status="failed",
+                    failure_phase="child_start",
+                )
+            self._on_failed(
+                str(exc),
+                title="Request start error",
+                status_text="Request start failed",
+            )
+            worker = self.worker
+            thread = self.thread
+            self.worker = None
+            self.thread = None
+            self.active_action_contract = None
+            self.pending_request_trace = None
+            if worker is not None:
+                try:
+                    worker.deleteLater()
+                except Exception:
+                    pass
+            if thread is not None:
+                try:
+                    if thread.isRunning():
+                        thread.quit()
+                    thread.deleteLater()
+                except Exception:
+                    pass
+            QTimer.singleShot(0, self._run_next_action_contract_safely)
 
     def _on_action_artifacts_finished(self, results):
         self._stop_thinking_indicator()
@@ -1724,7 +1786,7 @@ class MainWindow(QMainWindow):
         self.pending_request_trace = None
         self._stop_thinking_indicator()
         if self.pending_action_contracts:
-            QTimer.singleShot(0, self._run_next_action_contract)
+            QTimer.singleShot(0, self._run_next_action_contract_safely)
         else:
             self.pending_action_model = ""
             self.pending_action_original_text = ""
@@ -1732,6 +1794,7 @@ class MainWindow(QMainWindow):
             self.pending_action_images = []
             self.pending_action_history_messages = []
             self.pending_action_batch_size = 0
+            self.pending_batch_trace = None
             self.generation_chat_id = ""
             QTimer.singleShot(0, self._run_pending_scheduled_task)
 
@@ -1885,6 +1948,21 @@ class MainWindow(QMainWindow):
 
         labels = (
             ("Request", diagnostic.get("request_id") or timing.get("request_id")),
+            (
+                "Batch trace",
+                diagnostic.get("batch_trace_id") or timing.get("batch_trace_id"),
+            ),
+            (
+                "Child trace",
+                diagnostic.get("child_trace_id") or timing.get("child_trace_id"),
+            ),
+            ("Child", metadata.get("child_index")),
+            ("Build SHA", diagnostic.get("build_sha") or timing.get("build_sha")),
+            (
+                "Expected main SHA",
+                diagnostic.get("expected_main_sha")
+                or timing.get("expected_main_sha"),
+            ),
             ("Status", metadata.get("child_status")),
             ("Failure code", metadata.get("failure_code")),
             (
