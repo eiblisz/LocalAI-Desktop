@@ -505,13 +505,26 @@ def split_user_action_units(text):
     """
     Split explicit multi-task messages without breaking a single compound workflow.
 
-    Numbered/bulleted requests become independent action units. A sentence such as
-    "find the latest release and create an HTML report" remains one unit so its web
-    research can feed the artifact step.
+    Numbered/bulleted requests and a plain list of standalone question lines become
+    independent action units. A sentence such as "find the latest release and
+    create an HTML report" remains one unit so its web research can feed the
+    artifact step.
     """
     raw = str(text or "").strip()
     if not raw:
         return []
+
+    # A user often pastes a short manual test set as one question per line.
+    # Treat that as an explicit batch, rather than turning several unrelated
+    # lookups into one broad request with a narrow direct-fact deadline. Requiring
+    # every non-empty line to be a complete question preserves ordinary wrapped
+    # prose and multi-line artifact instructions as a single action.
+    plain_lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    if (
+        len(plain_lines) >= 2
+        and all(line.endswith("?") for line in plain_lines)
+    ):
+        return plain_lines
 
     matches = list(_NUMBERED_TASK_START.finditer(raw))
     if len(matches) <= 1:
