@@ -13,6 +13,10 @@ def test_factual_relation_question_about_a_story_is_not_treated_as_story_generat
     ) is True
 
 
+def test_entity_formation_date_is_a_factual_risk_request():
+    assert is_factual_risk_request("Mikor alakult a Sample Band?") is True
+
+
 def test_explicit_creative_generation_request_stays_non_factual():
     assert is_factual_risk_request(
         "Írj egy verset Wrong Author stílusában."

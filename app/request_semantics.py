@@ -193,6 +193,8 @@ def classify_request(text):
         r"\bmikor irta\b",
         r"\bmikor szuletett\b",
         r"\bmikor tortent\b",
+        r"\bmikor alakult\b",
+        r"\bmikor jott letre\b",
         r"\bmelyik evben\b",
         r"\bmennyi most\b",
         r"\bmennyi az\b",
@@ -202,6 +204,9 @@ def classify_request(text):
         r"\bwho founded\b",
         r"\bwhen did\b",
         r"\bwhen was\b",
+        r"\bwhen formed\b",
+        r"\bwhen was .+ formed\b",
+        r"\bwhen was .+ established\b",
         r"\bwhat year\b",
         r"\bwhat is the current\b",
         r"\bwer schrieb\b",
@@ -209,6 +214,8 @@ def classify_request(text):
         r"\bwer grundete\b",
         r"\bwann wurde\b",
         r"\bwann schrieb\b",
+        r"\bwann entstand\b",
+        r"\bwann wurde .+ gegrundet\b",
     )
 
     # Resolve the requested activity first.  Depth is a separate dimension:
