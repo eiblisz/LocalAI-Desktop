@@ -2,6 +2,7 @@ from copy import deepcopy
 from types import MethodType, SimpleNamespace
 
 from app import main_window as main_window_module
+from app.action_runtime import ActionRuntime
 from app.main_window import MainWindow
 from app.request_trace import RequestTrace
 
@@ -192,6 +193,77 @@ def test_send_does_not_accept_new_message_while_thread_is_still_finishing():
     MainWindow._send(harness)
 
     assert harness.status.text == "Previous request is still finishing"
+
+
+def test_multiline_send_sets_batch_size_and_child_failure_stays_nonblocking(
+    monkeypatch,
+):
+    prompt = (
+        "Ki James Hetfield?\n"
+        "Mikor irta Arany Janos a Janos vitez cimu verset?\n"
+        "Mikor alakult a Pokolgep zenekar?"
+    )
+    chat = {
+        "id": "chat-origin",
+        "title": "Acceptance",
+        "messages": [],
+        "closed": False,
+    }
+    cleared = []
+    rendered = []
+    loaded = []
+    harness = SimpleNamespace(
+        input=SimpleNamespace(
+            toPlainText=lambda: prompt,
+            clear=lambda: cleared.append(True),
+        ),
+        model_combo=SimpleNamespace(currentText=lambda: "qwen-test"),
+        worker=None,
+        thread=None,
+        pending_action_contracts=[],
+        pending_action_batch_size=0,
+        current_chat=deepcopy(chat),
+        store=FakeStore({"chat-origin": chat}),
+        attachment_context=[],
+        action_runtime=ActionRuntime(),
+        web_mode="AUTO",
+        pending_request_trace=None,
+        generation_chat_id="",
+        current_chat_uses_web=True,
+        status=FakeStatus(),
+        stop_button=FakeButton(),
+        _crypto_market_extension=lambda: None,
+        _multi_asset_market_extension=lambda: None,
+        _start_thinking_indicator=lambda *_args, **_kwargs: None,
+        _stop_thinking_indicator=lambda: None,
+        _load_chat_list=lambda: loaded.append(True),
+        _render_chat=lambda: rendered.append(True),
+        _run_next_action_contract=lambda: None,
+    )
+    harness._generation_target_chat = MethodType(
+        MainWindow._generation_target_chat,
+        harness,
+    )
+
+    class BlockingDialog:
+        Critical = object()
+
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("multi-question child failure opened a modal")
+
+    monkeypatch.setattr(main_window_module, "QMessageBox", BlockingDialog)
+
+    MainWindow._send(harness)
+
+    assert harness.pending_action_batch_size == 3
+    assert len(harness.pending_action_contracts) == 3
+    assert cleared == [True]
+
+    MainWindow._on_failed(harness, "provider timeout")
+
+    saved = harness.store.chats["chat-origin"]["messages"]
+    assert [message["role"] for message in saved] == ["user", "assistant"]
+    assert saved[-1]["diagnostic"]["metadata"]["child_status"] == "failed"
 
 
 def _chat_contract(index, prompt):
