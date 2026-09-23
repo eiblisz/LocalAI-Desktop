@@ -846,6 +846,47 @@ class DiscordBotBridge(QObject):
         messages.extend(history)
         return messages
 
+    def _run_chat_web(
+        self,
+        messages,
+        prompt,
+        *,
+        trace=None,
+        explicit_batch_child=False,
+    ):
+        kwargs = {}
+        if trace is not None:
+            kwargs["trace"] = trace
+        if explicit_batch_child:
+            kwargs["explicit_batch_child"] = True
+        return run_chat_web_request(
+            self.ollama_client,
+            self.settings.model,
+            messages,
+            prompt,
+            **kwargs,
+        ).strip()
+
+    def _run_market_web(
+        self,
+        messages,
+        prompt,
+        *,
+        explicit_batch_child=False,
+    ):
+        kwargs = (
+            {"explicit_batch_child": True}
+            if explicit_batch_child
+            else {}
+        )
+        return run_market_web_request(
+            self.ollama_client,
+            self.settings.model,
+            messages,
+            prompt,
+            **kwargs,
+        ).strip()
+
     def _grounded_web_answer(
         self,
         prompt,
@@ -855,22 +896,12 @@ class DiscordBotBridge(QObject):
     ):
         chat = self._load_remote_chat()
         messages = self._messages_for_prompt(chat, prompt)
-        if trace is None:
-            return run_chat_web_request(
-                self.ollama_client,
-                self.settings.model,
-                messages,
-                prompt,
-                explicit_batch_child=explicit_batch_child,
-            ).strip()
-        return run_chat_web_request(
-            self.ollama_client,
-            self.settings.model,
+        return self._run_chat_web(
             messages,
             prompt,
             trace=trace,
             explicit_batch_child=explicit_batch_child,
-        ).strip()
+        )
 
     def _crypto_market_extension(self):
         if self.extension_authority is None:
@@ -1068,21 +1099,17 @@ class DiscordBotBridge(QObject):
                             prompt,
                         ).strip()
                     except Exception:
-                        answer = run_market_web_request(
-                            self.ollama_client,
-                            self.settings.model,
+                        answer = self._run_market_web(
                             messages,
                             prompt,
                             explicit_batch_child=explicit_batch_child,
-                        ).strip()
+                        )
                 else:
-                    answer = run_market_web_request(
-                        self.ollama_client,
-                        self.settings.model,
+                    answer = self._run_market_web(
                         messages,
                         prompt,
                         explicit_batch_child=explicit_batch_child,
-                    ).strip()
+                    )
             elif is_multi_asset_quote_request(prompt):
                 multi_asset_extension = self._multi_asset_market_extension()
                 if multi_asset_extension is not None:
@@ -1092,39 +1119,24 @@ class DiscordBotBridge(QObject):
                             prompt,
                         ).strip()
                     except Exception:
-                        answer = run_market_web_request(
-                            self.ollama_client,
-                            self.settings.model,
+                        answer = self._run_market_web(
                             messages,
                             prompt,
                             explicit_batch_child=explicit_batch_child,
-                        ).strip()
+                        )
                 else:
-                    answer = run_market_web_request(
-                        self.ollama_client,
-                        self.settings.model,
+                    answer = self._run_market_web(
                         messages,
                         prompt,
                         explicit_batch_child=explicit_batch_child,
-                    ).strip()
+                    )
             else:
-                if trace is None:
-                    answer = run_chat_web_request(
-                        self.ollama_client,
-                        self.settings.model,
-                        messages,
-                        prompt,
-                        explicit_batch_child=explicit_batch_child,
-                    ).strip()
-                else:
-                    answer = run_chat_web_request(
-                        self.ollama_client,
-                        self.settings.model,
-                        messages,
-                        prompt,
-                        trace=trace,
-                        explicit_batch_child=explicit_batch_child,
-                    ).strip()
+                answer = self._run_chat_web(
+                    messages,
+                    prompt,
+                    trace=trace,
+                    explicit_batch_child=explicit_batch_child,
+                )
         else:
             if trace is not None:
                 trace.begin("model_inference")
@@ -1135,23 +1147,12 @@ class DiscordBotBridge(QObject):
             if trace is not None:
                 trace.end("model_inference")
             if allow_web_fallback and answer_requires_web_fallback(prompt, answer):
-                if trace is None:
-                    answer = run_chat_web_request(
-                        self.ollama_client,
-                        self.settings.model,
-                        messages,
-                        prompt,
-                        explicit_batch_child=explicit_batch_child,
-                    ).strip()
-                else:
-                    answer = run_chat_web_request(
-                        self.ollama_client,
-                        self.settings.model,
-                        messages,
-                        prompt,
-                        trace=trace,
-                        explicit_batch_child=explicit_batch_child,
-                    ).strip()
+                answer = self._run_chat_web(
+                    messages,
+                    prompt,
+                    trace=trace,
+                    explicit_batch_child=explicit_batch_child,
+                )
 
         if not answer:
             answer = "A helyi modell ures valaszt adott."

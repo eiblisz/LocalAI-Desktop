@@ -70,3 +70,17 @@ def test_concise_bulleted_actions_are_not_misclassified_as_one_followup():
 
     assert result.status == "direct"
     assert result.resolved_intent == prompt
+
+
+def test_explicit_batch_child_never_reenters_contextual_followup_resolution():
+    result = resolve_contextual_followup(
+        "Miért?",
+        [
+            {"role": "user", "content": "Ki Alice Example?"},
+            {"role": "assistant", "content": "Alice Example egy zenész."},
+        ],
+        explicit_batch_child=True,
+    )
+
+    assert result.status == "direct"
+    assert result.resolved_intent == "Miért?"

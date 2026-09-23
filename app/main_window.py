@@ -1276,7 +1276,7 @@ class MainWindow(QMainWindow):
         self.pending_action_original_text = text
         self.pending_action_context_suffix = context_suffix
         self.pending_action_images = list(image_payloads)
-        self._run_next_action_contract_safely()
+        MainWindow._run_next_action_contract_safely(self)
 
     def _action_messages_for_model(self, prompt, constraints=None):
         prompt = str(prompt or "").strip()
@@ -1372,6 +1372,11 @@ class MainWindow(QMainWindow):
             child_profile=profile.kind,
             child_requested_fact=profile.requested_fact,
             child_relation=profile.relation,
+            explicit_batch_child=getattr(
+                contract,
+                "explicit_batch_child",
+                False,
+            ),
         )
         prompt = contract.prompt
         model = self.pending_action_model

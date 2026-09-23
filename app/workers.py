@@ -1963,21 +1963,28 @@ class AdaptiveChatWorker(QObject):
                 if self.trace is not None:
                     self.trace.end("post_processing")
                 if self.trace is None:
+                    web_kwargs = (
+                        {"explicit_batch_child": True}
+                        if self.explicit_batch_child
+                        else {}
+                    )
                     final = run_chat_web_request(
                         self.client,
                         self.model,
                         self.messages,
                         self.user_prompt,
-                        explicit_batch_child=self.explicit_batch_child,
+                        **web_kwargs,
                     ).strip()
                 else:
+                    web_kwargs = {"trace": self.trace}
+                    if self.explicit_batch_child:
+                        web_kwargs["explicit_batch_child"] = True
                     final = run_chat_web_request(
                         self.client,
                         self.model,
                         self.messages,
                         self.user_prompt,
-                        trace=self.trace,
-                        explicit_batch_child=self.explicit_batch_child,
+                        **web_kwargs,
                     ).strip()
                 if self.trace is not None:
                     self.trace.begin("post_processing")
@@ -2146,12 +2153,17 @@ class ArtifactActionWorker(QObject):
 
             source_context = ""
             if self.use_web:
+                web_kwargs = (
+                    {"explicit_batch_child": True}
+                    if self.explicit_batch_child
+                    else {}
+                )
                 source_context = run_chat_web_request(
                     self.client,
                     self.model,
                     self.messages,
                     self.user_prompt,
-                    explicit_batch_child=self.explicit_batch_child,
+                    **web_kwargs,
                 ).strip()
 
             results = []

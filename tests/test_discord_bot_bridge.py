@@ -1,3 +1,4 @@
+import asyncio
 import inspect
 from pathlib import Path
 from types import SimpleNamespace
@@ -5,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.artifact_service import ArtifactPlanItem, ArtifactRequest
+from app.action_runtime import ActionRuntime
 from app.discord_bot_bridge import (
     DiscordBotBridge,
     DiscordBotSettings,
@@ -13,6 +15,7 @@ from app.discord_bot_bridge import (
     validate_bot_token,
 )
 from app.memory_store import MemoryStore
+from app.request_trace import RequestTrace
 from app.storage import ChatStore
 
 
@@ -77,6 +80,155 @@ def test_split_discord_text_never_exceeds_limit():
     assert len(chunks) > 1
     assert all(0 < len(chunk) <= 500 for chunk in chunks)
     assert " ".join(chunks).replace("  ", " ").startswith("abc abc")
+
+
+class AsyncTyping:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return False
+
+
+class BatchMessage:
+    def __init__(self, on_reply=None):
+        self.channel = self
+        self.replies = []
+        self.on_reply = on_reply
+
+    def typing(self):
+        return AsyncTyping()
+
+    async def reply(self, content, **kwargs):
+        if self.on_reply is not None:
+            self.on_reply(content, kwargs)
+        self.replies.append((content, kwargs))
+
+
+def _batch_bridge(tmp_path):
+    settings = DiscordBotSettings(
+        extension_id="ext-batch",
+        name="Prometheusz",
+        guild_id=111111111111111111,
+        channel_id=222222222222222222,
+        allowed_user_id=333333333333333333,
+        model="qwen3",
+    )
+    return DiscordBotBridge(
+        ollama_client=SimpleNamespace(),
+        chat_store=ChatStore(tmp_path / "chats"),
+        settings=settings,
+        token="T" * 40,
+    )
+
+
+def test_discord_async_child_failure_persists_before_reply_and_batch_continues(
+    tmp_path,
+):
+    bridge = _batch_bridge(tmp_path)
+    content = "1. Ki Alice Example?\n2. Mi a TCP?\n3. Mikor alakult a Beta Band?"
+    contracts = ActionRuntime().plan_many(content)
+    executed = []
+
+    def execute(prompt, _plan, _trace, **_kwargs):
+        executed.append(prompt)
+        if contract_index(prompt) == 0:
+            raise RuntimeError("no usable public sources")
+        chat = bridge._load_remote_chat()
+        chat["messages"].append(
+            {"role": "assistant", "content": f"answer:{prompt}"}
+        )
+        bridge.chat_store.save(chat)
+        return {
+            "chat_id": chat["id"],
+            "messages": [f"answer:{prompt}"],
+            "artifacts": [],
+        }
+
+    def contract_index(prompt):
+        return [item.prompt for item in contracts].index(prompt)
+
+    bridge._execute_planned_action = execute
+    persisted_before_reply = []
+
+    def observe_reply(_content, _kwargs):
+        chat = bridge._load_remote_chat()
+        persisted_before_reply.append(
+            any(item.get("failure_code") for item in chat["messages"])
+        )
+
+    message = BatchMessage(on_reply=observe_reply)
+    root_trace = RequestTrace("discord")
+
+    chat_id = asyncio.run(
+        bridge._run_action_batch(
+            message,
+            content,
+            contracts,
+            root_trace,
+            [],
+        )
+    )
+
+    assert executed == [item.prompt for item in contracts]
+    assert persisted_before_reply[0] is True
+    chat = bridge.chat_store.load(chat_id)
+    failure = next(item for item in chat["messages"] if item.get("failure_code"))
+    assert failure["failure_code"] == "no_usable_public_sources"
+    assert failure["diagnostic"]["metadata"]["child_status"] == "failed"
+    assert failure["child_trace"]["child_trace_id"]
+    assert failure["child_trace"]["batch_trace_id"] == root_trace.request_id
+    assert [
+        item["content"] for item in chat["messages"]
+        if item.get("role") == "assistant"
+    ][-3:] == [
+        failure["content"],
+        f"answer:{contracts[1].prompt}",
+        f"answer:{contracts[2].prompt}",
+    ]
+
+
+def test_discord_reply_failure_does_not_abort_remaining_batch(tmp_path):
+    bridge = _batch_bridge(tmp_path)
+    content = "1. Ki Alice Example?\n2. Mi a TCP?\n3. Mikor alakult a Beta Band?"
+    contracts = ActionRuntime().plan_many(content)
+    executed = []
+
+    def execute(prompt, _plan, _trace, **_kwargs):
+        executed.append(prompt)
+        chat = bridge._load_remote_chat()
+        chat["messages"].append(
+            {"role": "assistant", "content": f"answer:{prompt}"}
+        )
+        bridge.chat_store.save(chat)
+        return {
+            "chat_id": chat["id"],
+            "messages": [f"answer:{prompt}"],
+            "artifacts": [],
+        }
+
+    bridge._execute_planned_action = execute
+    reply_attempts = []
+
+    def fail_first_reply(content, _kwargs):
+        reply_attempts.append(content)
+        if len(reply_attempts) == 1:
+            raise RuntimeError("Discord unavailable")
+
+    message = BatchMessage(on_reply=fail_first_reply)
+
+    asyncio.run(
+        bridge._run_action_batch(
+            message,
+            content,
+            contracts,
+            RequestTrace("discord"),
+            [],
+        )
+    )
+
+    assert executed == [item.prompt for item in contracts]
+    assert len(reply_attempts) == 3
 
 
 def test_message_allowlist_rejects_other_users_channels_guilds_and_bots(tmp_path: Path):
@@ -1136,14 +1288,16 @@ def test_discord_market_extensions_use_remote_host_authority():
 
 def test_prometheusz_uses_action_planner_v2_contracts_before_execution():
     source = inspect.getsource(DiscordBotBridge._run)
+    batch_source = inspect.getsource(DiscordBotBridge._run_action_batch)
     init_source = inspect.getsource(DiscordBotBridge.__init__)
 
     assert "self.action_runtime = ActionRuntime()" in init_source
     assert "plan_chat_actions(" in source
     assert "web_mode=self._current_web_mode()" in source
-    assert "for contract in contracts:" in source
-    assert "contract.prompt" in source
-    assert "contract.plan" in source
+    assert "self._run_action_batch(" in source
+    assert "for contract in contracts:" in batch_source
+    assert "contract.prompt" in batch_source
+    assert "contract.plan" in batch_source
 
 
 

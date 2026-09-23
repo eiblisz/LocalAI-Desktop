@@ -5,6 +5,15 @@ from app import main_window as main_window_module
 from app.action_runtime import ActionRuntime
 from app.main_window import MainWindow
 from app.request_trace import RequestTrace
+from PySide6.QtCore import (
+    QCoreApplication,
+    QEventLoop,
+    QObject,
+    QThread,
+    QTimer,
+    Signal,
+    Slot,
+)
 
 
 class FakeLabel:
@@ -311,6 +320,7 @@ def _batch_failure_harness(contracts):
         pending_action_images=[],
         pending_action_history_messages=[],
         pending_action_batch_size=len(contracts),
+        pending_batch_trace=RequestTrace("desktop"),
         pending_request_trace=RequestTrace("desktop"),
         partial_assistant="",
         web_mode="AUTO",
@@ -345,6 +355,10 @@ def _batch_failure_harness(contracts):
     )
     harness._run_next_action_contract = MethodType(
         MainWindow._run_next_action_contract,
+        harness,
+    )
+    harness._run_next_action_contract_safely = MethodType(
+        MainWindow._run_next_action_contract_safely,
         harness,
     )
     return harness, rendered, loaded, scheduled
@@ -545,3 +559,154 @@ def test_memory_child_failure_uses_same_safe_nonblocking_batch_result(
     assert saved["diagnostic"]["metadata"]["child_status"] == "failed"
     assert saved["diagnostic"]["metadata"]["failure_code"] == "execution_failed"
     assert "database connection details" not in saved["content"]
+
+
+class EventLoopWorker(QObject):
+    token = Signal(str)
+    phase = Signal(str)
+    finished = Signal()
+    failed = Signal(str)
+
+    def __init__(self, prompt, runtime_failures):
+        super().__init__()
+        self.prompt = prompt
+        self.runtime_failures = runtime_failures
+        self.source_metadata = []
+        self.diagnostic_metadata = {}
+
+    @Slot()
+    def run(self):
+        if self.prompt in self.runtime_failures:
+            self.failed.emit(self.runtime_failures[self.prompt])
+            return
+        self.token.emit(f"answer:{self.prompt}")
+        self.finished.emit()
+
+    def stop(self):
+        pass
+
+
+def _run_qt_batch(monkeypatch, contracts, *, runtime_failures=None, start_failures=()):
+    app = QCoreApplication.instance() or QCoreApplication([])
+    loop = QEventLoop()
+    base_harness, _rendered, _loaded, scheduled = _batch_failure_harness(
+        contracts
+    )
+    harness = QObject()
+    harness.__dict__.update(base_harness.__dict__)
+    harness._cleanup_worker = MethodType(MainWindow._cleanup_worker, harness)
+    harness._generation_target_chat = MethodType(
+        MainWindow._generation_target_chat,
+        harness,
+    )
+    harness._run_next_action_contract = MethodType(
+        MainWindow._run_next_action_contract,
+        harness,
+    )
+    harness._run_next_action_contract_safely = MethodType(
+        MainWindow._run_next_action_contract_safely,
+        harness,
+    )
+    harness.worker = None
+    harness.thread = None
+    harness.partial_assistant = ""
+    harness._on_token = MethodType(MainWindow._on_token, harness)
+    harness._on_finished = MethodType(MainWindow._on_finished, harness)
+    harness._on_failed = MethodType(MainWindow._on_failed, harness)
+    harness._render_streaming_chat = lambda: None
+    harness._start_thinking_indicator = lambda *_args, **_kwargs: None
+    harness.pending_action_contracts = list(contracts)
+    harness.active_action_contract = None
+
+    started = []
+    runtime_failures = dict(runtime_failures or {})
+
+    def worker_factory(_client, _model, _messages, prompt, **_kwargs):
+        started.append(prompt)
+        if prompt in start_failures:
+            raise RuntimeError(f"start failed: {prompt}")
+        return EventLoopWorker(prompt, runtime_failures)
+
+    monkeypatch.setattr(main_window_module, "QThread", QThread)
+    monkeypatch.setattr(
+        main_window_module,
+        "AdaptiveChatWorker",
+        worker_factory,
+    )
+
+    timeout = QTimer()
+    timeout.setSingleShot(True)
+    timeout.timeout.connect(loop.quit)
+
+    def stop_when_drained():
+        if (
+            not harness.pending_action_contracts
+            and harness.worker is None
+            and harness.thread is None
+            and not harness.generation_chat_id
+        ):
+            timeout.stop()
+            loop.quit()
+            return
+        QTimer.singleShot(5, stop_when_drained)
+
+    timeout.start(3000)
+    QTimer.singleShot(0, harness._run_next_action_contract_safely)
+    QTimer.singleShot(5, stop_when_drained)
+    loop.exec()
+    assert not timeout.isActive(), "Qt event loop timed out before the batch drained"
+    return harness, started, scheduled
+
+
+def test_real_qt_event_loop_runtime_failure_continues_and_drains(monkeypatch):
+    contracts = [
+        _chat_contract(0, "Q1"),
+        _chat_contract(1, "Q2"),
+        _chat_contract(2, "Q3"),
+    ]
+
+    harness, started, scheduled = _run_qt_batch(
+        monkeypatch,
+        contracts,
+        runtime_failures={"Q1": "evidence guard rejected the result"},
+    )
+
+    assert started == ["Q1", "Q2", "Q3"]
+    assert harness.pending_action_contracts == []
+    assert scheduled == [True]
+    messages = harness.store.chats["chat-origin"]["messages"]
+    failure = next(item for item in messages if item.get("diagnostic"))
+    assert failure["diagnostic"]["metadata"]["child_status"] == "failed"
+    assert failure["diagnostic"]["metadata"]["child_index"] == 0
+    assert failure["diagnostic"]["child_trace_id"]
+    assert failure["diagnostic"]["batch_trace_id"]
+    assert failure["diagnostic"]["build_sha"]
+
+
+def test_real_qt_event_loop_start_failure_continues_to_next_child(monkeypatch):
+    contracts = [
+        _chat_contract(0, "Q1"),
+        _chat_contract(1, "Q2"),
+        _chat_contract(2, "Q3"),
+    ]
+
+    harness, started, scheduled = _run_qt_batch(
+        monkeypatch,
+        contracts,
+        start_failures={"Q2"},
+    )
+
+    assert started == ["Q1", "Q2", "Q3"]
+    assert harness.pending_action_contracts == []
+    assert scheduled == [True]
+    failures = [
+        item for item in harness.store.chats["chat-origin"]["messages"]
+        if item.get("diagnostic")
+    ]
+    assert [
+        item["diagnostic"]["metadata"].get("diagnostic_failure")
+        for item in failures
+    ] == ["start failed: Q2"]
+    assert len(failures) == 1
+    assert failures[0]["diagnostic"]["metadata"]["child_index"] == 1
+    assert failures[0]["diagnostic"]["metadata"]["failure_phase"] == "child_start"
