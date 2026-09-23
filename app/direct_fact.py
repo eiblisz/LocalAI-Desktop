@@ -64,7 +64,11 @@ def requested_fact_relation(prompt):
     semantic_relation = analyze_question(prompt).relation
     if semantic_relation == "event_date":
         return "event"
-    if semantic_relation in {"creation", "formation", "birth"}:
+    if semantic_relation in {
+        "authorship", "authorship_creation", "creation", "formation", "birth",
+    }:
+        if semantic_relation in {"authorship", "authorship_creation"}:
+            return "creation"
         return semantic_relation
 
     folded = _fold(prompt)

@@ -8,11 +8,11 @@ def test_temporal_creation_semantics_are_separate_from_activity_depth():
     profile = classify_request("Mikor írta a Szerző az Ének című verset?")
 
     assert semantics.requested_fact == "temporal"
-    assert semantics.relation == "creation"
+    assert semantics.relation == "authorship_creation"
     assert semantics.premise_check_required is True
     assert profile.kind == TASK_DIRECT_FACT
     assert profile.response_depth == "concise"
-    assert profile.relation == "creation"
+    assert profile.relation == "authorship_creation"
     assert profile.response_language == "hu"
 
 

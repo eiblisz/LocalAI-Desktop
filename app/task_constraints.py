@@ -1,7 +1,11 @@
 from dataclasses import dataclass
 import re
 
-from .language_policy import detect_user_language
+from .language_policy import (
+    detect_user_language,
+    effective_response_language,
+    explicit_response_language,
+)
 from .request_semantics import classify_request
 
 
@@ -77,9 +81,18 @@ def _format_constraints(text):
     return tuple(result[:8])
 
 
-def build_task_constraints(user_text):
+def build_task_constraints(user_text, *, parent_text=""):
     parent = _clean(user_text)
-    language = detect_user_language(parent)
+    canonical_parent = _clean(parent_text) or parent
+    current_language = (
+        explicit_response_language(parent)
+        or detect_user_language(parent)
+    )
+    language = (
+        current_language
+        if current_language in {"hu", "de", "en"}
+        else effective_response_language(canonical_parent)
+    )
     output_style = (
         "natural_hungarian"
         if language == "hu"
@@ -93,9 +106,9 @@ def build_task_constraints(user_text):
         response_language=language,
         output_style=output_style,
         forbidden_language_drift=True,
-        parent_intent=parent[:2400],
-        format_constraints=_format_constraints(parent),
-        user_explicit_constraints=_explicit_constraints(parent),
+        parent_intent=canonical_parent[:2400],
+        format_constraints=_format_constraints(canonical_parent),
+        user_explicit_constraints=_explicit_constraints(canonical_parent),
         request_profile=classify_request(parent),
     )
 

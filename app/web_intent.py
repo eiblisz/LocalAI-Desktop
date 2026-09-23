@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from .artifact_service import ArtifactPlanItem, infer_artifact_requests
 from .memory_extractor import is_explicit_memory_request
 from .request_semantics import is_entity_identity_question
+from .text_normalization import canonical_match_text
 
 
 ACTION_MEMORY_WRITE = "memory_write"
@@ -41,7 +42,11 @@ class PlannedAction:
 
 
 def _fold(text):
-    return " ".join(str(text or "").casefold().split())
+    return canonical_match_text(text)
+
+
+def _contains_any(text, markers):
+    return any(_fold(marker) in text for marker in markers if _fold(marker))
 
 
 def is_factual_risk_request(text):
@@ -103,7 +108,7 @@ def is_factual_risk_request(text):
         "wann entstand",
         "wann wurde gegrundet",
     )
-    if not any(marker in normalized for marker in relation_markers):
+    if not _contains_any(normalized, relation_markers):
         return False
 
     # A proper-name/title cue keeps generic educational questions local.
@@ -172,7 +177,7 @@ def looks_like_web_request(text):
         "available now",
     ]
     return (
-        any(marker in normalized for marker in markers)
+        _contains_any(normalized, markers)
         or bool(re.search(r"\bkeress\w*\b", normalized, flags=re.IGNORECASE))
         or is_freshness_sensitive_request(text)
         or is_factual_risk_request(text)
@@ -239,8 +244,8 @@ def is_freshness_sensitive_request(text):
     if currency_pair_quote:
         return True
 
-    if any(marker in normalized for marker in explanatory_markers) and not any(
-        marker in normalized for marker in explicit_recency_markers
+    if _contains_any(normalized, explanatory_markers) and not _contains_any(
+        normalized, explicit_recency_markers
     ):
         return False
 
@@ -327,7 +332,7 @@ def is_freshness_sensitive_request(text):
         "breaking news",
     )
     for marker in markers:
-        phrase = marker.strip()
+        phrase = _fold(marker)
         if not phrase:
             continue
         if re.search(
@@ -368,7 +373,7 @@ def _looks_non_factual(text):
         "übersetz",
         "ubersetz",
     )
-    if any(marker in normalized for marker in phrase_markers):
+    if _contains_any(normalized, phrase_markers):
         return True
 
     generation_verbs = (
@@ -443,7 +448,7 @@ def answer_requires_web_fallback(user_text, answer):
         "keinen zugriff auf das internet",
         "wissensstand",
     )
-    return any(marker in normalized for marker in markers)
+    return _contains_any(normalized, markers)
 
 
 def plan_user_action(text, *, force_web=False, disable_web=False):

@@ -169,6 +169,8 @@ class MainWindow(QMainWindow):
         self.pending_action_original_text = ""
         self.pending_action_context_suffix = ""
         self.pending_action_images = []
+        self.pending_action_history_messages = []
+        self.pending_action_batch_size = 0
         self.pending_request_trace = None
         self.expanded_source_message_ids = set()
         self.expanded_diagnostic_message_ids = set()
@@ -1246,6 +1248,15 @@ class MainWindow(QMainWindow):
             )
             return
 
+        self.pending_action_batch_size = len(self.pending_action_contracts)
+        self.pending_action_history_messages = list(
+            (self.current_chat or {}).get("messages", [])
+        )[:-1]
+        if self.pending_request_trace is not None:
+            self.pending_request_trace.add_metadata(
+                batch_size=self.pending_action_batch_size,
+            )
+            self.pending_request_trace.emit_if_enabled()
         self.pending_action_model = model
         self.pending_action_original_text = text
         self.pending_action_context_suffix = context_suffix
@@ -1287,13 +1298,12 @@ class MainWindow(QMainWindow):
             system_prompt = f"{system_prompt}\n\n{memory_context}"
 
         messages = [{"role": "system", "content": system_prompt}]
-        chat_messages = list((self.current_chat or {}).get("messages", []))
+        chat_messages = list(self.pending_action_history_messages)
         original_index = -1
         for index in range(len(chat_messages) - 1, -1, -1):
-            message = chat_messages[index]
             if (
-                message.get("role") == "user"
-                and str(message.get("content") or "").strip()
+                chat_messages[index].get("role") == "user"
+                and str(chat_messages[index].get("content") or "").strip()
                 == self.pending_action_original_text
             ):
                 original_index = index
@@ -1330,6 +1340,16 @@ class MainWindow(QMainWindow):
 
         contract = self.pending_action_contracts.pop(0)
         self.active_action_contract = contract
+        self.pending_request_trace = RequestTrace("desktop")
+        profile = contract.constraints.request_profile
+        self.pending_request_trace.add_metadata(
+            batch_size=self.pending_action_batch_size,
+            child_index=contract.index,
+            child_status="running",
+            child_profile=profile.kind,
+            child_requested_fact=profile.requested_fact,
+            child_relation=profile.relation,
+        )
         prompt = contract.prompt
         model = self.pending_action_model
         self.generation_chat_id = str(
@@ -1556,6 +1576,7 @@ class MainWindow(QMainWindow):
 
         timing = None
         if self.pending_request_trace is not None:
+            self.pending_request_trace.add_metadata(child_status="passed")
             self.pending_request_trace.begin("response_send")
             self.pending_request_trace.end("response_send")
             timing = self.pending_request_trace.snapshot()
@@ -1655,10 +1676,26 @@ class MainWindow(QMainWindow):
         public = public_error(full_message)
         if self.pending_request_trace is not None:
             self.pending_request_trace.add_metadata(
+                child_status="failed",
                 failure_code=public.code,
                 diagnostic_failure=full_message[:1000],
             )
             self.pending_request_trace.emit_if_enabled()
+
+        target_chat = self.current_chat
+        if target_chat is not None:
+            target_chat["messages"].append({
+                "id": uuid.uuid4().hex,
+                "role": "assistant",
+                "content": public.message,
+                "diagnostic": (
+                    self.pending_request_trace.snapshot()
+                    if self.pending_request_trace is not None
+                    else {}
+                ),
+            })
+            self.store.save(target_chat)
+            self._render_chat()
 
         dialog = QMessageBox(self)
         dialog.setIcon(QMessageBox.Critical)
@@ -1685,6 +1722,8 @@ class MainWindow(QMainWindow):
             self.pending_action_original_text = ""
             self.pending_action_context_suffix = ""
             self.pending_action_images = []
+            self.pending_action_history_messages = []
+            self.pending_action_batch_size = 0
             QTimer.singleShot(0, self._run_pending_scheduled_task)
 
     def _stop_generation(self):

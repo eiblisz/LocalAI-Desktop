@@ -212,8 +212,6 @@ class ActionRuntime:
             disable_web=bool(disable_web),
         )
         suffix = str(model_context_suffix or "")
-        constraints = build_task_constraints(user_text)
-
         contracts = []
         for index, item in enumerate(planned):
             execution_text = str(item.prompt or "") + suffix
@@ -235,7 +233,10 @@ class ActionRuntime:
                         decision.route,
                         use_web=decision.use_web,
                     ),
-                    constraints=constraints,
+                    constraints=build_task_constraints(
+                        item.prompt,
+                        parent_text=user_text,
+                    ),
                 )
             )
 

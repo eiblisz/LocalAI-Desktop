@@ -34,5 +34,6 @@ def plan_chat_actions(
             "routing",
             web_mode=mode,
             routes=",".join(str(item.route) for item in validated),
+            batch_size=len(validated),
         )
     return validated

@@ -48,6 +48,11 @@ def test_ambiguous_turn_uses_hungarian_as_the_canonical_default():
     )
 
 
+def test_explicit_current_turn_language_has_priority():
+    assert effective_response_language("Válaszolj angolul: ki Ada Lovelace?") == "en"
+    assert effective_response_language("Answer only in English: ki Ada Lovelace?") == "en"
+
+
 def test_german_umlaut_alone_is_not_misclassified_as_hungarian():
     assert detect_user_language("Wie viel kostet das für mich?") != "hu"
 

@@ -341,15 +341,48 @@ class DiscordBotBridge(QObject):
                     )
 
                     last_chat_id = ""
+                    batch_history = list(
+                        self._load_remote_chat().get("messages", [])
+                    )
                     for contract in contracts:
-                        async with message.channel.typing():
-                            result = await asyncio.to_thread(
-                                self._execute_planned_action,
-                                contract.prompt,
-                                contract.plan,
-                                trace,
-                                original_prompt=content,
+                        child_trace = RequestTrace("discord")
+                        profile = contract.constraints.request_profile
+                        child_trace.add_metadata(
+                            batch_size=len(contracts),
+                            child_index=contract.index,
+                            child_status="running",
+                            child_profile=profile.kind,
+                            child_requested_fact=profile.requested_fact,
+                            child_relation=profile.relation,
+                        )
+                        try:
+                            async with message.channel.typing():
+                                result = await asyncio.to_thread(
+                                    self._execute_planned_action,
+                                    contract.prompt,
+                                    contract.plan,
+                                    child_trace,
+                                    original_prompt=content,
+                                    isolated_history=batch_history,
+                                )
+                            child_trace.add_metadata(child_status="passed")
+                        except Exception as child_exc:
+                            compact = " ".join(str(child_exc).split())[:500]
+                            public = public_error(
+                                compact,
+                                language=contract.constraints.response_language,
                             )
+                            child_trace.add_metadata(
+                                child_status="failed",
+                                failure_code=public.code,
+                                diagnostic_failure=compact,
+                            )
+                            await message.reply(
+                                public.message,
+                                mention_author=False,
+                            )
+                            child_trace.emit_if_enabled()
+                            continue
 
                         last_chat_id = str(result.get("chat_id", "") or last_chat_id)
                         for reply_text in result.get("messages", []):
@@ -361,6 +394,7 @@ class DiscordBotBridge(QObject):
                                 file=discord.File(str(artifact_path)),
                                 mention_author=False,
                             )
+                        child_trace.emit_if_enabled()
 
                     trace.begin("response_send")
                     if last_chat_id:
@@ -577,6 +611,9 @@ class DiscordBotBridge(QObject):
             system += (
                 "\n\nFor current or time-sensitive claims, use ONLY the VERIFIED WEB RESEARCH "
                 "SOURCE supplied in the user content as factual authority. Prefer explicit "
+                "facts even when that source is in another language. The evidence language "
+                "does not determine the response language; do not translate it in a separate "
+                "model call. "
                 "first-party/official facts over secondary sources and stale model priors. "
                 "Preserve exact version numbers, dates, prices, and source URLs from that "
                 "evidence. Do not add release notes, features, changes, performance claims, "
@@ -815,6 +852,7 @@ class DiscordBotBridge(QObject):
         action_plan,
         trace=None,
         original_prompt=None,
+        isolated_history=None,
     ):
         if action_plan.has(ACTION_MEMORY_WRITE):
             answer, chat_id = self._remember_remote(prompt)
@@ -842,6 +880,7 @@ class DiscordBotBridge(QObject):
             allow_web_fallback=self._current_web_mode() != "OFF",
             trace=trace,
             original_prompt=original_prompt,
+            isolated_history=isolated_history,
         )
         return {"chat_id": chat_id, "messages": [answer], "artifacts": []}
 
@@ -852,6 +891,7 @@ class DiscordBotBridge(QObject):
         allow_web_fallback=None,
         trace=None,
         original_prompt=None,
+        isolated_history=None,
     ):
         if use_web is None:
             crypto_available, multi_asset_available = (
@@ -881,10 +921,16 @@ class DiscordBotBridge(QObject):
 
         chat = self._load_remote_chat()
         chat["model"] = self.settings.model
-        chat["messages"].append({
-            "role": "user",
-            "content": str(original_prompt or prompt),
-        })
+        stored_prompt = str(original_prompt or prompt)
+        if not any(
+            item.get("role") == "user"
+            and str(item.get("content") or "") == stored_prompt
+            for item in chat.get("messages", [])[-8:]
+        ):
+            chat["messages"].append({
+                "role": "user",
+                "content": stored_prompt,
+            })
         self.chat_store.save(chat)
 
         direct_answer = self._direct_compound_answer(prompt)
@@ -895,7 +941,14 @@ class DiscordBotBridge(QObject):
             self.chat_store.save(chat)
             return direct_answer, str(chat.get("id", ""))
 
-        messages = self._messages_for_prompt(chat, prompt)
+        model_chat = chat
+        if isolated_history is not None:
+            model_chat = dict(chat)
+            model_chat["messages"] = list(isolated_history) + [{
+                "role": "user",
+                "content": prompt,
+            }]
+        messages = self._messages_for_prompt(model_chat, prompt)
 
         if use_web:
             if is_crypto_quote_request(prompt):

@@ -1,7 +1,7 @@
 import re
-import unicodedata
 
 from .task_constraints import TaskConstraints
+from .text_normalization import canonical_match_text
 
 
 class ContextDriftError(RuntimeError):
@@ -22,8 +22,7 @@ _REFERENTIAL_MARKERS = (
 
 
 def _fold(value):
-    normalized = unicodedata.normalize("NFKD", str(value or "").casefold())
-    return "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    return canonical_match_text(value)
 
 
 def is_referential_followup(text):

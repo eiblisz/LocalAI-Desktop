@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 import re
-import unicodedata
 
+from .text_normalization import canonical_match_text
 
 _META_MARKERS = (
     "search query", "search queries", "query should", "create a query",
@@ -21,12 +21,7 @@ _STOP_WORDS = frozenset({
 
 
 def _fold(value):
-    normalized = unicodedata.normalize("NFKD", str(value or "").lower())
-    without_accents = "".join(
-        character for character in normalized
-        if not unicodedata.combining(character)
-    )
-    return " ".join(without_accents.split())
+    return canonical_match_text(value)
 
 
 def _terms(value):
