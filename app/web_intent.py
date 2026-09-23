@@ -71,6 +71,8 @@ def is_factual_risk_request(text):
         "mikor szuletett",
         "mikor történt",
         "mikor tortent",
+        "mikor alakult",
+        "mikor jott letre",
         "melyik évben",
         "melyik evben",
         "szerzője",
@@ -81,6 +83,9 @@ def is_factual_risk_request(text):
         "who founded",
         "when did",
         "when was",
+        "when formed",
+        "when was formed",
+        "when was established",
         "what year",
         "wer schrieb",
         "wer verfasste",
@@ -88,6 +93,8 @@ def is_factual_risk_request(text):
         "wer grundete",
         "wann wurde",
         "wann schrieb",
+        "wann entstand",
+        "wann wurde gegrundet",
     )
     if not any(marker in normalized for marker in relation_markers):
         return False

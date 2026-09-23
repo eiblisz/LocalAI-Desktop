@@ -23,6 +23,15 @@ def test_direct_fact_profile_is_narrow_and_concise():
     assert profile.page_fetch_budget == 2
 
 
+def test_entity_formation_date_is_a_narrow_direct_fact():
+    profile = classify_request("Mikor alakult a Sample Band?")
+
+    assert profile.kind == TASK_DIRECT_FACT
+    assert profile.requested_fact == "temporal"
+    assert profile.query_budget == 1
+    assert profile.page_fetch_budget == 2
+
+
 def test_entity_overview_profile_is_not_treated_as_direct_fact():
     profile = classify_request(
         "Mit tudsz az Ezüst Hold zenekarról?"

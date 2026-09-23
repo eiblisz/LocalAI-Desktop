@@ -2243,3 +2243,17 @@ def test_direct_fact_keeps_narrow_semantic_budget():
     assert worker.request_profile.source_budget == 4
     assert worker.request_profile.page_fetch_budget == 2
     assert worker._wants_detailed_web_answer() is False
+
+
+def test_entity_formation_question_uses_direct_fact_execution_budget():
+    worker = workers.ChatWebWorker(
+        DummyWebClient(),
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Mikor alakult a Sample Band?",
+    )
+
+    assert worker.request_profile.kind == "direct_fact"
+    assert worker.request_profile.requested_fact == "temporal"
+    assert worker.execution_control.budget.timeout_seconds == 45.0
+    assert worker.execution_control.budget.max_search_calls == 1
