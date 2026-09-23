@@ -52,6 +52,7 @@ class ActionContract:
     market_fallback: bool
     required_authorities: tuple[str, ...]
     constraints: object
+    explicit_batch_child: bool = False
 
     @property
     def artifact_plans(self):
@@ -212,6 +213,7 @@ class ActionRuntime:
             disable_web=bool(disable_web),
         )
         suffix = str(model_context_suffix or "")
+        explicit_batch = len(planned) > 1
         contracts = []
         for index, item in enumerate(planned):
             execution_text = str(item.prompt or "") + suffix
@@ -236,7 +238,9 @@ class ActionRuntime:
                     constraints=build_task_constraints(
                         item.prompt,
                         parent_text=user_text,
+                        explicit_batch_child=explicit_batch,
                     ),
+                    explicit_batch_child=explicit_batch,
                 )
             )
 

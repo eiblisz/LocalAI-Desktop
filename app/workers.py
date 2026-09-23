@@ -281,6 +281,7 @@ class ChatWebWorker(QObject):
         *,
         compact_market_quote: bool = False,
         trace=None,
+        explicit_batch_child=False,
     ):
         super().__init__()
         self.client = client
@@ -290,6 +291,7 @@ class ChatWebWorker(QObject):
         self.followup_resolution = resolve_contextual_followup(
             self.original_user_prompt,
             self.messages,
+            explicit_batch_child=explicit_batch_child,
         )
         self.user_prompt = (
             self.followup_resolution.resolved_intent
@@ -1836,7 +1838,15 @@ def _run_web_worker(worker):
     return answer
 
 
-def run_chat_web_request(client, model, messages, user_prompt, *, trace=None):
+def run_chat_web_request(
+    client,
+    model,
+    messages,
+    user_prompt,
+    *,
+    trace=None,
+    explicit_batch_child=False,
+):
     """Run the existing grounded web worker synchronously and collect its answer."""
     return _run_web_worker(
         ChatWebWorker(
@@ -1845,11 +1855,20 @@ def run_chat_web_request(client, model, messages, user_prompt, *, trace=None):
             messages,
             user_prompt,
             trace=trace,
+            explicit_batch_child=explicit_batch_child,
         )
     )
 
 
-def run_market_web_request(client, model, messages, user_prompt, *, trace=None):
+def run_market_web_request(
+    client,
+    model,
+    messages,
+    user_prompt,
+    *,
+    trace=None,
+    explicit_batch_child=False,
+):
     """Run concise grounded web fallback for a live market-value lookup."""
     return _run_web_worker(
         ChatWebWorker(
@@ -1859,6 +1878,7 @@ def run_market_web_request(client, model, messages, user_prompt, *, trace=None):
             user_prompt,
             compact_market_quote=True,
             trace=trace,
+            explicit_batch_child=explicit_batch_child,
         )
     )
 
@@ -1887,6 +1907,7 @@ class AdaptiveChatWorker(QObject):
         allow_web_fallback: bool = True,
         constraints=None,
         trace=None,
+        explicit_batch_child=False,
     ):
         super().__init__()
         self.client = client
@@ -1896,6 +1917,7 @@ class AdaptiveChatWorker(QObject):
         self.allow_web_fallback = bool(allow_web_fallback)
         self.constraints = constraints
         self.trace = trace
+        self.explicit_batch_child = bool(explicit_batch_child)
         self._stop_event = threading.Event()
         self.execution_control = ExecutionControl()
         self.used_web_fallback = False
@@ -1946,6 +1968,7 @@ class AdaptiveChatWorker(QObject):
                         self.model,
                         self.messages,
                         self.user_prompt,
+                        explicit_batch_child=self.explicit_batch_child,
                     ).strip()
                 else:
                     final = run_chat_web_request(
@@ -1954,6 +1977,7 @@ class AdaptiveChatWorker(QObject):
                         self.messages,
                         self.user_prompt,
                         trace=self.trace,
+                        explicit_batch_child=self.explicit_batch_child,
                     ).strip()
                 if self.trace is not None:
                     self.trace.begin("post_processing")
@@ -2066,6 +2090,7 @@ class ArtifactActionWorker(QObject):
         *,
         use_web=False,
         constraints=None,
+        explicit_batch_child=False,
     ):
         super().__init__()
         self.client = client
@@ -2075,6 +2100,7 @@ class ArtifactActionWorker(QObject):
         self.artifact_plans = tuple(artifact_plans or ())
         self.use_web = bool(use_web)
         self.constraints = constraints
+        self.explicit_batch_child = bool(explicit_batch_child)
         self._stop_event = threading.Event()
         self.execution_control = ExecutionControl(
             budget=ExecutionBudget(
@@ -2125,6 +2151,7 @@ class ArtifactActionWorker(QObject):
                     self.model,
                     self.messages,
                     self.user_prompt,
+                    explicit_batch_child=self.explicit_batch_child,
                 ).strip()
 
             results = []

@@ -18,6 +18,7 @@ class TaskConstraints:
     format_constraints: tuple[str, ...] = ()
     user_explicit_constraints: tuple[str, ...] = ()
     request_profile: object = None
+    explicit_batch_child: bool = False
 
 
 def _clean(text):
@@ -81,7 +82,12 @@ def _format_constraints(text):
     return tuple(result[:8])
 
 
-def build_task_constraints(user_text, *, parent_text=""):
+def build_task_constraints(
+    user_text,
+    *,
+    parent_text="",
+    explicit_batch_child=False,
+):
     parent = _clean(user_text)
     canonical_parent = _clean(parent_text) or parent
     current_language = (
@@ -106,10 +112,15 @@ def build_task_constraints(user_text, *, parent_text=""):
         response_language=language,
         output_style=output_style,
         forbidden_language_drift=True,
-        parent_intent=canonical_parent[:2400],
+        parent_intent=(
+            parent[:2400]
+            if explicit_batch_child
+            else canonical_parent[:2400]
+        ),
         format_constraints=_format_constraints(canonical_parent),
         user_explicit_constraints=_explicit_constraints(canonical_parent),
         request_profile=classify_request(parent),
+        explicit_batch_child=bool(explicit_batch_child),
     )
 
 
@@ -128,10 +139,18 @@ def task_constraints_instruction(constraints, *, current_subtask=""):
         f"- Expected response language: {language_name}.",
         f"- Output style: {constraints.output_style}.",
         "- Language drift is forbidden unless the user explicitly requests a language change.",
-        "- Preserve the parent task's subject, entities, goal, prohibitions, and format constraints.",
-        "- Treat the current subtask as part of the parent task, not as an unrelated standalone topic.",
-        f"- Parent task: {constraints.parent_intent}",
     ]
+    if constraints.explicit_batch_child:
+        lines.extend([
+            "- This is an explicit batch child; answer it as an independent subtask.",
+            "- Do not use sibling subjects or entities as factual context or guard authority.",
+        ])
+    else:
+        lines.extend([
+            "- Preserve the parent task's subject, entities, goal, prohibitions, and format constraints.",
+            "- Treat the current subtask as part of the parent task, not as an unrelated standalone topic.",
+            f"- Parent task: {constraints.parent_intent}",
+        ])
 
     subtask = _clean(current_subtask)
     if subtask:
