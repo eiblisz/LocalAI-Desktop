@@ -1,5 +1,6 @@
 import re
-import unicodedata
+
+from .text_normalization import canonical_match_text, canonical_tokens
 
 
 def _clean(value):
@@ -104,24 +105,15 @@ def compact_evidence_authority(
 
 
 def _fold_terms(value):
-    normalized = unicodedata.normalize("NFKD", str(value or "").casefold())
-    folded = "".join(
-        char for char in normalized
-        if not unicodedata.combining(char)
-    )
     return {
         term
-        for term in re.findall(r"[^\W_]+", folded, flags=re.UNICODE)
+        for term in canonical_tokens(value)
         if len(term) >= 3
     }
 
 
 def _fold_text(value):
-    normalized = unicodedata.normalize("NFKD", str(value or "").casefold())
-    return "".join(
-        char for char in normalized
-        if not unicodedata.combining(char)
-    )
+    return canonical_match_text(value)
 
 
 def _temporal_fact_requested(value):

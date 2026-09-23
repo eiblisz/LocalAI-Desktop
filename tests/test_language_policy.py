@@ -23,6 +23,10 @@ def test_detects_english_question():
     assert detect_user_language("Who is Zsofia?") == "en"
 
 
+def test_detects_short_english_temporal_question():
+    assert detect_user_language("When did Example Band form?") == "en"
+
+
 def test_hungarian_instruction_forces_hungarian_response():
     instruction = response_language_instruction("ki Zsofia?")
     assert "Kizárólag magyarul" in instruction

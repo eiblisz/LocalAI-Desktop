@@ -1,6 +1,5 @@
-import unicodedata
-
 from .context_guard import extract_entity_anchors
+from .text_normalization import canonical_match_text
 
 
 class CurrentTurnBindingError(RuntimeError):
@@ -8,11 +7,7 @@ class CurrentTurnBindingError(RuntimeError):
 
 
 def _fold(value):
-    normalized = unicodedata.normalize("NFKD", str(value or "").casefold())
-    return "".join(
-        char for char in normalized
-        if not unicodedata.combining(char)
-    )
+    return canonical_match_text(value)
 
 
 _QUESTION_WORDS = {

@@ -6,9 +6,10 @@ checking whether its evidence includes the kind of fact the user asked for.
 """
 
 import re
-import unicodedata
 
+from .question_semantics import analyze_question
 from .request_semantics import identity_lookup_subject
+from .text_normalization import canonical_match_text
 
 
 def _clean(value):
@@ -16,8 +17,7 @@ def _clean(value):
 
 
 def _fold(value):
-    normalized = unicodedata.normalize("NFKD", _clean(value).casefold())
-    return "".join(char for char in normalized if not unicodedata.combining(char))
+    return canonical_match_text(_clean(value))
 
 
 def _marked_title(prompt):
@@ -28,7 +28,7 @@ def _marked_title(prompt):
         return _clean(quoted.group(1))
 
     patterns = (
-        r"(?:\ba\s+|\baz\s+)(.+?)\s+c[ií]m[űu]\s+(?:vers(?:et)?|m[űu](?:vet)?|konyv(?:et)?|regeny(?:t)?)\b",
+        r"(?:\ba\s+|\baz\s+)(.+?)\s+(?:c[ií]m[űu]|c\.)\s+(?:vers(?:et)?|m[űu](?:vet)?|konyv(?:et)?|regeny(?:t)?)\b",
         r"(?:\bthe\s+)?(.+?)\s+(?:titled|called)\s+(?:work|book|poem|novel)\b",
         r"(.+?)\s+(?:mit dem titel|namens)\s+",
     )
@@ -38,7 +38,22 @@ def _marked_title(prompt):
             candidate = _clean(match.group(1))
             # Limit to the last title-like clause.  This removes a preceding
             # question word or alleged person without relying on their identity.
-            candidate = re.split(r"\b(?:irta|irta|wrote|authored|created|schrieb)\b", candidate, flags=re.IGNORECASE)[-1].strip()
+            candidate = re.split(
+                r"\b(?:[ií]rta|wrote|authored|created|schrieb)\b",
+                candidate,
+                flags=re.IGNORECASE,
+            )[-1].strip()
+            # In "Mikor írta a Szerző az Ének c. verset?" the first
+            # article starts the alleged author clause.  The final article is
+            # the explicitly marked work title; taking it is a structural
+            # parse, not a general typo/name correction.
+            article_parts = re.split(
+                r"\s+(?:a|az)\s+",
+                candidate,
+                flags=re.IGNORECASE,
+            )
+            if len(article_parts) > 1:
+                candidate = article_parts[-1].strip()
             if 2 <= len(candidate) <= 120:
                 return candidate
     return ""
@@ -46,6 +61,12 @@ def _marked_title(prompt):
 
 def requested_fact_relation(prompt):
     """Classify the relation behind a requested fact without extracting entities."""
+    semantic_relation = analyze_question(prompt).relation
+    if semantic_relation == "event_date":
+        return "event"
+    if semantic_relation in {"creation", "formation", "birth"}:
+        return semantic_relation
+
     folded = _fold(prompt)
     relation_patterns = (
         ("creation", (
