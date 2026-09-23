@@ -46,6 +46,22 @@ def test_grounded_guard_accepts_supported_factual_literals():
     assert unsupported == ()
 
 
+def test_grounded_guard_canonicalizes_an_unsupported_middle_name_without_repair():
+    authority = "AUTHORIZED EVIDENCE: Sample Musician is an artist."
+    client = RepairClient("should not be used")
+
+    result = guard_grounded_answer(
+        client,
+        "qwen-test",
+        "Ki Sample Musician?",
+        "Sample Middle Musician is an artist.",
+        authority,
+    )
+
+    assert result == "Sample Musician is an artist."
+    assert client.calls == 0
+
+
 def test_grounded_guard_repairs_false_premise_once():
     authority = (
         "USER REQUEST: Mikor írta Wrong Author a Silver Storyt?\n"

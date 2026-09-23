@@ -2020,7 +2020,7 @@ def test_short_named_identity_question_uses_direct_grounded_lookup_without_query
 
         def chat_once(self, model, messages, timeout=600.0, **kwargs):
             self.once_calls.append((model, messages))
-            return "Sample Musician egy minta-előadó."
+            return "Sample Middle Musician egy minta-előadó."
 
         def chat_stream(self, *args, **kwargs):
             self.stream_calls.append((args, kwargs))

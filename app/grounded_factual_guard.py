@@ -1,6 +1,8 @@
 import re
 import unicodedata
 
+from .request_semantics import identity_lookup_subject
+
 
 class GroundedFactualGuardError(RuntimeError):
     pass
@@ -138,6 +140,54 @@ def _strip_unsupported_source_attributions(text, unsupported_literals):
     return cleaned.strip()
 
 
+def _canonicalize_identity_subject_expansion(
+    text,
+    user_prompt,
+    unsupported_literals,
+):
+    """Remove an unsupported middle-name expansion of the requested identity.
+
+    Models sometimes expand a two-part name from the question with an unverified
+    middle name. That is not a reason to spend a second, slow model call: the
+    user supplied the canonical subject spelling, and replacing only a matching
+    first/last-name expansion preserves the grounded claim without inventing a
+    fact. This remains generic and does not recognize any individual entity.
+    """
+    subject = identity_lookup_subject(user_prompt)
+    subject_parts = re.findall(r"[^\W_]+", subject, flags=re.UNICODE)
+    if len(subject_parts) < 2:
+        return str(text or "")
+
+    subject_first = _normalize(subject_parts[0])
+    subject_last = _normalize(subject_parts[-1])
+    cleaned = str(text or "")
+    for literal in sorted(
+        unsupported_literals or (),
+        key=lambda value: len(str(value or "")),
+        reverse=True,
+    ):
+        if not _looks_like_name_literal(literal):
+            continue
+        literal_parts = re.findall(
+            r"[^\W_]+",
+            str(literal),
+            flags=re.UNICODE,
+        )
+        if (
+            len(literal_parts) <= len(subject_parts)
+            or _normalize(literal_parts[0]) != subject_first
+            or _normalize(literal_parts[-1]) != subject_last
+        ):
+            continue
+        cleaned = re.sub(
+            rf"(?<!\w){re.escape(str(literal))}(?!\w)",
+            subject,
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+    return cleaned
+
+
 def guard_grounded_answer(
     client,
     model,
@@ -151,6 +201,15 @@ def guard_grounded_answer(
 ):
     draft = str(answer or "").strip()
     unsupported = unsupported_grounded_literals(draft, authority_text)
+    if unsupported and not force_verify:
+        canonicalized = _canonicalize_identity_subject_expansion(
+            draft,
+            user_prompt,
+            unsupported,
+        )
+        if canonicalized != draft:
+            draft = canonicalized
+            unsupported = unsupported_grounded_literals(draft, authority_text)
     if not unsupported and not force_verify:
         return draft
 
