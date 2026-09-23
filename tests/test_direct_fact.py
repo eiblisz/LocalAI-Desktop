@@ -1,6 +1,7 @@
 from app.direct_fact import (
     derive_premise_neutral_query,
     deterministic_hungarian_fact_fallback,
+    targeted_fact_refinement_query,
     requested_fact_supported,
 )
 
@@ -13,7 +14,8 @@ def test_marked_work_title_produces_entity_neutral_temporal_query():
 
     assert "Silver Story" in query
     assert "Wrong Author" not in query
-    assert "date" in query
+    assert "composition" in query
+    assert "publication" not in query
     assert strategy == "premise_neutral_title_relation"
 
 
@@ -32,6 +34,22 @@ def test_temporal_sufficiency_requires_a_date_like_literal():
 
     assert requested_fact_supported(no_date, "temporal") is False
     assert requested_fact_supported(with_date, "temporal") is True
+
+
+def test_creation_request_rejects_an_unrelated_edition_year():
+    prompt = "Mikor írta Wrong Author a Silver Story című művet?"
+    edition_only = {
+        "results": [{"snippet": "The 1922 edition is available in print."}],
+    }
+    composition_date = {
+        "results": [{"snippet": "Silver Story was composed by Correct Author in 1912."}],
+    }
+
+    assert requested_fact_supported(edition_only, "temporal", prompt) is False
+    assert requested_fact_supported(composition_date, "temporal", prompt) is True
+    assert targeted_fact_refinement_query(prompt, "temporal") == (
+        "Silver Story original composition year"
+    )
 
 
 def test_hungarian_fallback_only_repeats_a_supported_requested_literal():

@@ -31,6 +31,7 @@ from .direct_fact import (
     derive_premise_neutral_query,
     deterministic_hungarian_fact_fallback,
     requested_fact_supported,
+    targeted_fact_refinement_query,
 )
 from .grounded_factual_guard import guard_grounded_answer
 from .generic_shopping_evidence import (
@@ -394,6 +395,32 @@ class ChatWebWorker(QObject):
             page_fetch_budget=1,
             timeout=self.execution_control.request_timeout(8.0),
         )
+
+    @staticmethod
+    def _merge_direct_fact_payloads(primary, refinement):
+        """Keep premise and requested-fact evidence together after one refinement."""
+        merged = dict(primary or {})
+        merged["results"] = [
+            *list((primary or {}).get("results") or []),
+            *list((refinement or {}).get("results") or []),
+        ]
+        primary_timing = dict((primary or {}).get("timing") or {})
+        refinement_timing = dict((refinement or {}).get("timing") or {})
+        for key in ("provider_ms", "page_fetch_ms", "total_search_ms"):
+            primary_timing[key] = round(
+                float(primary_timing.get(key, 0.0) or 0.0)
+                + float(refinement_timing.get(key, 0.0) or 0.0),
+                2,
+            )
+        primary_timing["page_fetch_count"] = int(
+            primary_timing.get("page_fetch_count", 0) or 0
+        ) + int(refinement_timing.get("page_fetch_count", 0) or 0)
+        merged["timing"] = primary_timing
+        merged["provider_chain_errors"] = list(dict.fromkeys([
+            *list((primary or {}).get("provider_chain_errors") or []),
+            *list((refinement or {}).get("provider_chain_errors") or []),
+        ]))
+        return merged
 
     def _followup_clarification(self):
         return self.followup_resolution.clarification
@@ -1206,6 +1233,7 @@ class ChatWebWorker(QObject):
                     self.finished.emit()
                     return
 
+                payload_queries = [query]
                 try:
                     payload = self._search_payload(
                         query,
@@ -1223,6 +1251,7 @@ class ChatWebWorker(QObject):
                     snippet_supported = requested_fact_supported(
                         payload,
                         self.request_profile.requested_fact,
+                        self.user_prompt,
                     )
                     if (
                         direct_fact_progressive
@@ -1234,9 +1263,41 @@ class ChatWebWorker(QObject):
                             if requested_fact_supported(
                                 payload,
                                 self.request_profile.requested_fact,
+                                self.user_prompt,
                             )
                             else "insufficient_after_one_page"
                         )
+                        if evidence_sufficiency == "insufficient_after_one_page":
+                            refinement_query = targeted_fact_refinement_query(
+                                self.user_prompt,
+                                self.request_profile.requested_fact,
+                            )
+                            if refinement_query and refinement_query != query:
+                                try:
+                                    refinement = self._search_payload(
+                                        refinement_query,
+                                        max_results=self.request_profile.source_budget,
+                                        fetch_pages=0,
+                                    )
+                                    payload = self._merge_direct_fact_payloads(
+                                        payload,
+                                        refinement,
+                                    )
+                                    payload_queries.append(refinement_query)
+                                    evidence_sufficiency = (
+                                        "targeted_search_supported"
+                                        if requested_fact_supported(
+                                            refinement,
+                                            self.request_profile.requested_fact,
+                                            self.user_prompt,
+                                        )
+                                        else "insufficient_after_targeted_search"
+                                    )
+                                except Exception as refinement_exc:
+                                    failed_queries.append(
+                                        f"{refinement_query}: "
+                                        f"{self._compact_web_error(refinement_exc)}"
+                                    )
                     elif direct_fact_progressive:
                         evidence_sufficiency = "snippet_supported"
                     if self.trace is not None:
@@ -1327,7 +1388,9 @@ class ChatWebWorker(QObject):
                     )
                     continue
 
-                successful_queries.append(query)
+                for completed_query in payload_queries:
+                    if completed_query not in successful_queries:
+                        successful_queries.append(completed_query)
                 factual_payloads.append(dict(payload))
                 provider = str(payload.get("provider", "")).strip() or "unknown"
                 if provider not in successful_providers:

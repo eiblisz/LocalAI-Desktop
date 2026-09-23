@@ -1874,7 +1874,7 @@ def test_single_factual_risk_request_skips_model_query_generation(monkeypatch):
     assert tokens
     assert "Correct Author" in tokens[0]
     assert "1912" in tokens[0]
-    assert search_calls == ["Silver Story creation publication date year"]
+    assert search_calls == ["Silver Story composition writing date year"]
 
     snapshot = trace.snapshot()
     assert snapshot["phases_ms"]["query_generation"] == 0.0
@@ -1926,7 +1926,7 @@ def test_direct_factual_request_uses_one_grounded_model_call_not_forced_second_p
             )
 
     def fake_search(query, max_results=6, fetch_pages=True):
-        assert query == "Silver Story creation publication date year"
+        assert query == "Silver Story composition writing date year"
         return {
             "provider": "Brave Search API",
             "query": query,
@@ -2076,6 +2076,90 @@ def test_direct_fact_fetches_one_page_only_when_snippets_lack_requested_date(
     assert fetched and fetched[0][0] == 1
     assert worker.execution_control.budget.search_calls == 1
     assert worker.execution_control.budget.page_fetches == 1
+
+
+def test_temporal_direct_fact_uses_one_targeted_refinement_after_edition_only_evidence(
+    monkeypatch,
+):
+    prompt = "Mikor írta Wrong Author a Silver Story című művet?"
+    search_calls = []
+
+    class Client:
+        def chat_once(self, model, messages, timeout=600.0, **kwargs):
+            return (
+                "A Silver Story című művet nem Wrong Author, hanem Correct Author írta, "
+                "és 1912-ben készült."
+            )
+
+    def fake_search(query, max_results=6, fetch_pages=True):
+        search_calls.append((query, fetch_pages))
+        if query == "Silver Story composition writing date year":
+            snippet = "The 1922 edition is available in print."
+        elif query == "Silver Story original composition year":
+            snippet = "Silver Story was composed by Correct Author in 1912."
+        else:
+            raise AssertionError(f"unexpected query: {query}")
+        return {
+            "provider": "Brave Search API",
+            "query": query,
+            "retrieved_at": "2026-09-23T10:00:00",
+            "results": [{
+                "title": "Silver Story",
+                "url": f"https://example.com/{len(search_calls)}",
+                "snippet": snippet,
+            }],
+        }
+
+    monkeypatch.setattr(workers, "search_web", fake_search)
+    monkeypatch.setattr(
+        workers,
+        "fetch_result_pages",
+        lambda payload, page_fetch_budget=1, timeout=8.0: payload,
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: [
+            item["url"] for item in payload.get("results") or []
+        ],
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_entries",
+        lambda payload, limit=6: [
+            {"title": item["title"], "url": item["url"]}
+            for item in (payload.get("results") or [])[:limit]
+        ],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: "\n".join(
+            item.get("snippet", "") for item in payload.get("results") or []
+        ),
+    )
+
+    worker = workers.ChatWebWorker(
+        Client(),
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        prompt,
+    )
+    tokens = []
+    errors = []
+    worker.token.connect(tokens.append)
+    worker.failed.connect(errors.append)
+    worker.run()
+
+    assert errors == []
+    assert tokens
+    assert search_calls == [
+        ("Silver Story composition writing date year", 0),
+        ("Silver Story original composition year", 0),
+    ]
+    assert worker.execution_control.budget.search_calls == 2
+    assert worker.execution_control.budget.page_fetches == 1
+    assert worker.diagnostic_metadata["search_count"] == 2
 
 
 
@@ -2256,4 +2340,4 @@ def test_entity_formation_question_uses_direct_fact_execution_budget():
     assert worker.request_profile.kind == "direct_fact"
     assert worker.request_profile.requested_fact == "temporal"
     assert worker.execution_control.budget.timeout_seconds == 45.0
-    assert worker.execution_control.budget.max_search_calls == 1
+    assert worker.execution_control.budget.max_search_calls == 2
