@@ -183,7 +183,7 @@ def _benchmark_hungarian_default_and_direct_budget():
     control = ExecutionControl.for_request_profile(
         classify_request("Mikor írta Sample Author a Sample Work című művet?")
     )
-    _assert(control.budget.max_search_calls == 1, "direct lookup search was not bounded")
+    _assert(control.budget.max_search_calls == 2, "direct lookup refinement was not bounded")
     _assert(control.budget.max_page_fetches == 1, "direct lookup page fetch was not bounded")
 
 

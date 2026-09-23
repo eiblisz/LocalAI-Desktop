@@ -64,5 +64,6 @@ def test_direct_fact_profile_gets_a_narrow_request_scoped_budget():
     assert control.claim_search() == 1
     assert control.claim_page_fetch() == 1
     assert control.claim_repair() == 1
+    assert control.claim_search() == 2
     with pytest.raises(ExecutionBudgetExceeded):
         control.claim_search()
