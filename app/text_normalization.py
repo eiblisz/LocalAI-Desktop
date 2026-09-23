@@ -29,6 +29,19 @@ def canonical_tokens(value):
     return tuple(canonical_match_text(value).split())
 
 
+def canonical_request_text(value):
+    """Canonical request form with only small, context-safe abbreviations expanded."""
+    text = canonical_match_text(value)
+    replacements = {
+        "kb": "korulbelul",
+        "pl": "peldaul",
+        "szted": "szerinted",
+        "sztem": "szerintem",
+    }
+    tokens = [replacements.get(token, token) for token in text.split()]
+    return " ".join(tokens)
+
+
 def canonical_compact(value):
     """Return the canonical form with token separators removed for ID/spec checks."""
     return "".join(canonical_tokens(value))
@@ -65,7 +78,7 @@ def canonical_contains(text, candidate):
 # fuzzy entity resolver: base tokens must match exactly and only one final token
 # may carry one known Hungarian case/plural suffix.
 _SAFE_HUNGARIAN_SUFFIXES = tuple(sorted({
-    "atok", "etek", "otok", "unk", "unk", "unk", "unk",
+    "atok", "etek", "otok", "unk",
     "nak", "nek", "ban", "ben", "bol", "tol", "rol", "hoz", "hez",
     "val", "vel", "kent", "kepp", "jat", "jet", "ja", "je",
     "at", "et", "ot", "on", "en", "ig", "ra", "re", "ba", "be",

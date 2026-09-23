@@ -162,6 +162,18 @@ Mikor alakult a Sample Band?""",
         "Mikor alakult a Sample Band?",
     ]
     assert all(contract.route == ROUTE_WEB for contract in contracts)
+    assert [
+        contract.constraints.request_profile.requested_fact
+        for contract in contracts
+    ] == ["identity", "temporal", "temporal"]
+    assert [
+        contract.constraints.request_profile.relation
+        for contract in contracts
+    ] == ["identity", "authorship_creation", "formation"]
+    assert len({
+        id(contract.constraints.request_profile)
+        for contract in contracts
+    }) == 3
 
 
 def test_action_runtime_keeps_a_wrapped_question_as_one_request():

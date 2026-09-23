@@ -28,6 +28,21 @@ class RequestProfile:
     semantic_confidence: str = "low"
     response_language: str = "hu"
     premise_check_required: bool = False
+    freshness: str = "stable"
+
+
+@dataclass(frozen=True)
+class SemanticRequest:
+    """Canonical host-side semantic parse; no model call is required."""
+
+    activity: str
+    requested_fact: str
+    relation: str
+    depth: str
+    freshness: str
+    response_language: str
+    premise_check_required: bool
+    confidence: str
 
 
 def _fold(value):
@@ -65,8 +80,10 @@ def identity_lookup_subject(text):
     folded_tokens = {_fold(token) for token in tokens}
     generic_or_contextual = {
         "te", "en", "o", "you", "he", "she", "they", "it",
-        "this", "that", "vagy", "szerzo", "author", "autor",
+        "this", "that",         "vagy", "szerzo", "author", "autor", "irta", "megirta", "alkotta",
+        "keszitette", "alapitotta",
         "baratnoje", "baratja", "ferje", "feleseg", "anyja", "apja",
+        "frontembere", "enekese", "gitarosa", "dobosa", "tagja",
         "friend", "wife", "husband", "mother", "father",
     }
     if (
@@ -269,7 +286,18 @@ def classify_request(text):
         query_budget = 3
         source_budget = 10
         page_fetch_budget = 2
-    elif any(re.search(pattern, folded) for pattern in direct_fact_patterns):
+    elif (
+        any(re.search(pattern, folded) for pattern in direct_fact_patterns)
+        or (
+            semantic.requested_fact
+            in {
+                "year", "temporal", "location", "price", "quantity", "owner",
+                "duration", "frequency", "status", "boolean", "version",
+                "current_value", "person_relation",
+            }
+            and semantic.relation not in {"comparison", "discovery"}
+        )
+    ):
         kind = TASK_DIRECT_FACT
         depth = "concise"
         breadth = "narrow"
@@ -324,6 +352,22 @@ def classify_request(text):
         semantic_confidence=semantic.confidence,
         response_language=effective_response_language(raw),
         premise_check_required=semantic.premise_check_required,
+        freshness=semantic.freshness,
+    )
+
+
+def semantic_request(text):
+    """Return all orthogonal routing dimensions in one immutable value."""
+    profile = classify_request(text)
+    return SemanticRequest(
+        activity=profile.kind,
+        requested_fact=profile.requested_fact,
+        relation=profile.relation,
+        depth=profile.response_depth,
+        freshness=profile.freshness,
+        response_language=profile.response_language,
+        premise_check_required=profile.premise_check_required,
+        confidence=profile.semantic_confidence,
     )
 
 

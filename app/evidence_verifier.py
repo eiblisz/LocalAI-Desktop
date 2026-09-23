@@ -1,9 +1,9 @@
 import re
-import unicodedata
 from urllib.parse import urlparse
 
 from .web_search_tool import build_search_plan
 from .evidence_policy import EvidencePolicy
+from .text_normalization import canonical_match_text
 
 
 VERIFIED = "VERIFIED"
@@ -12,12 +12,7 @@ REJECTED = "REJECTED"
 
 
 def _fold_text(value):
-    normalized = unicodedata.normalize("NFKD", str(value or "").lower())
-    ascii_text = "".join(
-        char for char in normalized
-        if not unicodedata.combining(char)
-    )
-    return " ".join(ascii_text.split())
+    return canonical_match_text(value)
 
 
 def _normalize_spec(value):
@@ -540,4 +535,3 @@ def verify_answer_against_evidence(answer, query, ledgers):
         extract_prices=_extract_prices,
         VERIFIED=VERIFIED,
     )
-

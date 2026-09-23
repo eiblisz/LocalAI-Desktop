@@ -338,6 +338,9 @@ class ChatWebWorker(QObject):
             "evidence_diagnostic": str(evidence_diagnostic or ""),
             "request_kind": self.request_profile.kind,
             "requested_fact": self.request_profile.requested_fact,
+            "relation": self.request_profile.relation,
+            "semantic_confidence": self.request_profile.semantic_confidence,
+            "freshness": self.request_profile.freshness,
             "response_depth": self.request_profile.response_depth,
             "research_breadth": self.request_profile.research_breadth,
             "query_budget": self.request_profile.query_budget,
@@ -1542,6 +1545,9 @@ class ChatWebWorker(QObject):
                     "separately. Shape answer breadth and depth according to the canonical "
                     "request profile below. "
                     + request_profile_instruction(self.request_profile)
+                    + " EVIDENCE MAY BE IN ANY LANGUAGE. Use it only as factual "
+                    "authority; the final prose language is set by the response-language "
+                    "instruction. Do not translate evidence in a separate model call. "
                     + " For a simple latest/current version question, preserve the direct "
                     "authoritative answer. Do not say you cannot browse the web; the authorized "
                     "web data has already been collected for you. "

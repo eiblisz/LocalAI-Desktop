@@ -1,8 +1,8 @@
 import json
 import re
-import unicodedata
 from urllib.parse import parse_qs, urlparse
 
+from .text_normalization import canonical_compact
 
 BILINGUAL_QUERY_SCHEMA = {
     "type": "object",
@@ -16,12 +16,7 @@ BILINGUAL_QUERY_SCHEMA = {
 
 
 def _fold_token(value):
-    normalized = unicodedata.normalize("NFKD", str(value or "").lower())
-    ascii_text = "".join(
-        char for char in normalized
-        if not unicodedata.combining(char)
-    )
-    return re.sub(r"[^a-z0-9]+", "", ascii_text)
+    return canonical_compact(value)
 
 
 def _kit_total_capacity(exact_kit):

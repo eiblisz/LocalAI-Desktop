@@ -1,8 +1,8 @@
 import re
-import unicodedata
 from urllib.parse import parse_qs, urlparse
 
 from .language_policy import detect_user_language
+from .text_normalization import canonical_match_text
 from .web_research_pipeline import is_generic_shopping_url
 
 
@@ -81,12 +81,7 @@ _GENERIC_TITLE_MARKERS = (
 
 
 def _fold(value):
-    normalized = unicodedata.normalize("NFKD", str(value or "").casefold())
-    text = "".join(
-        char for char in normalized
-        if not unicodedata.combining(char)
-    )
-    return " ".join(text.split())
+    return canonical_match_text(value)
 
 
 _PRODUCT_QUERY_MARKERS = {

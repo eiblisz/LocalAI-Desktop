@@ -8,6 +8,7 @@ from app.request_semantics import (
     classify_requested_fact,
     identity_lookup_subject,
     request_profile_instruction,
+    semantic_request,
 )
 
 
@@ -130,3 +131,30 @@ def test_general_question_stays_standard_not_forced_to_three_sentences():
 
     assert profile.kind == TASK_GENERAL
     assert profile.response_depth == "standard"
+
+
+def test_semantic_request_exposes_all_host_side_dimensions():
+    semantic = semantic_request(
+        "Hasonlítsd össze részletesen a két jelenlegi rendszert."
+    )
+
+    assert semantic.activity == TASK_COMPARISON
+    assert semantic.depth == "detailed"
+    assert semantic.freshness == "current"
+    assert semantic.relation == "comparison"
+    assert semantic.response_language == "hu"
+
+
+def test_accentless_hungarian_question_families_and_relations():
+    cases = (
+        ("Mikor alakult Alpha?", "temporal", "formation"),
+        ("Ki irta Beta?", "person_relation", "authorship"),
+        ("Ki Alpha frontembere?", "person_relation", "role_member"),
+        ("Hol van Alpha?", "location", "location"),
+        ("Miert tortent Alpha?", "cause", "cause"),
+    )
+
+    for prompt, requested_fact, relation in cases:
+        profile = classify_request(prompt)
+        assert profile.requested_fact == requested_fact
+        assert profile.relation == relation
