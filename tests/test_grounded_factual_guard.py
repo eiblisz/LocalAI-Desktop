@@ -242,3 +242,30 @@ def test_grounded_guard_still_rejects_new_name_absent_from_full_authority_text()
     )
 
     assert "Kitalált Szerző" in unsupported
+
+
+def test_grounded_guard_accepts_safe_hungarian_inflection_of_evidence_name():
+    authority = "AUTHORIZED EVIDENCE: Petőfi Sándor wrote the poem in 1844."
+
+    unsupported = unsupported_grounded_literals(
+        "Petőfi Sándort az evidence szerzőjeként említi 1844.",
+        authority,
+    )
+
+    assert unsupported == ()
+
+
+def test_grounded_guard_removes_adjacent_duplicate_name_token_before_checking():
+    authority = "AUTHORIZED EVIDENCE: Sample Author wrote the work in 1912."
+    client = RepairClient("must not be used")
+
+    result = guard_grounded_answer(
+        client,
+        "qwen-test",
+        "Who wrote the work?",
+        "Sample Sample Author wrote the work in 1912.",
+        authority,
+    )
+
+    assert result == "Sample Author wrote the work in 1912."
+    assert client.calls == 0

@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 import re
-import unicodedata
+
+from .text_normalization import canonical_match_text
 
 
 _SHORT_FOLLOWUP_PHRASES = frozenset({
@@ -11,12 +12,7 @@ _SHORT_FOLLOWUP_PHRASES = frozenset({
 
 
 def _fold(value):
-    normalized = unicodedata.normalize("NFKD", str(value or "").lower())
-    without_accents = "".join(
-        character for character in normalized
-        if not unicodedata.combining(character)
-    )
-    return " ".join(re.sub(r"[^\w]+", " ", without_accents).split())
+    return canonical_match_text(value)
 
 
 def _has_lexical_term(value):

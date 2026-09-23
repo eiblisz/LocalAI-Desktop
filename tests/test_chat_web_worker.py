@@ -89,7 +89,7 @@ def test_chat_web_worker_searches_streams_and_keeps_sources_structured(monkeypat
     ]
 
 
-def test_chat_web_worker_fails_closed_without_sources(monkeypatch):
+def test_chat_web_worker_returns_safe_message_without_sources(monkeypatch):
     monkeypatch.setattr(
         workers,
         "search_web",
@@ -108,6 +108,8 @@ def test_chat_web_worker_fails_closed_without_sources(monkeypatch):
 
     client = DummyWebClient()
     failed = []
+    tokens = []
+    finished = []
 
     worker = workers.ChatWebWorker(
         client,
@@ -116,10 +118,15 @@ def test_chat_web_worker_fails_closed_without_sources(monkeypatch):
         "Keress nekem valamit az interneten",
     )
     worker.failed.connect(failed.append)
+    worker.token.connect(tokens.append)
+    worker.finished.connect(lambda: finished.append(True))
     worker.run()
 
-    assert failed
-    assert "no usable public sources" in failed[0].lower()
+    assert failed == []
+    assert finished == [True]
+    assert "megbízható nyilvános forrást" in "".join(tokens)
+    assert worker.diagnostic_metadata["failure_code"] == "no_usable_public_sources"
+    assert "no usable public sources" in worker.diagnostic_metadata["failure_detail"].lower()
     assert not client.stream_calls
 
 

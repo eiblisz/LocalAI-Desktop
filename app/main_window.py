@@ -87,6 +87,7 @@ from .resource_monitor import format_resource_summary, get_system_metrics
 from .scheduler_dialog import SchedulerDialog
 from .sidebar_controller import SidebarController
 from .request_trace import RequestTrace
+from .user_error_messages import public_error
 from .task_constraints import task_constraints_instruction
 from .scheduler_runtime import SchedulerRuntime
 from .scheduler_store import ScheduledTaskStore
@@ -1651,16 +1652,18 @@ class MainWindow(QMainWindow):
         )
 
         full_message = " ".join(str(message or "").split())
-        summary = full_message
-        if len(summary) > 520:
-            summary = summary[:517].rstrip() + "..."
+        public = public_error(full_message)
+        if self.pending_request_trace is not None:
+            self.pending_request_trace.add_metadata(
+                failure_code=public.code,
+                diagnostic_failure=full_message[:1000],
+            )
+            self.pending_request_trace.emit_if_enabled()
 
         dialog = QMessageBox(self)
         dialog.setIcon(QMessageBox.Critical)
         dialog.setWindowTitle(title)
-        dialog.setText(summary or "Unknown error")
-        if full_message and full_message != summary:
-            dialog.setDetailedText(full_message)
+        dialog.setText(public.message)
         dialog.exec()
 
     def _cleanup_worker(self):

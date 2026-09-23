@@ -4,7 +4,6 @@ import ipaddress
 import os
 import socket
 import re
-import unicodedata
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from time import perf_counter
@@ -20,6 +19,7 @@ from .web_research_pipeline import (
     filter_relevant_results as pipeline_filter_relevant_results,
     specialize_provider_query,
 )
+from .text_normalization import canonical_authority_text, canonical_compact
 
 BRAVE_WEB_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
 BING_WEB_RSS_URL = "https://www.bing.com/search"
@@ -540,7 +540,10 @@ STOP_TERMS = {
 
 def _query_terms(query):
     terms = []
-    for token in re.findall(r"\w+", str(query).lower(), flags=re.UNICODE):
+    for token in re.findall(
+        r"[a-z0-9][a-z0-9._+-]*",
+        canonical_authority_text(query),
+    ):
         if len(token) < 3 or token in STOP_TERMS or token == "site":
             continue
         if token.isdigit() and len(token) < 3:
@@ -550,19 +553,7 @@ def _query_terms(query):
 
 
 def _normalized_spec_text(value):
-    normalized = unicodedata.normalize(
-        "NFKD",
-        str(value or "").casefold().replace("×", "x"),
-    )
-    accent_folded = "".join(
-        character for character in normalized
-        if not unicodedata.combining(character)
-    )
-    return re.sub(
-        r"[^a-z0-9]+",
-        "",
-        accent_folded,
-    )
+    return canonical_compact(str(value or "").replace("×", "x"))
 
 
 def _parse_price_number(value):
@@ -991,16 +982,7 @@ def _filter_relevant_results(
 
 
 def _fold_authority_text(value):
-    return " ".join(
-        re.sub(
-            r"[^a-z0-9._+-]+",
-            " ",
-            str(value or "").lower().translate(str.maketrans({
-                "á": "a", "é": "e", "í": "i", "ó": "o", "ö": "o",
-                "ő": "o", "ú": "u", "ü": "u", "ű": "u",
-            })),
-        ).split()
-    )
+    return canonical_authority_text(value)
 
 
 def is_current_version_query(query):

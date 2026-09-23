@@ -1,5 +1,6 @@
 import re
-import unicodedata
+
+from .text_normalization import canonical_match_text
 
 
 _HUNGARIAN_WORDS = {
@@ -98,8 +99,7 @@ PREFERRED_RESPONSE_LANGUAGE = "hu"
 
 
 def _fold(value):
-    text = unicodedata.normalize("NFKD", str(value or "").casefold())
-    return "".join(ch for ch in text if not unicodedata.combining(ch))
+    return canonical_match_text(value)
 
 
 def detect_user_language(text):
@@ -108,8 +108,7 @@ def detect_user_language(text):
         return "unknown"
 
     lowered = raw.casefold()
-    tokens = re.findall(r"[\wÀ-ž]+", lowered, flags=re.UNICODE)
-    folded_tokens = {_fold(token) for token in tokens}
+    folded_tokens = set(canonical_match_text(raw).split())
 
     if any(char in lowered for char in _STRONG_HUNGARIAN_CHARS):
         return "hu"
@@ -155,7 +154,10 @@ def detect_user_language(text):
     if german_hits >= 2:
         return "de"
 
-    if any(token in folded_tokens for token in {"who", "what", "how", "remember", "search"}):
+    if any(token in folded_tokens for token in {
+        "who", "what", "how", "when", "where", "which", "why",
+        "remember", "search",
+    }):
         return "en"
 
     return "unknown"

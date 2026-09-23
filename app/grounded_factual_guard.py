@@ -1,7 +1,11 @@
 import re
-import unicodedata
 
 from .request_semantics import identity_lookup_subject
+from .text_normalization import (
+    canonical_equal,
+    canonical_match_text,
+    matches_allowed_entity_surface,
+)
 
 
 class GroundedFactualGuardError(RuntimeError):
@@ -9,14 +13,7 @@ class GroundedFactualGuardError(RuntimeError):
 
 
 def _normalize(value):
-    normalized = unicodedata.normalize(
-        "NFKD",
-        " ".join(str(value or "").strip().split()).casefold(),
-    )
-    return "".join(
-        char for char in normalized
-        if not unicodedata.combining(char)
-    )
+    return canonical_match_text(value)
 
 
 def _critical_literals(text):
@@ -37,30 +34,33 @@ def _critical_literals(text):
         for match in re.finditer(pattern, value, flags=re.IGNORECASE):
             tokens.add(match.group(0).rstrip(".,;:"))
 
-    # Conservative proper-name guard: retain multiword title-case sequences
-    # and their adjacent pairs so question starters such as "Did Wrong Author"
-    # do not hide the actual named entity "Wrong Author".
+    # Retain one explicit proper-name span.  Do not manufacture overlapping
+    # adjacent pairs: a person name followed by a title such as
+    # "Arany János János Vitéz" used to create the false literal
+    # "János János", which then made a valid answer fail closed.
     for match in re.finditer(
         r"\b[A-ZÁÉÍÓÖŐÚÜŰ][A-Za-zÁÉÍÓÖŐÚÜŰáéíóöőúüű-]{2,}"
         r"(?:\s+[A-ZÁÉÍÓÖŐÚÜŰ][A-Za-zÁÉÍÓÖŐÚÜŰáéíóöőúüű-]{2,})+\b",
         value,
     ):
         sequence = match.group(0)
+        # Keep the complete supplied span for strict factual checking, but
+        # never derive overlapping pairs from it.
         tokens.add(sequence)
-        parts = sequence.split()
-        for index in range(len(parts) - 1):
-            tokens.add(parts[index] + " " + parts[index + 1])
 
     return tokens
 
 
 def unsupported_grounded_literals(answer, authority_text):
-    allowed = {_normalize(item) for item in _critical_literals(authority_text)}
+    allowed_literals = _critical_literals(authority_text)
+    allowed = {_normalize(item) for item in allowed_literals}
     authority_normalized = _normalize(authority_text)
     unsupported = []
     for item in _critical_literals(answer):
         normalized_item = _normalize(item)
         if normalized_item in allowed:
+            continue
+        if matches_allowed_entity_surface(item, allowed_literals):
             continue
         if (
             _looks_like_name_literal(item)
@@ -70,6 +70,36 @@ def unsupported_grounded_literals(answer, authority_text):
             continue
         unsupported.append(item)
     return tuple(sorted(set(unsupported), key=str.casefold))
+
+
+_TITLE_TOKEN = r"[A-ZÁÉÍÓÖŐÚÜŰ][A-Za-zÁÉÍÓÖŐÚÜŰáéíóöőúüű-]{1,}"
+
+
+def _collapse_adjacent_proper_name_repetition(text):
+    """Remove only adjacent duplicate title-case tokens, preserving spelling.
+
+    This is a mechanical de-duplication, not entity correction.  It handles an
+    LLM joining a person and a work title at their shared word boundary without
+    attempting to infer either the person or the title.
+    """
+    cleaned = str(text or "")
+    pattern = re.compile(
+        rf"(?P<left>\b{_TITLE_TOKEN})\s+(?P<right>{_TITLE_TOKEN}\b)"
+    )
+    while True:
+        changed = False
+
+        def replace(match):
+            nonlocal changed
+            if canonical_equal(match.group("left"), match.group("right")):
+                changed = True
+                return match.group("left")
+            return match.group(0)
+
+        updated = pattern.sub(replace, cleaned)
+        if not changed:
+            return updated
+        cleaned = updated
 
 
 def _looks_like_name_literal(value):
@@ -199,7 +229,7 @@ def guard_grounded_answer(
     force_verify=False,
     language_instruction="",
 ):
-    draft = str(answer or "").strip()
+    draft = _collapse_adjacent_proper_name_repetition(str(answer or "").strip())
     unsupported = unsupported_grounded_literals(draft, authority_text)
     if unsupported and not force_verify:
         canonicalized = _canonicalize_identity_subject_expansion(
@@ -265,6 +295,7 @@ def guard_grounded_answer(
             "Grounded factual repair returned an empty answer."
         )
 
+    repair = _collapse_adjacent_proper_name_repetition(repair)
     remaining = unsupported_grounded_literals(repair, authority_text)
     if remaining:
         sanitized = _strip_unsupported_source_attributions(repair, remaining)

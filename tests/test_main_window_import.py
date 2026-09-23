@@ -297,14 +297,14 @@ def test_chat_view_wraps_long_urls_without_horizontal_growth():
     assert "WrapAtWordBoundaryOrAnywhere" in source
 
 
-def test_long_error_dialog_uses_bounded_summary_and_details():
+def test_internal_errors_use_safe_public_wording_without_details():
     from app.main_window import MainWindow
 
     source = inspect.getsource(MainWindow._on_failed)
 
-    assert "len(summary) > 520" in source
-    assert "summary[:517]" in source
-    assert "setDetailedText(full_message)" in source
+    assert "public_error(full_message)" in source
+    assert "failure_code=public.code" in source
+    assert "setDetailedText(full_message)" not in source
     assert "QMessageBox.critical(self, title, message)" not in source
 
 

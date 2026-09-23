@@ -1,6 +1,9 @@
 from dataclasses import dataclass
 import re
-import unicodedata
+
+from .language_policy import effective_response_language
+from .question_semantics import analyze_question
+from .text_normalization import canonical_match_text
 
 
 TASK_DIRECT_FACT = "direct_fact"
@@ -21,17 +24,15 @@ class RequestProfile:
     source_budget: int
     page_fetch_budget: int
     requested_fact: str = "general"
+    relation: str = "general"
+    semantic_confidence: str = "low"
+    response_language: str = "hu"
+    premise_check_required: bool = False
 
 
 def _fold(value):
-    normalized = unicodedata.normalize(
-        "NFKD",
-        " ".join(str(value or "").casefold().split()),
-    )
-    return "".join(
-        char for char in normalized
-        if not unicodedata.combining(char)
-    )
+    """Compatibility wrapper for the shared canonical matching form."""
+    return canonical_match_text(value)
 
 
 def _contains_any(text, markers):
@@ -94,40 +95,10 @@ def classify_requested_fact(text):
     checks what must be supported, without trying to extract or validate a
     particular named entity on the host.
     """
-    if is_entity_identity_question(text):
-        return "identity"
-
-    folded = _fold(text)
-    patterns = (
-        ("temporal", (
-            r"\bmikor\b", r"\bmelyik evben\b", r"\bwhen\b", r"\bwhat year\b",
-            r"\bwann\b", r"\bdate\b", r"\byear\b",
-        )),
-        ("location", (
-            r"\bhol\b", r"\bwhere\b", r"\bwo\b", r"\bhelye\b",
-        )),
-        ("quantity", (
-            r"\bmennyi\b", r"\bhany\b", r"\bhow many\b", r"\bhow much\b",
-            r"\bwie viel\b", r"\bwie viele\b", r"\bnumber\b",
-        )),
-        ("current_value", (
-            r"\bmost\b", r"\bjelenlegi\b", r"\baktualis\b", r"\bcurrent\b",
-            r"\blatest\b", r"\baktuell\b", r"\bneueste\b",
-        )),
-        ("version", (
-            r"\bverzio\b", r"\bversion\b", r"\bkiadas\b", r"\brelease\b",
-        )),
-        ("person_relation", (
-            r"\bki\b", r"\bwho\b", r"\bwer\b", r"\bszerzo\b", r"\bauthor\b",
-        )),
-        ("value", (
-            r"\bmi\b", r"\bwhat\b", r"\bwas ist\b", r"\bwert\b",
-        )),
-    )
-    for fact_type, fact_patterns in patterns:
-        if any(re.search(pattern, folded) for pattern in fact_patterns):
-            return fact_type
-    return "general"
+    return analyze_question(
+        text,
+        identity=is_entity_identity_question(text),
+    ).requested_fact
 
 
 def classify_request(text):
@@ -140,6 +111,10 @@ def classify_request(text):
     """
     raw = " ".join(str(text or "").split())
     folded = _fold(raw)
+    semantic = analyze_question(
+        raw,
+        identity=is_entity_identity_question(raw),
+    )
 
     explicit_concise = _contains_any(
         folded,
@@ -344,7 +319,11 @@ def classify_request(text):
         query_budget=max(1, min(int(query_budget), 4)),
         source_budget=max(3, min(int(source_budget), 12)),
         page_fetch_budget=max(1, min(int(page_fetch_budget), 6)),
-        requested_fact=classify_requested_fact(raw),
+        requested_fact=semantic.requested_fact,
+        relation=semantic.relation,
+        semantic_confidence=semantic.confidence,
+        response_language=effective_response_language(raw),
+        premise_check_required=semantic.premise_check_required,
     )
 
 
@@ -356,7 +335,8 @@ def request_profile_instruction(profile):
         "REQUEST PROFILE: "
         f"kind={profile.kind}; depth={profile.response_depth}; "
         f"research_breadth={profile.research_breadth}; "
-        f"requested_fact={profile.requested_fact}. "
+        f"requested_fact={profile.requested_fact}; relation={profile.relation}; "
+        f"response_language={profile.response_language}. "
     )
 
     if profile.kind == TASK_DIRECT_FACT:
