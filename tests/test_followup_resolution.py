@@ -47,3 +47,17 @@ def test_concise_multiline_questions_are_not_misclassified_as_one_followup():
 
     assert result.status == "direct"
     assert result.resolved_intent == prompt
+
+
+def test_wrapped_short_followup_still_resolves_from_previous_context():
+    result = resolve_contextual_followup(
+        "How much is\nthis?",
+        [
+            {"role": "user", "content": "What is the price of the sample item?"},
+            {"role": "assistant", "content": "The sample item costs 10 euros."},
+        ],
+    )
+
+    assert result.status == "resolved"
+    assert "sample item" in result.resolved_intent
+    assert "10 euros" in result.resolved_intent
