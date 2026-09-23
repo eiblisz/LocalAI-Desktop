@@ -447,7 +447,10 @@ class ChatWebWorker(QObject):
 
         if (
             is_factual_risk_request(self.user_prompt)
-            and self._direct_query_strategy != "premise_neutral_title_relation"
+            and self._direct_query_strategy not in {
+                "premise_neutral_title_relation",
+                "identity_lookup_subject",
+            }
         ):
             direct = validate_search_query(self.user_prompt, validation_intent)
             if direct.accepted:

@@ -2007,6 +2007,79 @@ def test_direct_factual_request_uses_one_grounded_model_call_not_forced_second_p
     assert snapshot["metadata"]["factual_authority_chars"] <= 3000
 
 
+def test_short_named_identity_question_uses_direct_grounded_lookup_without_query_model(
+    monkeypatch,
+):
+    prompt = "Ki Sample Musician?"
+    search_calls = []
+
+    class IdentityClient:
+        def __init__(self):
+            self.once_calls = []
+            self.stream_calls = []
+
+        def chat_once(self, model, messages, timeout=600.0, **kwargs):
+            self.once_calls.append((model, messages))
+            return "Sample Musician egy minta-előadó."
+
+        def chat_stream(self, *args, **kwargs):
+            self.stream_calls.append((args, kwargs))
+            raise AssertionError("identity lookup must use the direct factual path")
+
+    def fake_search(query, max_results=6, fetch_pages=True):
+        search_calls.append((query, max_results, fetch_pages))
+        return {
+            "provider": "Brave Search API",
+            "query": query,
+            "results": [{
+                "title": "Sample Musician",
+                "url": "https://example.com/sample-musician",
+                "snippet": "Sample Musician is a musician and performer.",
+            }],
+        }
+
+    monkeypatch.setattr(workers, "search_web", fake_search)
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: ["https://example.com/sample-musician"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_entries",
+        lambda payload, limit=6: [{
+            "title": "Sample Musician",
+            "url": "https://example.com/sample-musician",
+        }],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: "Sample Musician is a musician and performer.",
+    )
+
+    client = IdentityClient()
+    tokens = []
+    errors = []
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        prompt,
+    )
+    worker.token.connect(tokens.append)
+    worker.failed.connect(errors.append)
+    worker.run()
+
+    assert errors == []
+    assert tokens == ["Sample Musician egy minta-előadó."]
+    assert search_calls == [("Sample Musician", 4, 0)]
+    assert len(client.once_calls) == 1
+    assert client.stream_calls == []
+    assert worker.request_profile.requested_fact == "identity"
+    assert worker.diagnostic_metadata["search_queries"] == ["Sample Musician"]
+
+
 def test_direct_fact_fetches_one_page_only_when_snippets_lack_requested_date(
     monkeypatch,
 ):

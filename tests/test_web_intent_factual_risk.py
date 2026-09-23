@@ -17,6 +17,10 @@ def test_entity_formation_date_is_a_factual_risk_request():
     assert is_factual_risk_request("Mikor alakult a Sample Band?") is True
 
 
+def test_short_named_identity_question_is_a_factual_risk_request():
+    assert is_factual_risk_request("Who is Sample Musician?") is True
+
+
 def test_explicit_creative_generation_request_stays_non_factual():
     assert is_factual_risk_request(
         "Írj egy verset Wrong Author stílusában."

@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 from .artifact_service import ArtifactPlanItem, infer_artifact_requests
 from .memory_extractor import is_explicit_memory_request
+from .request_semantics import is_entity_identity_question
 
 
 ACTION_MEMORY_WRITE = "memory_write"
@@ -55,6 +56,12 @@ def is_factual_risk_request(text):
     normalized = _fold(raw)
     if not normalized or _looks_non_factual(raw):
         return False
+
+    # A short, explicit identity lookup is a concrete fact request as well.
+    # Keep it tied to the shared semantic parser so desktop and Discord take
+    # the same bounded path without entity-specific exceptions.
+    if is_entity_identity_question(raw):
+        return True
 
     relation_markers = (
         "ki írta",
