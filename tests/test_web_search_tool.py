@@ -1,3 +1,5 @@
+import pytest
+
 from app import web_search_tool
 
 
@@ -255,6 +257,28 @@ def test_relevance_filter_drops_unrelated_results():
     assert [item["title"] for item in filtered] == [
         "Qwen local AI model update"
     ]
+
+
+@pytest.mark.parametrize(
+    ("query", "source_text"),
+    [
+        ("Janos vitez 1844", "János vitéz — 1844"),
+        ("János vitéz 1844", "Janos vitez — 1844"),
+    ],
+)
+def test_relevance_filter_matches_hungarian_accents_both_directions(
+    query,
+    source_text,
+):
+    results = [{
+        "title": source_text,
+        "url": "https://example.test/janos-vitez",
+        "snippet": source_text,
+    }]
+
+    filtered = web_search_tool._filter_relevant_results(query, results)
+
+    assert filtered == results
 
 
 def test_source_urls_are_deduplicated():
