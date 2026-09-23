@@ -1576,6 +1576,7 @@ class MainWindow(QMainWindow):
 
         timing = None
         if self.pending_request_trace is not None:
+            self.pending_request_trace.add_metadata(child_status="passed")
             self.pending_request_trace.begin("response_send")
             self.pending_request_trace.end("response_send")
             timing = self.pending_request_trace.snapshot()
@@ -1675,6 +1676,7 @@ class MainWindow(QMainWindow):
         public = public_error(full_message)
         if self.pending_request_trace is not None:
             self.pending_request_trace.add_metadata(
+                child_status="failed",
                 failure_code=public.code,
                 diagnostic_failure=full_message[:1000],
             )

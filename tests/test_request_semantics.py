@@ -4,6 +4,7 @@ from app.request_semantics import (
     TASK_DIRECT_FACT,
     TASK_ENTITY_OVERVIEW,
     TASK_GENERAL,
+    TASK_ANALYSIS,
     classify_request,
     classify_requested_fact,
     identity_lookup_subject,
@@ -143,6 +144,11 @@ def test_semantic_request_exposes_all_host_side_dimensions():
     assert semantic.freshness == "current"
     assert semantic.relation == "comparison"
     assert semantic.response_language == "hu"
+
+
+def test_analysis_and_deep_research_are_explicit_activities():
+    assert classify_request("Elemezd az Alpha rendszert.").kind == TASK_ANALYSIS
+    assert classify_request("Végezz mély kutatást az Alpha rendszerről.").kind == TASK_DEEP_RESEARCH
 
 
 def test_accentless_hungarian_question_families_and_relations():

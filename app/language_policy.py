@@ -97,6 +97,21 @@ _HUNGARIAN_RESPONSE_WORDS = {
 
 PREFERRED_RESPONSE_LANGUAGE = "hu"
 
+_EXPLICIT_LANGUAGE_MARKERS = {
+    "hu": (
+        "kizarolag magyarul", "csak magyarul", "magyarul valaszolj",
+        "valaszolj magyarul",
+    ),
+    "en": (
+        "respond only in english", "answer only in english", "answer in english",
+        "angolul valaszolj", "valaszolj angolul",
+    ),
+    "de": (
+        "nur auf deutsch", "antworte nur auf deutsch", "auf deutsch antworten",
+        "nemetul valaszolj", "valaszolj nemetul",
+    ),
+}
+
 
 def _fold(value):
     return canonical_match_text(value)
@@ -163,8 +178,20 @@ def detect_user_language(text):
     return "unknown"
 
 
+def explicit_response_language(text):
+    """Return a language explicitly requested in the current turn, if any."""
+    folded = canonical_match_text(text)
+    for language, markers in _EXPLICIT_LANGUAGE_MARKERS.items():
+        if any(canonical_match_text(marker) in folded for marker in markers):
+            return language
+    return ""
+
+
 def effective_response_language(text, default=PREFERRED_RESPONSE_LANGUAGE):
     """Resolve a response language without leaving short/ambiguous turns unset."""
+    explicit = explicit_response_language(text)
+    if explicit:
+        return explicit
     detected = detect_user_language(text)
     if detected in {"hu", "de", "en"}:
         return detected

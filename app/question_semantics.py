@@ -43,12 +43,16 @@ def analyze_question(value, *, identity=False):
     if not text:
         return QuestionSemantics()
 
-    requested_fact = "identity" if identity else _first_match(
+    identity_question = bool(
+        identity
+        or re.match(r"^(?:ki\s+(?:o|az|ez)\b|kicsoda\b)", text)
+    )
+    requested_fact = "identity" if identity_question else _first_match(
         text,
         REQUESTED_FACT_MARKERS,
     )
     relation = _first_match(text, RELATION_MARKERS)
-    if identity:
+    if identity_question:
         relation = "identity"
     elif requested_fact == "cause":
         relation = "cause"

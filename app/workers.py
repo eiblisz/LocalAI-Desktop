@@ -306,6 +306,14 @@ class ChatWebWorker(QObject):
         )
         self.compact_market_quote = bool(compact_market_quote)
         self.trace = trace
+        if self.trace is not None:
+            self.trace.add_metadata(
+                child_profile=self.request_profile.kind,
+                child_requested_fact=self.request_profile.requested_fact,
+                child_relation=self.request_profile.relation,
+                semantic_confidence=self.request_profile.semantic_confidence,
+                freshness=self.request_profile.freshness,
+            )
         self._stop_event = threading.Event()
         self.web_research_pipeline = WebResearchPipeline(self)
         self._latest_evidence_ledgers = []

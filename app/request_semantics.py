@@ -12,6 +12,7 @@ TASK_COMPARISON = "comparison"
 TASK_DEEP_RESEARCH = "deep_research"
 TASK_DISCOVERY = "discovery"
 TASK_EXPLANATION = "explanation"
+TASK_ANALYSIS = "analysis"
 TASK_GENERAL = "general"
 
 
@@ -228,6 +229,14 @@ def classify_request(text):
         "was ist ",
         "wie funktioniert",
     )
+    analysis_markers = (
+        "elemezd", "vizsgald meg", "ertekeld", "bontsd ki",
+        "analyze", "analyse",
+    )
+    deep_research_markers = (
+        "mely kutatas", "mely kutatast", "deep research",
+        "atfogo kutatas", "comprehensive research",
+    )
     direct_fact_patterns = (
         r"\bki irta\b",
         r"\bki a szerzo\b",
@@ -265,7 +274,21 @@ def classify_request(text):
     # Resolve the requested activity first.  Depth is a separate dimension:
     # "detailed comparison" remains a comparison rather than becoming a
     # generic research request.
-    if any(re.search(pattern, folded) for pattern in overview_patterns):
+    if _contains_any(folded, deep_research_markers):
+        kind = TASK_DEEP_RESEARCH
+        depth = "detailed"
+        breadth = "broad"
+        query_budget = 4
+        source_budget = 12
+        page_fetch_budget = 6
+    elif _contains_any(folded, analysis_markers):
+        kind = TASK_ANALYSIS
+        depth = "analysis"
+        breadth = "balanced"
+        query_budget = 2
+        source_budget = 8
+        page_fetch_budget = 3
+    elif any(re.search(pattern, folded) for pattern in overview_patterns):
         kind = TASK_ENTITY_OVERVIEW
         depth = "overview"
         breadth = "balanced"
