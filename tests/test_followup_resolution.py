@@ -38,3 +38,12 @@ def test_common_short_followups_still_resolve_from_previous_context(followup):
     assert result.status == "resolved"
     assert "Példa zenekar" in result.resolved_intent
     assert "1980" in result.resolved_intent
+
+
+def test_concise_multiline_questions_are_not_misclassified_as_one_followup():
+    prompt = "What is this?\nWhat is TCP?"
+
+    result = resolve_contextual_followup(prompt, [])
+
+    assert result.status == "direct"
+    assert result.resolved_intent == prompt

@@ -95,7 +95,14 @@ class FollowupResolution:
 def resolve_contextual_followup(user_text, messages):
     raw_original = str(user_text or "")
     normalized = " ".join(raw_original.split())
-    if not is_contextual_short_followup(normalized):
+    nonempty_lines = [
+        line for line in raw_original.splitlines()
+        if line.strip()
+    ]
+    if (
+        len(nonempty_lines) > 1
+        or not is_contextual_short_followup(normalized)
+    ):
         return FollowupResolution(raw_original, raw_original, "direct")
 
     previous_user, previous_assistant = _previous_turn(messages)
