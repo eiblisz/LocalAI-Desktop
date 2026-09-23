@@ -1623,7 +1623,7 @@ class ChatWebWorker(QObject):
                     requested_fact=self.request_profile.requested_fact,
                     evidence_sufficiency=evidence_sufficiency,
                 )
-            self.phase.emit(f"{self.model} gondolkodik")
+            self.phase.emit(f"{self.model} válaszol")
 
             if single_pass_factual:
                 answer = self._chat_once(
@@ -1884,7 +1884,7 @@ class AdaptiveChatWorker(QObject):
 
             if self.trace is not None:
                 self.trace.begin("model_inference")
-            self.phase.emit(f"{self.model} gondolkodik")
+            self.phase.emit(f"{self.model} válaszol")
 
             if isinstance(self.client, OllamaClient):
                 draft_parts = []
