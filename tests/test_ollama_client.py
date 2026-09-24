@@ -492,6 +492,10 @@ def test_chat_stream_uses_normal_output_budget_and_returns_completion_metadata(
                 "done": True,
                 "done_reason": "stop",
                 "eval_count": 12,
+                "load_duration": 10_000_000,
+                "prompt_eval_duration": 20_000_000,
+                "eval_duration": 30_000_000,
+                "total_duration": 70_000_000,
             }).encode("utf-8")
 
     def fake_post(_url, **kwargs):
@@ -512,6 +516,10 @@ def test_chat_stream_uses_normal_output_budget_and_returns_completion_metadata(
     assert tokens == ["Kék Sárkány 7319"]
     assert metadata["done_reason"] == "stop"
     assert metadata["eval_count"] == 12
+    assert metadata["load_duration"] == 10_000_000
+    assert metadata["prompt_eval_duration"] == 20_000_000
+    assert metadata["eval_duration"] == 30_000_000
+    assert metadata["total_duration"] == 70_000_000
 
 
 def test_chat_stream_rejects_length_truncated_response(monkeypatch):

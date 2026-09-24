@@ -115,13 +115,30 @@ class WindowMemoryService:
         *,
         include_related_windows=True,
         include_current_memory=True,
+        trace=None,
     ):
+        if trace is not None:
+            trace.begin("current_raw_context_retrieval")
         eligible = [
             dict(message)
             for message in list(messages or [])
             if message.get("role") in {"user", "assistant"}
         ]
+        if trace is not None:
+            trace.end(
+                "current_raw_context_retrieval",
+                eligible_raw_message_count=len(eligible),
+            )
+            trace.begin("window_memory_retrieval")
         current = self.store.get_window_memory(chat_id)
+        if trace is not None:
+            trace.end(
+                "window_memory_retrieval",
+                window_memory_available=bool(
+                    (current or {}).get("summary")
+                    or (current or {}).get("indexed_state")
+                ),
+            )
         previous_count = int((current or {}).get("compacted_message_count", 0) or 0)
         target_count = max(0, len(eligible) - RECENT_MESSAGE_LIMIT)
         total_chars = sum(len(str(item.get("content") or "")) for item in eligible)
@@ -153,6 +170,8 @@ class WindowMemoryService:
         ):
             recent = recent[-RECENT_MESSAGE_LIMIT:]
 
+        if trace is not None:
+            trace.begin("cross_window_retrieval")
         related = (
             self.store.search_window_memories(
                 query,
@@ -162,6 +181,12 @@ class WindowMemoryService:
             if include_related_windows
             else []
         )
+        if trace is not None:
+            trace.end(
+                "cross_window_retrieval",
+                cross_window_hit=bool(related),
+                cross_window_retrieved_count=len(related),
+            )
         return WindowContext(
             summary=(
                 str((current or {}).get("summary") or "")

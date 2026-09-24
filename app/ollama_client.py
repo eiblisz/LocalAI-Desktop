@@ -527,4 +527,11 @@ class OllamaClient:
                 "done_reason": done_reason,
                 "prompt_eval_count": final_item.get("prompt_eval_count"),
                 "eval_count": final_item.get("eval_count"),
+                # Native nanosecond counters let the application distinguish
+                # prompt evaluation, generation, model loading and residual
+                # queue/transport time without changing Ollama scheduling.
+                "load_duration": final_item.get("load_duration"),
+                "prompt_eval_duration": final_item.get("prompt_eval_duration"),
+                "eval_duration": final_item.get("eval_duration"),
+                "total_duration": final_item.get("total_duration"),
             }

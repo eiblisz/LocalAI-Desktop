@@ -65,6 +65,11 @@ from .chat_orchestration import (
     plan_chat_actions,
 )
 from .chat_extensions_dialog import ChatExtensionsDialog
+from .conversation_memory_recall import (
+    estimated_tokens,
+    is_safe_direct_recall,
+    resolve_current_conversation_recall,
+)
 from .discord_bot_bridge import DiscordBotBridge, DiscordBotSettings
 from .extension_authority import (
     ExtensionAuthority,
@@ -1086,6 +1091,64 @@ class MainWindow(QMainWindow):
         )
         return direct_user_memory_answer(query, memories)
 
+    def _direct_conversation_memory_recall(self, query, *, trace=None):
+        """Read only current-window user state for an unambiguous local recall."""
+        chat_id = str(self.generation_chat_id or "")
+        if trace is not None:
+            trace.begin("memory_scope_resolution")
+        if trace is not None:
+            trace.end(
+                "memory_scope_resolution",
+                memory_scope="current_window",
+                cross_window_requested=False,
+                global_memory_requested=False,
+            )
+
+        if trace is not None:
+            trace.begin("current_raw_context_retrieval")
+        recent_messages = list(self.pending_action_history_messages or [])
+        if trace is not None:
+            trace.end(
+                "current_raw_context_retrieval",
+                recent_raw_message_count=sum(
+                    1 for item in recent_messages
+                    if item.get("role") == "user"
+                ),
+            )
+
+        if trace is not None:
+            trace.begin("window_memory_retrieval")
+        window = self.memory_store.get_window_memory(chat_id) or {}
+        if trace is not None:
+            trace.end(
+                "window_memory_retrieval",
+                window_memory_available=bool(
+                    window.get("indexed_state") or window.get("summary")
+                ),
+            )
+            trace.mark_duration("cross_window_retrieval", 0)
+            trace.mark_duration("global_memory_retrieval", 0)
+
+        if trace is not None:
+            trace.begin("direct_memory_recall")
+        recall = resolve_current_conversation_recall(
+            query,
+            messages=recent_messages,
+            indexed_state=window.get("indexed_state", ""),
+            summary=window.get("summary", ""),
+        )
+        if trace is not None:
+            trace.end(
+                "direct_memory_recall",
+                current_window_hit=recall.is_direct_hit,
+                cross_window_hit=False,
+                global_memory_hit=False,
+                retrieved_item_count=recall.retrieved_item_count,
+                recall_candidate_count=recall.candidate_count,
+                recall_source=recall.source_kind or "none",
+            )
+        return recall
+
     def _build_memory_context(self, query, *, limit=8):
         """Build bounded runtime-only long-term memory context for the model."""
         memories = self.memory_store.retrieve_memories(query, limit=limit)
@@ -1297,6 +1360,9 @@ class MainWindow(QMainWindow):
                 )
             )
         prompt = str(prompt or "").strip()
+        trace = self.pending_request_trace
+        if trace is not None:
+            trace.begin("memory_scope_resolution")
         system_prompt = (
             f"{DEFAULT_SYSTEM_PROMPT}\n\n"
             f"{response_language_instruction(prompt)}"
@@ -1316,15 +1382,35 @@ class MainWindow(QMainWindow):
             )
         other_window_request = is_other_window_request(prompt)
         global_memory_request = is_global_memory_request(prompt)
+        if trace is not None:
+            trace.end(
+                "memory_scope_resolution",
+                memory_scope=(
+                    "current_window" if conversation_local else
+                    "other_window" if other_window_request else
+                    "global_memory" if global_memory_request else
+                    "mixed_context"
+                ),
+                cross_window_requested=other_window_request,
+                global_memory_requested=global_memory_request,
+            )
+            trace.begin("global_memory_retrieval")
         memory_context = (
             ""
             if conversation_local or other_window_request
             else self._build_memory_context(prompt)
         )
+        if trace is not None:
+            trace.end(
+                "global_memory_retrieval",
+                global_memory_hit=bool(memory_context),
+            )
         if memory_context:
             system_prompt = f"{system_prompt}\n\n{memory_context}"
 
         chat_messages = list(self.pending_action_history_messages)
+        if trace is not None:
+            trace.begin("context_assembly")
         window_context = self.window_memory.prepare_context(
             self.generation_chat_id,
             chat_messages,
@@ -1335,6 +1421,7 @@ class MainWindow(QMainWindow):
             include_current_memory=(
                 not other_window_request and not global_memory_request
             ),
+            trace=trace,
         )
         if other_window_request:
             if window_context.global_windows:
@@ -1352,8 +1439,8 @@ class MainWindow(QMainWindow):
         window_context_text = self.window_memory.context_text(window_context)
         if window_context_text:
             system_prompt = f"{system_prompt}\n\n{window_context_text}"
-        if self.pending_request_trace is not None:
-            self.pending_request_trace.add_metadata(
+        if trace is not None:
+            trace.add_metadata(
                 window_memory_loaded=bool(
                     window_context.summary or window_context.indexed_state
                 ),
@@ -1392,6 +1479,17 @@ class MainWindow(QMainWindow):
         if self.pending_action_images:
             user_message["images"] = list(self.pending_action_images)
         messages.append(user_message)
+        if trace is not None:
+            assembled_chars = sum(
+                len(str(item.get("content") or "")) for item in messages
+            )
+            trace.end(
+                "context_assembly",
+                assembled_context_chars=assembled_chars,
+                estimated_prompt_units=estimated_tokens(
+                    "\n".join(str(item.get("content") or "") for item in messages)
+                ),
+            )
         return messages
 
     def _generation_target_chat(self):
@@ -1450,27 +1548,95 @@ class MainWindow(QMainWindow):
                 "explicit_batch_child",
                 False,
             ),
+            route=contract.route,
+            conversation_local=bool(
+                getattr(contract, "conversation_local", False)
+            ),
         )
         prompt = contract.prompt
         model = self.pending_action_model
 
-        direct_memory_answer = (
-            ""
-            if (
-                contract.route == ROUTE_MEMORY_WRITE
-                or bool(getattr(contract, "conversation_local", False))
-                or is_other_window_request(prompt)
+        conversation_recall = None
+        if (
+            contract.route == ROUTE_CHAT
+            and bool(getattr(contract, "conversation_local", False))
+            and not is_other_window_request(prompt)
+            and not is_global_memory_request(prompt)
+        ):
+            conversation_recall = self._direct_conversation_memory_recall(
+                prompt,
+                trace=self.pending_request_trace,
             )
-            else self._direct_user_memory_answer(prompt)
+
+        direct_conversation_answer = False
+        if conversation_recall is not None and conversation_recall.is_direct_hit:
+            trace = self.pending_request_trace
+            if trace is not None:
+                trace.begin("language_validation")
+            direct_conversation_answer = is_safe_direct_recall(
+                prompt,
+                conversation_recall,
+                constraints=contract.constraints,
+            )
+            if trace is not None:
+                trace.end(
+                    "language_validation",
+                    direct_memory_language_valid=direct_conversation_answer,
+                )
+
+        direct_memory_answer = (
+            conversation_recall.answer
+            if direct_conversation_answer
+            else (
+                ""
+                if (
+                    contract.route == ROUTE_MEMORY_WRITE
+                    or bool(getattr(contract, "conversation_local", False))
+                    or is_other_window_request(prompt)
+                )
+                else self._direct_user_memory_answer(prompt)
+            )
         )
         if direct_memory_answer:
+            trace = self.pending_request_trace
+            if trace is not None:
+                trace.begin("context_assembly")
+                trace.end(
+                    "context_assembly",
+                    assembled_context_chars=0,
+                    estimated_prompt_units=0,
+                    model_path_skipped=True,
+                )
+                trace.begin("post_processing")
+                trace.end(
+                    "post_processing",
+                    guard_path="language_validation_only",
+                )
             target_chat = self._generation_target_chat()
             if target_chat is not None:
                 assistant_message = {"role": "assistant", "content": direct_memory_answer}
                 assistant_message["id"] = uuid.uuid4().hex
+                if trace is not None:
+                    assistant_message["timing"] = trace.snapshot()
+                if conversation_recall is not None:
+                    assistant_message["diagnostic"] = {
+                        "memory_scope": "current_window",
+                        "current_window_hit": True,
+                        "cross_window_hit": False,
+                        "global_memory_hit": False,
+                        "retrieved_item_count": conversation_recall.retrieved_item_count,
+                        "recent_raw_message_count": conversation_recall.recent_raw_message_count,
+                        "direct_memory_fast_path": True,
+                    }
+                if trace is not None:
+                    trace.begin("persistence")
                 target_chat["messages"].append(assistant_message)
                 self.store.save(target_chat)
+                if trace is not None:
+                    trace.end("persistence")
             self.status.setText("Memory answer")
+            if trace is not None:
+                trace.begin("ui_delivery")
             if target_chat is not None:
                 current_id = str((self.current_chat or {}).get("id", ""))
                 target_id = str(target_chat.get("id", ""))
@@ -1478,6 +1644,14 @@ class MainWindow(QMainWindow):
                     self.current_chat = target_chat
                     self._render_chat()
             self._load_chat_list()
+            if trace is not None:
+                trace.end("ui_delivery")
+                trace.add_metadata(
+                    direct_memory_fast_path=bool(conversation_recall),
+                    ollama_skipped=bool(conversation_recall),
+                    child_status="passed",
+                )
+                trace.emit_if_enabled()
             self.active_action_contract = None
             QTimer.singleShot(0, self._run_next_action_contract_safely)
             return
@@ -2063,10 +2237,33 @@ class MainWindow(QMainWindow):
                 or metadata.get("requested_fact")
                 or metadata.get("child_requested_fact"),
             ),
+            ("Route", diagnostic.get("route") or metadata.get("route")),
+            ("Memory scope", diagnostic.get("memory_scope") or metadata.get("memory_scope")),
+            ("Current-window hit", diagnostic.get("current_window_hit") or metadata.get("current_window_hit")),
+            ("Cross-window hit", diagnostic.get("cross_window_hit") or metadata.get("cross_window_hit")),
+            ("Global-memory hit", diagnostic.get("global_memory_hit") or metadata.get("global_memory_hit")),
+            ("Retrieved items", diagnostic.get("retrieved_item_count") or metadata.get("retrieved_item_count")),
+            ("Recent raw messages", diagnostic.get("recent_raw_message_count") or metadata.get("recent_raw_message_count")),
+            ("Context chars", metadata.get("assembled_context_chars")),
+            ("Prompt token estimate", metadata.get("estimated_prompt_units")),
+            ("Direct memory fast path", diagnostic.get("direct_memory_fast_path") or metadata.get("direct_memory_fast_path")),
+            ("Memory scope resolution", phases.get("memory_scope_resolution")),
+            ("Raw context", phases.get("current_raw_context_retrieval")),
+            ("Window memory", phases.get("window_memory_retrieval")),
+            ("Cross-window", phases.get("cross_window_retrieval")),
+            ("Global memory", phases.get("global_memory_retrieval")),
+            ("Context assembly", phases.get("context_assembly")),
             ("Search", phases.get("search_provider_time")),
             ("Page fetch", phases.get("page_fetch")),
             ("Inference", phases.get("model_inference")),
+            ("Ollama queue/transport", phases.get("ollama_queue_or_transport")),
+            ("Ollama load", phases.get("ollama_load")),
+            ("Ollama prompt evaluation", phases.get("ollama_prompt_evaluation")),
+            ("Ollama generation", phases.get("ollama_generation")),
+            ("Language validation", phases.get("language_validation")),
             ("Post-processing", phases.get("post_processing")),
+            ("Persistence", phases.get("persistence")),
+            ("UI delivery", phases.get("ui_delivery")),
             (
                 "Model calls",
                 diagnostic.get("model_call_count")
@@ -2090,7 +2287,14 @@ class MainWindow(QMainWindow):
         for label, value in labels:
             if value is None or value == "":
                 continue
-            if label in {"Search", "Page fetch", "Inference", "Post-processing"}:
+            if label in {
+                "Memory scope resolution", "Raw context", "Window memory", "Cross-window",
+                "Global memory", "Context assembly", "Search", "Page fetch",
+                "Inference", "Ollama queue/transport", "Ollama load",
+                "Ollama prompt evaluation", "Ollama generation", "Language validation",
+                "Post-processing",
+                "Persistence", "UI delivery",
+            }:
                 try:
                     value = f"{float(value) / 1000.0:.1f} s"
                 except (TypeError, ValueError):
