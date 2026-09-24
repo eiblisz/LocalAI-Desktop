@@ -1,4 +1,5 @@
 import re
+from collections import Counter
 
 from .text_normalization import canonical_match_text
 
@@ -93,7 +94,34 @@ _HUNGARIAN_RESPONSE_WORDS = {
     "arat", "árat", "arak", "árak", "termek", "termék", "termekek", "termékek",
     "forras", "forrás", "forrasok", "források", "talalat", "találat",
     "talalatok", "találatok", "ellenorzott", "ellenőrzött", "tudtam", "lehetett",
+    "ami", "amikor", "annak", "arra", "azt", "ezt", "ehhez", "ennek", "ennek",
+    "illetve", "is", "jelentos", "jelentős", "kerdes", "kérdés", "magyarorszag",
+    "magyarország", "meg", "mellett", "mint", "nagy", "pedig", "soran", "során",
+    "szama", "száma", "szerepe", "szinten", "szintén", "tobb", "több",
 }
+
+_VALIDATION_EXCLUDED_RE = re.compile(
+    r"https?://\S+"
+    r"|`[^`\n]+`"
+    r"|\[[^\]\n]+\]\([^)\n]+\)"
+    r"|\"[^\"\n]+\""
+    r"|“[^”\n]+”"
+    r"|„[^”\n]+”"
+    r"|»[^«\n]+«"
+    r"|‘[^’\n]+’",
+    flags=re.UNICODE,
+)
+_SOURCE_METADATA_LINE_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?(?:forrás(?:ok)?|source(?:s)?|quelle(?:n)?|"
+    r"hivatkozás(?:ok)?|weboldal(?:cím)?)\s*:",
+    flags=re.IGNORECASE,
+)
+_URL_RE = re.compile(r"https?://[^\s<>'\"]+", flags=re.IGNORECASE)
+_FACTUAL_LITERAL_RE = re.compile(
+    r"(?<![\w])(?:[$€£]\s*)?\d(?:[\d.,:/%+-]|\s(?=\d))*"
+    r"(?:\s*(?:EUR|USD|HUF|GBP|Ft|%))?(?![\w])",
+    flags=re.IGNORECASE,
+)
 
 PREFERRED_RESPONSE_LANGUAGE = "hu"
 
@@ -199,7 +227,7 @@ def effective_response_language(text, default=PREFERRED_RESPONSE_LANGUAGE):
 
 
 def response_language_repair_instruction(text):
-    language = detect_user_language(text)
+    language = effective_response_language(text)
     if language == "hu":
         return (
             "Rewrite the supplied answer in Hungarian. "
@@ -255,7 +283,7 @@ def response_language_instruction(text):
 
 
 def _response_language_scores(text):
-    raw = str(text or "")
+    raw = response_validation_text(text)
     lowered = raw.casefold()
     tokens = re.findall(r"[\wÀ-ž]+", lowered, flags=re.UNICODE)
     folded_tokens = [_fold(token) for token in tokens]
@@ -269,9 +297,43 @@ def _response_language_scores(text):
         "de": sum(1 for token in folded_tokens if token in de_values),
         "en": sum(1 for token in folded_tokens if token in en_values),
     }
-    if any(char in lowered for char in _STRONG_HUNGARIAN_CHARS):
+    if any(char in lowered for char in set("áéíóőúű")):
         scores["hu"] += 2
     return scores
+
+
+def response_validation_text(text):
+    """Return prose that is relevant to language/script validation."""
+    lines = [
+        line for line in str(text or "").splitlines()
+        if not _SOURCE_METADATA_LINE_RE.match(line)
+    ]
+    return _VALIDATION_EXCLUDED_RE.sub(" ", "\n".join(lines))
+
+
+def protected_factual_literals(text):
+    """Extract exact literals a language-only repair must not alter or drop."""
+    raw = str(text or "")
+    literals = []
+    for value in _URL_RE.findall(raw):
+        value = value.rstrip(".,;:!?")
+        for opening, closing in (("(", ")"), ("[", "]"), ("{", "}")):
+            while value.endswith(closing) and value.count(opening) < value.count(closing):
+                value = value[:-1]
+        literals.append("url:" + value)
+    without_urls = _URL_RE.sub(" ", raw)
+    for value in _FACTUAL_LITERAL_RE.findall(without_urls):
+        groups = re.findall(r"\d+", value)
+        unit_match = re.search(r"(?:EUR|USD|HUF|GBP|Ft|%)", value, re.IGNORECASE)
+        unit = unit_match.group(0).upper() if unit_match else ""
+        literals.append("number:" + "|".join(groups) + "|" + unit)
+    return Counter(literals)
+
+
+def repair_preserves_factual_literals(original, repaired):
+    required = protected_factual_literals(original)
+    actual = protected_factual_literals(repaired)
+    return all(actual[value] >= count for value, count in required.items())
 
 
 def response_language_matches(user_text, response_text):
@@ -285,6 +347,8 @@ def response_language_matches(user_text, response_text):
     ]
     strongest_foreign = max(foreign_scores or [0])
 
-    if strongest_foreign < 2:
+    if strongest_foreign < 3:
         return True
-    return expected_score >= strongest_foreign
+    if expected_score == 0:
+        return False
+    return expected_score + 1 >= strongest_foreign

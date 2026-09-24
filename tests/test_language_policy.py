@@ -79,6 +79,34 @@ def test_hungarian_response_language_accepts_hungarian_answer():
     )
 
 
+def test_hungarian_answer_allows_proper_names_source_titles_and_url():
+    assert response_language_matches(
+        "Milyen gazdasági vívmányai voltak Magyarországnak 2010 és 2026 között?",
+        (
+            "Magyarország gazdasága több területen is jelentős eredményt ért el. "
+            "A GDP-adatokat a World Bank Data ismerteti. "
+            "Forrás: [GDP growth (annual %)](https://data.worldbank.org/example)"
+        ),
+    )
+
+
+def test_substantially_english_answer_is_rejected_for_hungarian_query():
+    assert not response_language_matches(
+        "Milyen gazdasági vívmányai voltak Magyarországnak 2010 és 2026 között?",
+        (
+            "The economy has increased significantly between 2010 and 2026. "
+            "According to the source, growth was strong and the results were positive."
+        ),
+    )
+
+
+def test_quoted_foreign_unicode_fragment_does_not_fail_language_validation():
+    assert response_language_matches(
+        "Mit jelent ez a név?",
+        'A forrás az eredeti „서울경제” nevet használja, amelyet változatlanul idézünk.',
+    )
+
+
 
 
 def test_detects_general_hungarian_instruction_prompt():

@@ -45,12 +45,13 @@ from .multi_asset_market_data import run_multi_asset_market_request
 from .language_policy import (
     detect_user_language,
     effective_response_language,
+    repair_preserves_factual_literals,
     response_language_instruction,
     response_language_matches,
     response_language_repair_instruction,
 )
 from .ollama_client import OllamaClient
-from .response_guard import guard_response
+from .response_guard import guard_response, validate_response
 from .request_semantics import (
     TASK_DIRECT_FACT,
     TASK_ENTITY_OVERVIEW,
@@ -596,10 +597,10 @@ class ChatWebWorker(QObject):
         language_source = self._response_language_source()
         if self.trace is not None:
             self.trace.begin("language_validation")
-        matches = response_language_matches(language_source, answer)
+        validation = validate_response(language_source, answer)
         if self.trace is not None:
             self.trace.end("language_validation")
-        if matches:
+        if validation.valid:
             return answer
 
         expected = effective_response_language(language_source)
@@ -622,7 +623,17 @@ class ChatWebWorker(QObject):
                 },
                 {
                     "role": "user",
-                    "content": answer,
+                    "content": (
+                        "DRAFT TO REPAIR:\n"
+                        + answer
+                        + (
+                            "\n\nVERIFIED EVIDENCE REFERENCE "
+                            "(do not add content absent from the draft):\n"
+                            + self._factual_authority_text
+                            if self._factual_authority_text
+                            else ""
+                        )
+                    ),
                 },
             ],
         ).strip()
@@ -630,7 +641,12 @@ class ChatWebWorker(QObject):
         if self.trace is not None:
             self.trace.end("language_repair")
 
-        if repaired and response_language_matches(language_source, repaired):
+        repaired_validation = validate_response(language_source, repaired)
+        if (
+            repaired
+            and repaired_validation.valid
+            and repair_preserves_factual_literals(answer, repaired)
+        ):
             return repaired
 
         if expected == "hu":
@@ -643,16 +659,17 @@ class ChatWebWorker(QObject):
 
         if expected == "hu":
             return (
-                "A generált webes válasz nyelve nem egyezett a kérdés nyelvével. "
-                "A rendszer nem jeleníti meg a hibás nyelvű választ."
+                "A választ most nem sikerült megbízhatóan összeállítani a "
+                "rendelkezésre álló forrásokból. Kérlek, próbáld újra."
             )
         if expected == "de":
             return (
-                "Die Sprache der generierten Web-Antwort stimmte nicht mit der "
-                "Sprache der Anfrage überein. Die fehlerhafte Antwort wird nicht angezeigt."
+                "Die Antwort konnte aus den verfügbaren Quellen nicht zuverlässig "
+                "erstellt werden. Bitte versuche es erneut."
             )
         return (
-            "The generated web answer used the wrong language and was not shown."
+            "A reliable answer could not be produced from the available sources. "
+            "Please try again."
         )
 
     def _query_is_literal_followup_command(self, query):

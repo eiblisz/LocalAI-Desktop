@@ -869,13 +869,19 @@ def test_web_worker_repairs_clearly_german_answer_for_hungarian_request():
 
 def test_web_worker_fails_closed_when_language_repair_stays_wrong():
     class BadRepairClient(DummyWebClient):
+        def __init__(self):
+            super().__init__()
+            self.repair_calls = 0
+
         def chat_once(self, model, messages, timeout=600.0):
             if messages and "Rewrite the supplied answer in Hungarian" in messages[0]["content"]:
+                self.repair_calls += 1
                 return "Die Antwort bleibt leider auf Deutsch und enthaelt viele Preise."
             return super().chat_once(model, messages, timeout=timeout)
 
+    client = BadRepairClient()
     worker = workers.ChatWebWorker(
-        BadRepairClient(),
+        client,
         "qwen-test",
         [{"role": "system", "content": "Base system"}],
         "Keress nekem SSD-t",
@@ -885,8 +891,117 @@ def test_web_worker_fails_closed_when_language_repair_stays_wrong():
         "Die Suche zeigt viele Angebote und Preise. Hier sind die besten Produkte."
     )
 
-    assert "nem egyezett a kérdés nyelvével" in repaired
-    assert "hibás nyelvű választ" in repaired
+    assert "nem sikerült megbízhatóan összeállítani" in repaired
+    assert "Language Guard" not in repaired
+    assert client.repair_calls == 1
+    assert worker.execution_control.budget.repairs == 1
+
+
+def test_web_language_repair_keeps_grounded_evidence_and_sources(monkeypatch):
+    url = "https://example.com/gdp-2026"
+
+    class EvidenceRepairClient(DummyWebClient):
+        def __init__(self):
+            super().__init__()
+            self.repair_messages = None
+
+        def chat_once(self, model, messages, timeout=600.0):
+            system = messages[0]["content"]
+            if "Rewrite the supplied answer in Hungarian" in system:
+                self.repair_messages = messages
+                return (
+                    "Magyarország GDP-je 2026-ban 3,1%-kal nőtt. "
+                    f"Forrás: [World Bank Data]({url})"
+                )
+            return "Hungary GDP growth 2026"
+
+        def chat_stream(
+            self,
+            model,
+            messages,
+            on_token,
+            should_stop,
+            timeout=600.0,
+        ):
+            self.stream_calls.append((model, messages))
+            on_token(
+                "Hungary's GDP increased by 3.1% in 2026 according to "
+                f"[World Bank Data]({url})."
+            )
+
+    monkeypatch.setattr(
+        workers,
+        "search_web",
+        lambda query, max_results=8, fetch_pages=True: {
+            "provider": "test",
+            "query": query,
+            "results": [{
+                "title": "World Bank Data",
+                "url": url,
+                "snippet": "Hungary GDP growth was 3,1% in 2026.",
+            }],
+        },
+    )
+    monkeypatch.setattr(workers, "source_urls", lambda payload: [url])
+    monkeypatch.setattr(
+        workers,
+        "source_entries",
+        lambda payload, limit=6: [{"title": "World Bank Data", "url": url}],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: f"Hungary GDP growth was 3,1% in 2026. {url}",
+    )
+    monkeypatch.setattr(
+        workers,
+        "guard_grounded_answer",
+        lambda client, model, prompt, answer, authority, **kwargs: answer,
+    )
+
+    client = EvidenceRepairClient()
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Milyen gazdasági eredményt ért el Magyarország 2026-ban?",
+    )
+    tokens = []
+    failures = []
+    worker.token.connect(tokens.append)
+    worker.failed.connect(failures.append)
+    worker.run()
+
+    answer = "".join(tokens)
+    assert failures == []
+    assert "Magyarország GDP-je" in answer
+    assert "3,1%" in answer
+    assert url in answer
+    assert worker.source_metadata == [{"title": "World Bank Data", "url": url}]
+    assert client.repair_messages is not None
+    assert "VERIFIED EVIDENCE REFERENCE" in client.repair_messages[1]["content"]
+    assert worker.execution_control.budget.search_calls == 1
+
+
+def test_web_language_repair_removes_accidental_hangul():
+    class ContaminationRepairClient(DummyWebClient):
+        def chat_once(self, model, messages, timeout=600.0):
+            if messages and "Rewrite the supplied answer in Hungarian" in messages[0]["content"]:
+                return "Ez egy teljesen magyar válasz."
+            return super().chat_once(model, messages, timeout=timeout)
+
+    worker = workers.ChatWebWorker(
+        ContaminationRepairClient(),
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        "Válaszolj magyarul.",
+    )
+
+    repaired = worker._repair_response_language(
+        "Ez egy magyar válasz, de 잘못 rész került bele."
+    )
+
+    assert repaired == "Ez egy teljesen magyar válasz."
 
 
 def test_generic_shopping_bypasses_model_query_generation(monkeypatch):
