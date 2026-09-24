@@ -173,7 +173,7 @@ class WindowMemoryService:
                 if include_current_memory
                 else ""
             ),
-            recent_messages=recent,
+            recent_messages=recent if include_current_memory else [],
             compacted=compacted,
             global_windows=related,
         )

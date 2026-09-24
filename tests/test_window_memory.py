@@ -304,13 +304,13 @@ def test_other_window_scope_suppresses_current_window_memory(tmp_path):
         store,
         service,
         "chat-b",
-        [],
+        [{"role": "user", "content": "The project codename is CURRENT-ONLY."}],
         prompt,
         local=False,
     )
 
     assert "CURRENT WINDOW INDEXED STATE:" not in messages[0]["content"]
-    assert "CURRENT-ONLY" not in messages[0]["content"]
+    assert all("CURRENT-ONLY" not in item["content"] for item in messages)
 
 
 def test_global_memory_scope_suppresses_current_window_memory(tmp_path):
@@ -327,13 +327,13 @@ def test_global_memory_scope_suppresses_current_window_memory(tmp_path):
         store,
         service,
         "chat-b",
-        [],
+        [{"role": "user", "content": "The project codename is CURRENT-ONLY."}],
         prompt,
         local=False,
     )
 
     assert "CURRENT WINDOW INDEXED STATE:" not in messages[0]["content"]
-    assert "CURRENT-ONLY" not in messages[0]["content"]
+    assert all("CURRENT-ONLY" not in item["content"] for item in messages)
 
 
 def test_cross_window_relevance_excludes_unrelated_recent_windows(tmp_path):
