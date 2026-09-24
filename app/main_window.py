@@ -59,7 +59,11 @@ from .desktop_preferences import DesktopPreferences
 from .artifact_themes import document_preset_labels, workbook_preset_labels
 from .browser_navigation_authority import BrowserNavigationAuthority
 from .build_identity import build_identity, short_build_sha
-from .chat_orchestration import plan_chat_actions
+from .chat_orchestration import (
+    is_global_memory_request,
+    is_other_window_request,
+    plan_chat_actions,
+)
 from .chat_extensions_dialog import ChatExtensionsDialog
 from .discord_bot_bridge import DiscordBotBridge, DiscordBotSettings
 from .extension_authority import (
@@ -1179,6 +1183,14 @@ class MainWindow(QMainWindow):
             {"role": "user", "content": text}
         )
         self.store.save(self.current_chat)
+        window_memory = getattr(self, "window_memory", None)
+        index_user_message = getattr(window_memory, "index_user_message", None)
+        if callable(index_user_message):
+            index_user_message(
+                self.current_chat.get("id", ""),
+                text,
+                source_message_count=len(self.current_chat.get("messages", [])),
+            )
         self.generation_chat_id = str(self.current_chat.get("id", ""))
         self.input.clear()
         self.attachment_context = []
@@ -1302,7 +1314,13 @@ class MainWindow(QMainWindow):
                 "window memory and raw messages. If the requested fact was not stated "
                 "here, say so. Do not infer it from other chats or long-term memory."
             )
-        memory_context = "" if conversation_local else self._build_memory_context(prompt)
+        other_window_request = is_other_window_request(prompt)
+        global_memory_request = is_global_memory_request(prompt)
+        memory_context = (
+            ""
+            if conversation_local or other_window_request
+            else self._build_memory_context(prompt)
+        )
         if memory_context:
             system_prompt = f"{system_prompt}\n\n{memory_context}"
 
@@ -1311,14 +1329,31 @@ class MainWindow(QMainWindow):
             self.generation_chat_id,
             chat_messages,
             prompt,
-            include_related_windows=not conversation_local,
+            include_related_windows=(
+                not conversation_local and not global_memory_request
+            ),
         )
+        if other_window_request:
+            if window_context.global_windows:
+                system_prompt = (
+                    f"{system_prompt}\n\nOTHER CONVERSATION AUTHORITY:\n"
+                    "Answer only from the relevant other-window user state below. "
+                    "Do not use unrelated long-term memory or invent a match."
+                )
+            else:
+                system_prompt = (
+                    f"{system_prompt}\n\nOTHER CONVERSATION AUTHORITY:\n"
+                    "No relevant other-window state was found. Say that it was not "
+                    "found; do not substitute unrelated memories."
+                )
         window_context_text = self.window_memory.context_text(window_context)
         if window_context_text:
             system_prompt = f"{system_prompt}\n\n{window_context_text}"
         if self.pending_request_trace is not None:
             self.pending_request_trace.add_metadata(
-                window_memory_loaded=bool(window_context.summary),
+                window_memory_loaded=bool(
+                    window_context.summary or window_context.indexed_state
+                ),
                 global_memory_loaded=bool(memory_context),
                 related_window_count=len(window_context.global_windows),
                 recent_raw_message_count=len(window_context.recent_messages),
@@ -1421,6 +1456,7 @@ class MainWindow(QMainWindow):
             if (
                 contract.route == ROUTE_MEMORY_WRITE
                 or bool(getattr(contract, "conversation_local", False))
+                or is_other_window_request(prompt)
             )
             else self._direct_user_memory_answer(prompt)
         )

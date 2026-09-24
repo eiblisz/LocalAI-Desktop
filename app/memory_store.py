@@ -1,10 +1,12 @@
 import re
 import sqlite3
 import uuid
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
 from .config import MEMORY_CANONICAL_DIR
+from .text_normalization import canonical_match_text
 
 
 DEFAULT_MEMORY_DB = MEMORY_CANONICAL_DIR / "memory.sqlite3"
@@ -213,6 +215,15 @@ class MemoryStore:
                 ON response_feedback(chat_id, message_id);
                 """
             )
+            window_columns = {
+                row["name"]
+                for row in db.execute("PRAGMA table_info(window_memories)").fetchall()
+            }
+            if "indexed_state" not in window_columns:
+                db.execute(
+                    "ALTER TABLE window_memories "
+                    "ADD COLUMN indexed_state TEXT NOT NULL DEFAULT ''"
+                )
 
     @staticmethod
     def _validate_enum(name, value, allowed):
@@ -727,6 +738,46 @@ class MemoryStore:
             )
         return self.get_window_memory(chat_id)
 
+    def upsert_window_indexed_state(
+        self,
+        chat_id,
+        indexed_state,
+        *,
+        source_message_count,
+    ):
+        chat_id = _clean(chat_id)
+        indexed_state = str(indexed_state or "").strip()
+        if not chat_id:
+            raise ValueError("chat_id is required")
+        if not indexed_state:
+            raise ValueError("indexed window state is required")
+
+        now = _now()
+        with self._connect() as db:
+            db.execute(
+                """
+                INSERT INTO window_memories (
+                    chat_id, summary, indexed_state, compacted_message_count,
+                    source_message_count, created_at, updated_at
+                ) VALUES (?, '', ?, 0, ?, ?, ?)
+                ON CONFLICT(chat_id) DO UPDATE SET
+                    indexed_state = excluded.indexed_state,
+                    source_message_count = MAX(
+                        window_memories.source_message_count,
+                        excluded.source_message_count
+                    ),
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    chat_id,
+                    indexed_state,
+                    max(0, int(source_message_count)),
+                    now,
+                    now,
+                ),
+            )
+        return self.get_window_memory(chat_id)
+
     def list_window_memories(self, *, exclude_chat_id=None, limit=50):
         limit = max(0, min(int(limit), 200))
         if not limit:
@@ -756,28 +807,74 @@ class MemoryStore:
         limit=3,
         candidate_limit=50,
     ):
-        query_tokens = set(re.findall(r"\w+", _clean(query).casefold(), re.UNICODE))
+        ignored = {
+            "the", "a", "an", "is", "was", "what", "which", "given", "other",
+            "another", "conversation", "chat", "this", "in", "about",
+            "mi", "mit", "volt", "van", "egy", "masik", "masikban", "ebben",
+            "beszelgetes", "beszelgetesben", "megadott", "kapcsolatban",
+            "der", "die", "das", "was", "ist", "war", "anderen", "gesprach",
+        }
+        query_tokens = {
+            token
+            for token in canonical_match_text(query).split()
+            if len(token) >= 3 and token not in ignored
+        }
         if not query_tokens or int(limit) < 1:
             return []
-        ranked = []
-        for item in self.list_window_memories(
+        candidates = self.list_window_memories(
             exclude_chat_id=exclude_chat_id,
             limit=candidate_limit,
-        ):
-            summary = str(item.get("summary") or "")
+        )
+        document_frequency = Counter()
+        tokenized = []
+        for item in candidates:
+            content = "\n".join(
+                part
+                for part in (
+                    str(item.get("indexed_state") or ""),
+                    str(item.get("summary") or ""),
+                )
+                if part
+            )
+            content_tokens = {
+                token
+                for token in canonical_match_text(content).split()
+                if len(token) >= 3 and token not in ignored
+            }
+            tokenized.append((item, content, content_tokens))
+            document_frequency.update(content_tokens)
+
+        ranked = []
+        candidate_count = max(1, len(tokenized))
+        for item, content, content_tokens in tokenized:
             if is_secret_memory_candidate(
-                key=summary,
-                value=summary,
-                subject=summary,
+                key=content,
+                value=content,
+                subject=content,
             ):
                 continue
-            summary_tokens = set(re.findall(r"\w+", summary.casefold(), re.UNICODE))
-            overlap = len(query_tokens & summary_tokens)
-            if overlap < 2:
+            overlap_tokens = query_tokens & content_tokens
+            if len(overlap_tokens) < 2:
                 continue
-            ranked.append((overlap, item.get("updated_at", ""), item))
-        ranked.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
-        return [entry[2] for entry in ranked[: max(0, min(int(limit), 10))]]
+            weighted_overlap = sum(
+                1.0 + (candidate_count / max(1, document_frequency[token]))
+                for token in overlap_tokens
+            )
+            coverage = len(overlap_tokens) / max(1, len(query_tokens))
+            user_lines = "\n".join(
+                line for line in content.splitlines()
+                if line.strip().casefold().startswith("- user:")
+            )
+            user_tokens = set(canonical_match_text(user_lines).split())
+            user_overlap = len(query_tokens & user_tokens)
+            if user_overlap < 1:
+                continue
+            score = weighted_overlap + (coverage * 4.0) + (user_overlap * 2.0)
+            if score < 6.0:
+                continue
+            ranked.append((score, user_overlap, item.get("updated_at", ""), item))
+        ranked.sort(key=lambda entry: (entry[0], entry[1], entry[2]), reverse=True)
+        return [entry[3] for entry in ranked[: max(0, min(int(limit), 10))]]
 
     def set_response_feedback(self, chat_id, message_id, feedback_type, *, active=True):
         chat_id = _clean(chat_id)

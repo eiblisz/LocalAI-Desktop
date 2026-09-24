@@ -74,6 +74,59 @@ def test_model_switch_does_not_change_window_memory(tmp_path):
     assert store.get_window_memory("chat-a")["chat_id"] == "chat-a"
 
 
+def test_short_explicit_user_state_is_immediately_cross_window_searchable(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    service = WindowMemoryService(store)
+
+    service.index_user_message(
+        "chat-a",
+        "The project codename is Kék Sárkány 7319.",
+        source_message_count=1,
+    )
+
+    stored = store.get_window_memory("chat-a")
+    assert stored["summary"] == ""
+    assert "Kék Sárkány 7319" in stored["indexed_state"]
+    matches = store.search_window_memories(
+        "What was the project codename given in the other conversation?",
+        exclude_chat_id="chat-b",
+    )
+    assert [item["chat_id"] for item in matches] == ["chat-a"]
+
+
+def test_incremental_window_state_survives_store_reload(tmp_path):
+    path = tmp_path / "memory.sqlite3"
+    service = WindowMemoryService(MemoryStore(path))
+    service.index_user_message(
+        "chat-a",
+        "The project codename is Kék Sárkány 7319.",
+        source_message_count=1,
+    )
+
+    reloaded = MemoryStore(path)
+    matches = reloaded.search_window_memories(
+        "What was the project codename in the other conversation?",
+        exclude_chat_id="chat-b",
+    )
+
+    assert "Kék Sárkány 7319" in matches[0]["indexed_state"]
+    assert reloaded.list_memories() == []
+
+
+def test_casual_user_sentence_is_not_aggressively_indexed(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    service = WindowMemoryService(store)
+
+    result = service.index_user_message(
+        "chat-a",
+        "Today I read an interesting article.",
+        source_message_count=1,
+    )
+
+    assert result is None
+    assert store.get_window_memory("chat-a") is None
+
+
 def test_model_switch_recall_routes_to_same_persisted_window_memory(tmp_path):
     store = MemoryStore(tmp_path / "memory.sqlite3")
     store.upsert_window_memory(
@@ -206,6 +259,64 @@ def test_explicit_other_window_recall_can_use_bounded_related_memory(tmp_path):
     assert contracts[0].conversation_local is False
     assert "RELATED WINDOW MEMORY:" in messages[0]["content"]
     assert "Kék Sárkány 7319" in messages[0]["content"]
+    assert "chat-a" not in messages[0]["content"]
+
+
+def test_cross_window_relevance_excludes_unrelated_recent_windows(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    service = WindowMemoryService(store)
+    service.index_user_message(
+        "chat-a",
+        "The project codename is Kék Sárkány 7319.",
+        source_message_count=1,
+    )
+    for chat_id, text in (
+        ("chat-music", "The selected music artist is James Hetfield."),
+        ("chat-physics", "The chosen physics topic is quantum entanglement."),
+        ("chat-literature", "The task state for János vitéz is complete."),
+    ):
+        service.index_user_message(chat_id, text, source_message_count=1)
+
+    matches = store.search_window_memories(
+        "What was the project codename given in the other conversation?",
+        exclude_chat_id="chat-b",
+        limit=2,
+    )
+
+    assert [item["chat_id"] for item in matches] == ["chat-a"]
+
+
+def test_cross_window_search_returns_no_unrelated_fallback(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    service = WindowMemoryService(store)
+    service.index_user_message(
+        "chat-music",
+        "The selected music artist is James Hetfield.",
+        source_message_count=1,
+    )
+
+    context = service.prepare_context(
+        "chat-b",
+        [],
+        "What was the project codename in the other conversation?",
+    )
+
+    assert context.global_windows == []
+    assert "James Hetfield" not in service.context_text(context)
+
+
+def test_assistant_only_summary_is_not_cross_window_authority(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    store.upsert_window_memory(
+        "chat-old",
+        "- Assistant: The project codename might be Hallucinated Value.",
+        compacted_message_count=2,
+        source_message_count=14,
+    )
+
+    assert store.search_window_memories(
+        "What was the project codename in the other conversation?"
+    ) == []
 
 
 def test_explicit_long_term_memory_query_keeps_global_memory_available(tmp_path):
@@ -377,6 +488,7 @@ def test_cross_window_registry_is_bounded_and_summary_only(tmp_path):
     assert all(set(item) == {
         "chat_id",
         "summary",
+        "indexed_state",
         "compacted_message_count",
         "source_message_count",
         "created_at",

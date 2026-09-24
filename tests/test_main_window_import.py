@@ -377,12 +377,14 @@ def test_send_injects_memory_into_system_prompt_not_saved_chat():
     send_source = inspect.getsource(MainWindow._send)
     messages_source = inspect.getsource(MainWindow._action_messages_for_model)
 
-    assert 'memory_context = "" if conversation_local else self._build_memory_context(prompt)' in messages_source
+    assert "if conversation_local or other_window_request" in messages_source
+    assert "else self._build_memory_context(prompt)" in messages_source
     assert "CURRENT CONVERSATION AUTHORITY:" in messages_source
     assert 'system_prompt = f"{system_prompt}\\n\\n{memory_context}"' in messages_source
     assert 'messages = [{"role": "system", "content": system_prompt}]' in messages_source
     assert '{"role": "user", "content": text}' in send_source
     assert 'self.current_chat["messages"].append({"role": "system"' not in send_source
+    assert 'getattr(window_memory, "index_user_message", None)' in send_source
 
 def test_explicit_memory_request_uses_dedicated_background_worker():
     from app.main_window import MainWindow

@@ -17,6 +17,37 @@ def _semantic_tokens(value):
     }
 
 
+def is_other_window_request(user_text):
+    tokens = _semantic_tokens(user_text)
+    scope_terms = {
+        "beszelgetes", "beszelgetesben", "beszelgetesnek",
+        "chat", "chatben", "szal", "szalban",
+        "conversation", "thread", "gesprach", "verlauf",
+    }
+    other_terms = {
+        "masik", "masikban", "other", "another", "anderen", "anderer",
+    }
+    return bool(tokens & scope_terms and tokens & other_terms)
+
+
+def is_global_memory_request(user_text):
+    sequence = canonical_match_text(user_text).split()
+    tokens = set(sequence)
+    memory_terms = {"memoria", "memory", "gedachtnis"}
+    durable_terms = {
+        "globalis", "globalisan", "tartos", "global", "globally",
+        "durable", "langzeit", "dauerhaft",
+    }
+    pairs = set(zip(sequence, sequence[1:]))
+    return bool(
+        tokens & memory_terms
+        and (
+            tokens & durable_terms
+            or pairs.intersection({("long", "term"), ("hosszu", "tavu")})
+        )
+    )
+
+
 def is_conversation_local_request(
     user_text,
     *,
@@ -57,10 +88,7 @@ def is_conversation_local_request(
         "this", "current", "our", "here",
         "dies", "diesem", "dieser", "unser", "hier",
     }
-    other_window_terms = {
-        "masik", "masikban", "other", "another", "anderen", "anderer",
-    }
-    if tokens & scope_terms and tokens & other_window_terms:
+    if is_other_window_request(user_text):
         return False
 
     has_scope = bool(tokens & scope_terms) and bool(tokens & deictic_terms)
