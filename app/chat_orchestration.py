@@ -24,7 +24,8 @@ def is_conversation_local_request(
     window_memory="",
 ):
     """Classify requests whose authority is the current conversation, not the web."""
-    normalized_words = set(canonical_match_text(user_text).split())
+    normalized_sequence = canonical_match_text(user_text).split()
+    normalized_words = set(normalized_sequence)
     tokens = _semantic_tokens(user_text)
     if not tokens:
         return False
@@ -32,9 +33,9 @@ def is_conversation_local_request(
     memory_terms = {
         "memoria", "memory", "gedachtnis",
     }
-    durable_terms = {
-        "globalis", "globalisan", "hosszu", "tavu", "tartos",
-        "global", "globally", "long", "term", "durable",
+    durable_scope_terms = {
+        "globalis", "globalisan", "tartos",
+        "global", "globally", "durable",
         "langzeit", "dauerhaft",
     }
     recall_stems = (
@@ -45,9 +46,6 @@ def is_conversation_local_request(
         for token in tokens
         for stem in recall_stems
     )
-    if tokens & durable_terms and (tokens & memory_terms or has_recall):
-        return False
-
     scope_terms = {
         "beszelgetes", "beszelgetesben", "beszelgetesnek",
         "chat", "chatben", "szal", "szalban", "kontextus", "kontextusban",
@@ -65,6 +63,20 @@ def is_conversation_local_request(
     if tokens & scope_terms and tokens & other_window_terms:
         return False
 
+    has_scope = bool(tokens & scope_terms) and bool(tokens & deictic_terms)
+    if has_scope:
+        return True
+
+    adjacent_pairs = set(zip(normalized_sequence, normalized_sequence[1:]))
+    has_durable_scope = bool(tokens & durable_scope_terms) or bool(
+        adjacent_pairs.intersection({
+            ("long", "term"),
+            ("hosszu", "tavu"),
+        })
+    )
+    if has_durable_scope and (tokens & memory_terms or has_recall):
+        return False
+
     communication_stems = (
         "mondtam", "kozoltem", "megadtam", "said", "told", "provided", "gave",
         "gesagt", "genannt",
@@ -72,7 +84,6 @@ def is_conversation_local_request(
     prior_stems = (
         "korabb", "elobb", "earlier", "previously", "before", "vorher",
     )
-    has_scope = bool(tokens & scope_terms) and bool(tokens & deictic_terms)
     has_communication = any(
         token.startswith(stem)
         for token in tokens
@@ -87,8 +98,7 @@ def is_conversation_local_request(
         normalized_words.intersection({"en", "i", "me", "my", "nekem", "tolem", "ich"})
     )
     return bool(
-        has_scope
-        or has_recall
+        has_recall
         or (has_communication and (has_prior or first_person))
     )
 

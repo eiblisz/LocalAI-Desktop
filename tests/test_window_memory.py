@@ -255,6 +255,22 @@ def test_global_recall_wording_uses_durable_memory_scope():
     assert hungarian[0].conversation_local is False
 
 
+def test_current_chat_scope_outranks_ordinary_long_wording():
+    timeout = plan_chat_actions(
+        ActionRuntime(),
+        "Do you remember how long the timeout was in this conversation?",
+        web_mode="ON",
+    )
+    report = plan_chat_actions(
+        ActionRuntime(),
+        "What do you recall about the long report in this chat?",
+        web_mode="ON",
+    )
+
+    assert timeout[0].conversation_local is True
+    assert report[0].conversation_local is True
+
+
 def test_long_chat_compacts_old_messages_and_keeps_recent_raw_context(tmp_path):
     store = MemoryStore(tmp_path / "memory.sqlite3")
     service = WindowMemoryService(store)
