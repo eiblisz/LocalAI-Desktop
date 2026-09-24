@@ -46,6 +46,7 @@ def remember_response(
     source_message_id=None,
 ):
     candidates = extract_response_memories(client, model, response_text)
+    source_excerpt = str(response_text or "").strip()[:2000]
     written = []
     for candidate in candidates:
         memory = store.remember_explicit(
@@ -55,7 +56,7 @@ def remember_response(
             key=candidate["key"],
             value=candidate["value"],
             source_chat_id=source_chat_id,
-            source_excerpt=response_text,
+            source_excerpt=source_excerpt,
             source_type="response_remember",
             source_ref=source_message_id or source_chat_id,
             importance="IMPORTANT",

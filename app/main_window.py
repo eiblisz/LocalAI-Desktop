@@ -2056,6 +2056,8 @@ class MainWindow(QMainWindow):
     def _response_actions_html(self, message, message_index):
         if not self.current_chat or not str(message.get("content") or "").strip():
             return ""
+        if message_index >= len(self.current_chat.get("messages", [])):
+            return ""
         chat_id = str(self.current_chat.get("id") or "")
         message_id = str(message.get("id") or f"message-{message_index}")
         feedback = self.memory_store.get_response_feedback(chat_id, message_id)
@@ -2076,7 +2078,7 @@ class MainWindow(QMainWindow):
             f"href='localai-feedback://thumbs_up/{message_index}'>👍</a>"
             f"<a title='{html.escape(memory_title, quote=True)}' "
             f"style='color:{memory_color};text-decoration:none;' "
-            f"href='localai-feedback://remember/{message_index}'>◉</a>"
+            f"href='localai-feedback://remember/{message_index}'>🧠</a>"
             "</div>"
         )
 

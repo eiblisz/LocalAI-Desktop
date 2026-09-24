@@ -1,9 +1,11 @@
 import re
 from dataclasses import dataclass
 
+from .memory_store import is_secret_memory_candidate
+
 
 RECENT_MESSAGE_LIMIT = 12
-COMPACTION_MESSAGE_THRESHOLD = 14
+COMPACTION_MESSAGE_THRESHOLD = RECENT_MESSAGE_LIMIT + 1
 COMPACTION_CHAR_THRESHOLD = 12_000
 MAX_SUMMARY_CHARS = 8_000
 MAX_LINE_CHARS = 700
@@ -27,6 +29,8 @@ def _memory_line(message):
         return ""
     content = _clean_text(message.get("content"))
     if not content:
+        return ""
+    if is_secret_memory_candidate(key=content, value=content, subject=content):
         return ""
     if len(content) > MAX_LINE_CHARS:
         content = content[: MAX_LINE_CHARS - 3].rstrip() + "..."
@@ -92,7 +96,10 @@ class WindowMemoryService:
                 compacted = True
 
         recent = eligible[previous_count:]
-        if len(recent) > RECENT_MESSAGE_LIMIT:
+        if (
+            len(recent) > RECENT_MESSAGE_LIMIT
+            and target_count <= previous_count
+        ):
             recent = recent[-RECENT_MESSAGE_LIMIT:]
 
         related = self.store.search_window_memories(

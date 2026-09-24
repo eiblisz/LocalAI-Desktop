@@ -5,6 +5,7 @@ from .memory_store import ALLOWED_CATEGORIES, is_secret_memory_candidate
 
 
 MAX_EXPLICIT_MEMORIES = 8
+MAX_RESPONSE_MEMORY_SOURCE_CHARS = 12_000
 
 MEMORY_EXTRACTION_SCHEMA = {
     "type": "object",
@@ -350,6 +351,7 @@ def extract_response_memories(client, model, response_text):
     response_text = _clean(response_text)
     if not response_text:
         return []
+    response_text = response_text[:MAX_RESPONSE_MEMORY_SOURCE_CHARS]
 
     raw = client.chat_once(
         model=model,

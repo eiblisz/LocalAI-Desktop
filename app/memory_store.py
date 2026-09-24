@@ -756,7 +756,7 @@ class MemoryStore:
         limit=3,
         candidate_limit=50,
     ):
-        query_tokens = set(re.findall(r"[a-z0-9_]+", _clean(query).lower()))
+        query_tokens = set(re.findall(r"\w+", _clean(query).casefold(), re.UNICODE))
         if not query_tokens or int(limit) < 1:
             return []
         ranked = []
@@ -764,9 +764,14 @@ class MemoryStore:
             exclude_chat_id=exclude_chat_id,
             limit=candidate_limit,
         ):
-            summary_tokens = set(
-                re.findall(r"[a-z0-9_]+", str(item.get("summary") or "").lower())
-            )
+            summary = str(item.get("summary") or "")
+            if is_secret_memory_candidate(
+                key=summary,
+                value=summary,
+                subject=summary,
+            ):
+                continue
+            summary_tokens = set(re.findall(r"\w+", summary.casefold(), re.UNICODE))
             overlap = len(query_tokens & summary_tokens)
             if overlap < 2:
                 continue
