@@ -13,8 +13,8 @@ def test_common_orchestrator_preserves_web_modes():
 
     assert auto[0].route == ROUTE_WEB
     assert auto[0].use_web is True
-    assert on[0].route == ROUTE_WEB
-    assert on[0].use_web is True
+    assert on[0].route == ROUTE_CHAT
+    assert on[0].use_web is False
     assert off[0].route == ROUTE_CHAT
     assert off[0].use_web is False
 
@@ -43,6 +43,87 @@ def test_creative_prompt_remains_local_in_auto():
 
     assert contracts[0].route == ROUTE_CHAT
     assert contracts[0].use_web is False
+
+
+def test_conversation_local_state_statement_stays_local_with_web_on():
+    contracts = plan_chat_actions(
+        ActionRuntime(),
+        (
+            "Ebben a beszélgetésben a tesztprojekt kódneve "
+            "Kék Sárkány 7319. Ezt később kérdezd vissza tőlem."
+        ),
+        web_mode="ON",
+    )
+
+    assert contracts[0].route == ROUTE_CHAT
+    assert contracts[0].use_web is False
+    assert contracts[0].conversation_local is True
+
+
+def test_current_window_recall_stays_local_with_web_on():
+    history = [{
+        "role": "user",
+        "content": "A tesztprojekt kódneve Kék Sárkány 7319.",
+    }]
+
+    contracts = plan_chat_actions(
+        ActionRuntime(),
+        "Mi a tesztprojekt kódneve ebben a beszélgetésben?",
+        web_mode="ON",
+        conversation_messages=history,
+    )
+
+    assert contracts[0].route == ROUTE_CHAT
+    assert contracts[0].use_web is False
+    assert contracts[0].conversation_local is True
+
+
+def test_genuine_fresh_external_question_still_uses_web_with_web_on():
+    contracts = plan_chat_actions(
+        ActionRuntime(),
+        "Melyik a jelenlegi legfrissebb Ollama verzió?",
+        web_mode="ON",
+    )
+
+    assert contracts[0].route == ROUTE_WEB
+    assert contracts[0].use_web is True
+
+
+def test_external_chatgpt_and_historical_context_questions_are_not_local():
+    history = [{"role": "user", "content": "Korábbi, nem kapcsolódó kérdés."}]
+    prompts = (
+        "What is the latest ChatGPT update?",
+        "What is the historical context of the French Revolution?",
+        "What happened before the French Revolution?",
+    )
+
+    for prompt in prompts:
+        contracts = plan_chat_actions(
+            ActionRuntime(),
+            prompt,
+            web_mode="ON",
+            conversation_messages=history,
+        )
+        assert contracts[0].conversation_local is False
+
+
+def test_mixed_batch_routes_recall_locally_and_fresh_query_to_web():
+    prompt = (
+        "Mi a kódnév, amit az előbb megadtam?\n"
+        "Melyik a jelenlegi legfrissebb Ollama verzió?"
+    )
+    contracts = plan_chat_actions(
+        ActionRuntime(),
+        prompt,
+        web_mode="ON",
+        conversation_messages=[{
+            "role": "user",
+            "content": "A kódnév Kék Sárkány 7319.",
+        }],
+    )
+
+    assert [contract.route for contract in contracts] == [ROUTE_CHAT, ROUTE_WEB]
+    assert [contract.conversation_local for contract in contracts] == [True, False]
 
 
 def test_invalid_mode_normalizes_to_auto():

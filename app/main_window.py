@@ -1039,7 +1039,8 @@ class MainWindow(QMainWindow):
                 "}"
             )
             self.web_button.setToolTip(
-                "WEB ON: every eligible chat request uses read-only web research."
+                "WEB ON: web research is available for external, current, or explicit "
+                "web requests; conversation-local requests stay local."
             )
             return
 
@@ -1223,12 +1224,25 @@ class MainWindow(QMainWindow):
             base_text="Útvonal kiválasztása",
         )
 
+        memory_store = getattr(self, "memory_store", None)
+        get_window_memory = getattr(memory_store, "get_window_memory", None)
+        current_window_memory = (
+            get_window_memory((self.current_chat or {}).get("id", ""))
+            if callable(get_window_memory)
+            else None
+        )
         try:
             contracts = plan_chat_actions(
                 self.action_runtime,
                 followup_resolution.resolved_intent,
                 web_mode=self.web_mode,
                 model_context_suffix=context_suffix,
+                conversation_messages=list(
+                    (self.current_chat or {}).get("messages", [])
+                )[:-1],
+                window_memory=str(
+                    (current_window_memory or {}).get("summary", "")
+                ),
                 crypto_market_available=crypto_market_extension is not None,
                 multi_asset_market_available=(
                     multi_asset_market_extension is not None
@@ -1283,7 +1297,21 @@ class MainWindow(QMainWindow):
         self.pending_action_images = list(image_payloads)
         MainWindow._run_next_action_contract_safely(self)
 
-    def _action_messages_for_model(self, prompt, constraints=None):
+    def _action_messages_for_model(
+        self,
+        prompt,
+        constraints=None,
+        *,
+        conversation_local=None,
+    ):
+        if conversation_local is None:
+            conversation_local = bool(
+                getattr(
+                    getattr(self, "active_action_contract", None),
+                    "conversation_local",
+                    False,
+                )
+            )
         prompt = str(prompt or "").strip()
         system_prompt = (
             f"{DEFAULT_SYSTEM_PROMPT}\n\n"
@@ -1304,6 +1332,7 @@ class MainWindow(QMainWindow):
             self.generation_chat_id,
             chat_messages,
             prompt,
+            include_related_windows=not conversation_local,
         )
         window_context_text = self.window_memory.context_text(window_context)
         if window_context_text:
@@ -1547,7 +1576,12 @@ class MainWindow(QMainWindow):
                 model,
                 messages_for_model,
                 execution_text,
-                allow_web_fallback=self.web_mode != "OFF",
+                allow_web_fallback=(
+                    self.web_mode != "OFF"
+                    and not bool(
+                        getattr(contract, "conversation_local", False)
+                    )
+                ),
                 constraints=contract.constraints,
                 trace=self.pending_request_trace,
                 explicit_batch_child=getattr(

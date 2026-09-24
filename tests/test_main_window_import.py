@@ -159,7 +159,7 @@ def test_normal_chat_has_web_on_auto_off_modes():
     assert "contract.use_web" in run
     assert "ChatWebWorker" in run
     assert "AdaptiveChatWorker" in run
-    assert 'allow_web_fallback=self.web_mode != "OFF"' in run
+    assert 'getattr(contract, "conversation_local", False)' in run
 
 
 def test_web_auto_detects_explicit_search_intent():

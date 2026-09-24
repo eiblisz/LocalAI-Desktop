@@ -53,6 +53,7 @@ class ActionContract:
     required_authorities: tuple[str, ...]
     constraints: object
     explicit_batch_child: bool = False
+    conversation_local: bool = False
 
     @property
     def artifact_plans(self):
@@ -199,6 +200,7 @@ class ActionRuntime:
         disable_web=False,
         crypto_market_available=False,
         multi_asset_market_available=False,
+        conversation_local=False,
     ):
         """
         Plan every explicit action unit independently and preserve source order.
@@ -207,15 +209,21 @@ class ActionRuntime:
         suffix. It is considered for routing each unit but does not alter the
         stored user prompt or the user-visible action contract.
         """
+        local_resolver = (
+            conversation_local
+            if callable(conversation_local)
+            else lambda _prompt: bool(conversation_local)
+        )
         planned = plan_user_actions(
             user_text,
             force_web=bool(force_web),
-            disable_web=bool(disable_web),
+            disable_web=lambda prompt: bool(disable_web or local_resolver(prompt)),
         )
         suffix = str(model_context_suffix or "")
         explicit_batch = len(planned) > 1
         contracts = []
         for index, item in enumerate(planned):
+            item_conversation_local = bool(local_resolver(item.prompt))
             execution_text = str(item.prompt or "") + suffix
             decision = self._decision_from_plan(
                 item.plan,
@@ -241,6 +249,7 @@ class ActionRuntime:
                         explicit_batch_child=explicit_batch,
                     ),
                     explicit_batch_child=explicit_batch,
+                    conversation_local=item_conversation_local,
                 )
             )
 

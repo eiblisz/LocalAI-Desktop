@@ -337,6 +337,7 @@ class DiscordBotBridge(QObject):
                         self.action_runtime,
                         resolved_content,
                         web_mode=self._current_web_mode(),
+                        conversation_messages=chat.get("messages", []),
                         crypto_market_available=crypto_available,
                         multi_asset_market_available=multi_asset_available,
                         trace=trace,
@@ -456,6 +457,9 @@ class DiscordBotBridge(QObject):
                         isolated_history=batch_history,
                         explicit_batch_child=contract.explicit_batch_child,
                         constraints=contract.constraints,
+                        conversation_local=bool(
+                            getattr(contract, "conversation_local", False)
+                        ),
                     )
                 child_trace.add_metadata(child_status="passed")
                 last_chat_id = str(
@@ -1006,6 +1010,7 @@ class DiscordBotBridge(QObject):
         isolated_history=None,
         explicit_batch_child=False,
         constraints=None,
+        conversation_local=False,
     ):
         if action_plan.has(ACTION_MEMORY_WRITE):
             answer, chat_id = self._remember_remote(prompt)
@@ -1035,7 +1040,10 @@ class DiscordBotBridge(QObject):
         answer, chat_id = self._answer_prompt(
             prompt,
             use_web=action_plan.has(ACTION_WEB_RESEARCH),
-            allow_web_fallback=self._current_web_mode() != "OFF",
+            allow_web_fallback=(
+                self._current_web_mode() != "OFF"
+                and not conversation_local
+            ),
             trace=trace,
             original_prompt=original_prompt,
             isolated_history=isolated_history,
@@ -1063,6 +1071,11 @@ class DiscordBotBridge(QObject):
                 self.action_runtime,
                 prompt,
                 web_mode=self._current_web_mode(),
+                conversation_messages=(
+                    isolated_history
+                    if isolated_history is not None
+                    else self._load_remote_chat().get("messages", [])
+                ),
                 crypto_market_available=crypto_available,
                 multi_asset_market_available=multi_asset_available,
                 trace=trace,

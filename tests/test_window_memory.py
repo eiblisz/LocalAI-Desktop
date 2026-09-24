@@ -1,5 +1,7 @@
 from app.memory_store import MemoryStore
 from app.main_window import MainWindow
+from app.action_runtime import ActionRuntime, ROUTE_CHAT
+from app.chat_orchestration import plan_chat_actions
 from app.storage import ChatStore
 from app.window_memory import RECENT_MESSAGE_LIMIT, WindowMemoryService
 
@@ -46,6 +48,55 @@ def test_model_switch_does_not_change_window_memory(tmp_path):
 
     assert qwen_context.summary == gemma_context.summary
     assert store.get_window_memory("chat-a")["chat_id"] == "chat-a"
+
+
+def test_model_switch_recall_routes_to_same_persisted_window_memory(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    store.upsert_window_memory(
+        "chat-a",
+        "- User: A tesztprojekt kódneve Kék Sárkány 7319.",
+        compacted_message_count=4,
+        source_message_count=16,
+    )
+    summary = store.get_window_memory("chat-a")["summary"]
+
+    qwen = plan_chat_actions(
+        ActionRuntime(),
+        "Mi a kódnév, amit az előbb megadtam?",
+        web_mode="ON",
+        window_memory=summary,
+    )
+    gemma = plan_chat_actions(
+        ActionRuntime(),
+        "Mi a kódnév, amit az előbb megadtam?",
+        web_mode="ON",
+        window_memory=summary,
+    )
+
+    assert qwen[0].route == gemma[0].route == ROUTE_CHAT
+    assert qwen[0].conversation_local is gemma[0].conversation_local is True
+
+
+def test_conversation_local_recall_does_not_load_other_window_summary(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    store.upsert_window_memory(
+        "chat-a",
+        "- User: A tesztprojekt kódneve Kék Sárkány 7319.",
+        compacted_message_count=4,
+        source_message_count=16,
+    )
+    service = WindowMemoryService(store)
+
+    unrelated = service.prepare_context(
+        "chat-b",
+        [],
+        "Mi a tesztprojekt kódneve ebben a beszélgetésben?",
+        include_related_windows=False,
+    )
+
+    assert unrelated.summary == ""
+    assert unrelated.global_windows == []
+    assert "Kék Sárkány 7319" not in service.context_text(unrelated)
 
 
 def test_long_chat_compacts_old_messages_and_keeps_recent_raw_context(tmp_path):

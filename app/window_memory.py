@@ -64,7 +64,14 @@ class WindowMemoryService:
     def __init__(self, store):
         self.store = store
 
-    def prepare_context(self, chat_id, messages, query=""):
+    def prepare_context(
+        self,
+        chat_id,
+        messages,
+        query="",
+        *,
+        include_related_windows=True,
+    ):
         eligible = [
             dict(message)
             for message in list(messages or [])
@@ -102,10 +109,14 @@ class WindowMemoryService:
         ):
             recent = recent[-RECENT_MESSAGE_LIMIT:]
 
-        related = self.store.search_window_memories(
-            query,
-            exclude_chat_id=chat_id,
-            limit=2,
+        related = (
+            self.store.search_window_memories(
+                query,
+                exclude_chat_id=chat_id,
+                limit=2,
+            )
+            if include_related_windows
+            else []
         )
         return WindowContext(
             summary=str((current or {}).get("summary") or ""),
