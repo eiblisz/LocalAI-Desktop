@@ -480,6 +480,68 @@ def test_remote_web_request_uses_grounded_desktop_web_runtime(tmp_path: Path, mo
     assert chat["messages"][-1]["content"] == answer
 
 
+def test_prometheusz_preserves_desktop_constraints_for_grounded_language_result(
+    tmp_path: Path,
+    monkeypatch,
+):
+    import app.discord_bot_bridge as bridge_module
+    from app.language_policy import response_language_matches
+    from app.workers import ChatWebWorker
+
+    prompt = (
+        "Keress angol nyelvű forrásokat Magyarország 2010 és 2026 közötti "
+        "gazdasági fejlődéséről. Az angol források információit használd fel, "
+        "de a végső választ kizárólag magyarul add meg. A források eredeti "
+        "angol neveit hagyd változatlanul."
+    )
+    grounded_answer = (
+        "Magyarország gazdasága több területen fejlődött 2010 és 2026 között. "
+        "Forrás: [World Bank Data](https://example.test/world-bank)"
+    )
+    calls = []
+
+    def shared_web_runtime(client, model, messages, user_prompt, **kwargs):
+        system = messages[0]["content"]
+        assert "TASK CONSTRAINTS:" in system
+        assert "Expected response language: Hungarian" in system
+        assert "answer only in Hungarian" in system
+        assert user_prompt == prompt
+        calls.append(messages)
+        return grounded_answer
+
+    monkeypatch.setattr(
+        bridge_module,
+        "run_chat_web_request",
+        shared_web_runtime,
+    )
+
+    bridge = _batch_bridge(tmp_path)
+    contracts = ActionRuntime().plan_many(prompt)
+    assert len(contracts) == 1
+    message = BatchMessage()
+
+    asyncio.run(
+        bridge._run_action_batch(
+            message,
+            prompt,
+            contracts,
+            RequestTrace("discord"),
+            [],
+        )
+    )
+
+    desktop_worker = ChatWebWorker(
+        SimpleNamespace(),
+        "qwen-test",
+        [{"role": "system", "content": "Desktop system"}],
+        prompt,
+    )
+    assert desktop_worker._repair_response_language(grounded_answer) == grounded_answer
+    assert response_language_matches(prompt, grounded_answer)
+    assert calls
+    assert message.replies == [(grounded_answer, {"mention_author": False})]
+
+
 def test_remote_non_web_prompt_stays_on_normal_local_model_path(tmp_path: Path, monkeypatch):
     import app.discord_bot_bridge as bridge_module
 

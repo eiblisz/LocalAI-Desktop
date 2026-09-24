@@ -45,6 +45,7 @@ from .language_policy import response_language_instruction
 from .memory_answers import direct_user_memory_answer
 from .memory_runtime import remember_explicit_request
 from .request_trace import RequestTrace
+from .task_constraints import build_task_constraints, task_constraints_instruction
 from .user_error_messages import public_error
 from .web_intent import (
     ACTION_ARTIFACT,
@@ -454,6 +455,7 @@ class DiscordBotBridge(QObject):
                         original_prompt=content,
                         isolated_history=batch_history,
                         explicit_batch_child=contract.explicit_batch_child,
+                        constraints=contract.constraints,
                     )
                 child_trace.add_metadata(child_status="passed")
                 last_chat_id = str(
@@ -814,7 +816,8 @@ class DiscordBotBridge(QObject):
         answer, path = results[0]
         return answer, chat_id, path
 
-    def _remote_system_prompt(self, prompt):
+    def _remote_system_prompt(self, prompt, constraints=None):
+        constraints = constraints or build_task_constraints(prompt)
         system_prompt = (
             f"{DEFAULT_SYSTEM_PROMPT}\n\n"
             f"{response_language_instruction(prompt)}\n\n"
@@ -828,14 +831,23 @@ class DiscordBotBridge(QObject):
             "Do not claim shell execution, arbitrary filesystem access, or write-capable "
             "external actions unless actual results are supplied."
         )
+        constraint_instruction = task_constraints_instruction(
+            constraints,
+            current_subtask=prompt,
+        )
+        if constraint_instruction:
+            system_prompt = f"{system_prompt}\n\n{constraint_instruction}"
         memory_context = self._build_memory_context(prompt)
         if memory_context:
             system_prompt = f"{system_prompt}\n\n{memory_context}"
         return system_prompt
 
-    def _messages_for_prompt(self, chat, prompt):
+    def _messages_for_prompt(self, chat, prompt, constraints=None):
         messages = [
-            {"role": "system", "content": self._remote_system_prompt(prompt)}
+            {
+                "role": "system",
+                "content": self._remote_system_prompt(prompt, constraints),
+            }
         ]
         history = [
             dict(item) for item in chat.get("messages", [])
@@ -986,6 +998,7 @@ class DiscordBotBridge(QObject):
         original_prompt=None,
         isolated_history=None,
         explicit_batch_child=False,
+        constraints=None,
     ):
         if action_plan.has(ACTION_MEMORY_WRITE):
             answer, chat_id = self._remember_remote(prompt)
@@ -1019,6 +1032,7 @@ class DiscordBotBridge(QObject):
             original_prompt=original_prompt,
             isolated_history=isolated_history,
             explicit_batch_child=explicit_batch_child,
+            constraints=constraints,
         )
         return {"chat_id": chat_id, "messages": [answer], "artifacts": []}
 
@@ -1031,6 +1045,7 @@ class DiscordBotBridge(QObject):
         original_prompt=None,
         isolated_history=None,
         explicit_batch_child=False,
+        constraints=None,
     ):
         if use_web is None:
             crypto_available, multi_asset_available = (
@@ -1087,7 +1102,11 @@ class DiscordBotBridge(QObject):
                 "role": "user",
                 "content": prompt,
             }]
-        messages = self._messages_for_prompt(model_chat, prompt)
+        messages = self._messages_for_prompt(
+            model_chat,
+            prompt,
+            constraints=constraints,
+        )
 
         if use_web:
             if is_crypto_quote_request(prompt):
