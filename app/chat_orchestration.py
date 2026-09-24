@@ -33,11 +33,19 @@ def is_conversation_local_request(
         "memoria", "memory", "gedachtnis",
     }
     durable_terms = {
-        "globalis", "hosszu", "tavu", "tartos",
-        "global", "long", "term", "durable",
+        "globalis", "globalisan", "hosszu", "tavu", "tartos",
+        "global", "globally", "long", "term", "durable",
         "langzeit", "dauerhaft",
     }
-    if tokens & memory_terms and tokens & durable_terms:
+    recall_stems = (
+        "emleksz", "felidez", "remember", "recall", "erinner",
+    )
+    has_recall = any(
+        token.startswith(stem)
+        for token in tokens
+        for stem in recall_stems
+    )
+    if tokens & durable_terms and (tokens & memory_terms or has_recall):
         return False
 
     scope_terms = {
@@ -57,9 +65,6 @@ def is_conversation_local_request(
     if tokens & scope_terms and tokens & other_window_terms:
         return False
 
-    recall_stems = (
-        "emleksz", "felidez", "remember", "recall", "erinner",
-    )
     communication_stems = (
         "mondtam", "kozoltem", "megadtam", "said", "told", "provided", "gave",
         "gesagt", "genannt",
@@ -68,11 +73,6 @@ def is_conversation_local_request(
         "korabb", "elobb", "earlier", "previously", "before", "vorher",
     )
     has_scope = bool(tokens & scope_terms) and bool(tokens & deictic_terms)
-    has_recall = any(
-        token.startswith(stem)
-        for token in tokens
-        for stem in recall_stems
-    )
     has_communication = any(
         token.startswith(stem)
         for token in tokens

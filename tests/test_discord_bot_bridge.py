@@ -390,7 +390,8 @@ def test_remote_prompt_injects_relevant_persistent_memory_for_model(tmp_path: Pa
     system = ollama.messages[0]["content"]
     assert "LONG-TERM MEMORY CONTEXT:" in system
     assert "Durable memory value: Prometheusz" in system
-    assert "preferred_remote_name" not in system
+    assert 'relation="preferred remote name"' in system
+    assert "never quote as answer" in system
 
 
 def test_remote_current_conversation_query_excludes_long_term_memory(tmp_path: Path):

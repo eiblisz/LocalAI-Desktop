@@ -235,8 +235,24 @@ def test_explicit_long_term_memory_query_keeps_global_memory_available(tmp_path)
     assert contracts[0].conversation_local is False
     assert "LONG-TERM MEMORY CONTEXT:" in system
     assert "Durable memory value: A teszt színe green" in system
-    assert "Economic_History" not in system
-    assert "preferred_test_color" not in system
+    assert 'topic="Economic_History"' in system
+    assert 'relation="preferred test color"' in system
+
+
+def test_global_recall_wording_uses_durable_memory_scope():
+    english = plan_chat_actions(
+        ActionRuntime(),
+        "What do you remember globally about my project?",
+        web_mode="ON",
+    )
+    hungarian = plan_chat_actions(
+        ActionRuntime(),
+        "Mire emlékszel globálisan a projektemről?",
+        web_mode="ON",
+    )
+
+    assert english[0].conversation_local is False
+    assert hungarian[0].conversation_local is False
 
 
 def test_long_chat_compacts_old_messages_and_keeps_recent_raw_context(tmp_path):

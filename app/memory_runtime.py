@@ -34,6 +34,18 @@ def semantic_memory_context_lines(memories):
             continue
 
         lines.append(f"- Durable memory value: {value}")
+        context_labels = []
+        if subject:
+            context_labels.append(f'topic="{subject}"')
+        if key:
+            context_labels.append(
+                f'relation="{key.replace("_", " ")}"'
+            )
+        if context_labels:
+            lines.append(
+                "  Internal retrieval context (never quote as answer): "
+                + "; ".join(context_labels)
+            )
     return lines
 
 

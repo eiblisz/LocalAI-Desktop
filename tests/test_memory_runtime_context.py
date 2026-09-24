@@ -33,8 +33,9 @@ def test_runtime_memory_context_includes_relevant_canonical_memory(tmp_path):
 
     assert "LONG-TERM MEMORY CONTEXT:" in context
     assert "BTCUSDT 15m realistic" in context
-    assert "QuantAI" not in context
-    assert "primary_asset" not in context
+    assert 'topic="QuantAI"' in context
+    assert 'relation="primary asset"' in context
+    assert "never quote as answer" in context
     assert "dark desktop" not in context
 
 
