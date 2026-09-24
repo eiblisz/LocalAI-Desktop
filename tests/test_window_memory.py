@@ -141,6 +141,20 @@ def test_incremental_window_index_rejects_multiword_secret_label(tmp_path):
     assert store.get_window_memory("chat-a") is None
 
 
+def test_incremental_window_index_rejects_passphrase(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    service = WindowMemoryService(store)
+
+    result = service.index_user_message(
+        "chat-a",
+        "Remember my passphrase is correct horse battery staple.",
+        source_message_count=1,
+    )
+
+    assert result is None
+    assert store.get_window_memory("chat-a") is None
+
+
 def test_model_switch_recall_routes_to_same_persisted_window_memory(tmp_path):
     store = MemoryStore(tmp_path / "memory.sqlite3")
     store.upsert_window_memory(
@@ -274,6 +288,52 @@ def test_explicit_other_window_recall_can_use_bounded_related_memory(tmp_path):
     assert "RELATED WINDOW MEMORY:" in messages[0]["content"]
     assert "Kék Sárkány 7319" in messages[0]["content"]
     assert "chat-a" not in messages[0]["content"]
+
+
+def test_other_window_scope_suppresses_current_window_memory(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    service = WindowMemoryService(store)
+    service.index_user_message(
+        "chat-b",
+        "The selected identifier is CURRENT-ONLY.",
+        source_message_count=1,
+    )
+    prompt = "What was the project codename in the other conversation?"
+
+    messages = _desktop_messages(
+        store,
+        service,
+        "chat-b",
+        [],
+        prompt,
+        local=False,
+    )
+
+    assert "CURRENT WINDOW INDEXED STATE:" not in messages[0]["content"]
+    assert "CURRENT-ONLY" not in messages[0]["content"]
+
+
+def test_global_memory_scope_suppresses_current_window_memory(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    service = WindowMemoryService(store)
+    service.index_user_message(
+        "chat-b",
+        "The selected identifier is CURRENT-ONLY.",
+        source_message_count=1,
+    )
+    prompt = "What is in global memory about my project?"
+
+    messages = _desktop_messages(
+        store,
+        service,
+        "chat-b",
+        [],
+        prompt,
+        local=False,
+    )
+
+    assert "CURRENT WINDOW INDEXED STATE:" not in messages[0]["content"]
+    assert "CURRENT-ONLY" not in messages[0]["content"]
 
 
 def test_cross_window_relevance_excludes_unrelated_recent_windows(tmp_path):

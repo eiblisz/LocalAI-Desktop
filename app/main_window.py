@@ -1332,6 +1332,9 @@ class MainWindow(QMainWindow):
             include_related_windows=(
                 not conversation_local and not global_memory_request
             ),
+            include_current_memory=(
+                not other_window_request and not global_memory_request
+            ),
         )
         if other_window_request:
             if window_context.global_windows:

@@ -114,6 +114,7 @@ class WindowMemoryService:
         query="",
         *,
         include_related_windows=True,
+        include_current_memory=True,
     ):
         eligible = [
             dict(message)
@@ -162,8 +163,16 @@ class WindowMemoryService:
             else []
         )
         return WindowContext(
-            summary=str((current or {}).get("summary") or ""),
-            indexed_state=str((current or {}).get("indexed_state") or ""),
+            summary=(
+                str((current or {}).get("summary") or "")
+                if include_current_memory
+                else ""
+            ),
+            indexed_state=(
+                str((current or {}).get("indexed_state") or "")
+                if include_current_memory
+                else ""
+            ),
             recent_messages=recent,
             compacted=compacted,
             global_windows=related,
