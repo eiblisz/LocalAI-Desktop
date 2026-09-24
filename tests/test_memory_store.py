@@ -5,6 +5,39 @@ import pytest
 from app.memory_store import MemoryStore
 
 
+def test_existing_window_memory_schema_gains_persistent_indexed_state(tmp_path):
+    path = tmp_path / "memory.sqlite3"
+    with sqlite3.connect(path) as db:
+        db.execute(
+            """
+            CREATE TABLE window_memories (
+                chat_id TEXT PRIMARY KEY,
+                summary TEXT NOT NULL,
+                compacted_message_count INTEGER NOT NULL DEFAULT 0,
+                source_message_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+
+    store = MemoryStore(path)
+    columns = {
+        row[1]
+        for row in sqlite3.connect(path).execute(
+            "PRAGMA table_info(window_memories)"
+        ).fetchall()
+    }
+
+    assert "indexed_state" in columns
+    store.upsert_window_indexed_state(
+        "chat-a",
+        "- User: The project codename is Kék Sárkány 7319.",
+        source_message_count=1,
+    )
+    assert "Kék Sárkány 7319" in store.get_window_memory("chat-a")["indexed_state"]
+
+
 def test_memory_store_creates_expected_schema(tmp_path):
     path = tmp_path / "memory.sqlite3"
     MemoryStore(path)
@@ -443,3 +476,4 @@ def test_memory_pin_importance_updates_without_rewriting_fact(tmp_path):
 
     unpinned = store.set_importance(memory["id"], "IMPORTANT")
     assert unpinned["importance"] == "IMPORTANT"
+import sqlite3
