@@ -542,6 +542,46 @@ def test_prometheusz_preserves_desktop_constraints_for_grounded_language_result(
     assert message.replies == [(grounded_answer, {"mention_author": False})]
 
 
+def test_prometheusz_preserves_batch_constraints_for_artifact_web_grounding(
+    tmp_path: Path,
+):
+    from app.task_constraints import build_task_constraints
+
+    parent = (
+        "1. Keress angol forrásokat a magyar gazdaságról és készíts PDF-et.\n"
+        "2. Keress angol forrásokat az euróövezetről és készíts PDF-et."
+    )
+    prompt = "Keress angol forrásokat a magyar gazdaságról és készíts PDF-et."
+    constraints = build_task_constraints(
+        prompt,
+        parent_text=parent,
+        explicit_batch_child=True,
+    )
+    bridge = _batch_bridge(tmp_path)
+    captured = {}
+
+    def fake_web(messages, received_prompt, **kwargs):
+        captured["system"] = messages[0]["content"]
+        captured["prompt"] = received_prompt
+        captured["explicit_batch_child"] = kwargs["explicit_batch_child"]
+        return "Magyar forrásösszefoglaló."
+
+    bridge._run_chat_web = fake_web
+
+    result = bridge._grounded_external_answer(
+        prompt,
+        explicit_batch_child=True,
+        constraints=constraints,
+    )
+
+    assert result == "Magyar forrásösszefoglaló."
+    assert captured["prompt"] == prompt
+    assert captured["explicit_batch_child"] is True
+    assert "This is an explicit batch child" in captured["system"]
+    assert "Do not use sibling subjects or entities" in captured["system"]
+    assert parent not in captured["system"]
+
+
 def test_remote_non_web_prompt_stays_on_normal_local_model_path(tmp_path: Path, monkeypatch):
     import app.discord_bot_bridge as bridge_module
 

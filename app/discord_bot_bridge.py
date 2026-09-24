@@ -905,9 +905,14 @@ class DiscordBotBridge(QObject):
         trace=None,
         *,
         explicit_batch_child=False,
+        constraints=None,
     ):
         chat = self._load_remote_chat()
-        messages = self._messages_for_prompt(chat, prompt)
+        messages = self._messages_for_prompt(
+            chat,
+            prompt,
+            constraints=constraints,
+        )
         return self._run_chat_web(
             messages,
             prompt,
@@ -939,6 +944,7 @@ class DiscordBotBridge(QObject):
         trace=None,
         *,
         explicit_batch_child=False,
+        constraints=None,
     ):
         if is_crypto_quote_request(prompt):
             crypto_extension = self._crypto_market_extension()
@@ -964,6 +970,7 @@ class DiscordBotBridge(QObject):
             prompt,
             trace=trace,
             explicit_batch_child=explicit_batch_child,
+            constraints=constraints,
         )
 
     def _remember_remote(self, prompt):
@@ -1011,6 +1018,7 @@ class DiscordBotBridge(QObject):
                     prompt,
                     trace=trace,
                     explicit_batch_child=explicit_batch_child,
+                    constraints=constraints,
                 )
 
             chat_id, artifact_results = self._create_remote_artifacts(
