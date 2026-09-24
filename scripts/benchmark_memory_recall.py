@@ -19,9 +19,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from app.conversation_memory_recall import is_safe_direct_recall
 from app.main_window import MainWindow
 from app.memory_store import MemoryStore
 from app.request_trace import RequestTrace
+from app.task_constraints import build_task_constraints
 
 
 DEFAULT_STATE = "A tesztprojekt kódneve Kék Sárkány 7319."
@@ -41,7 +43,14 @@ def _run_once(store, state, query):
         query,
         trace=trace,
     )
-    if not recall.is_direct_hit:
+    trace.begin("language_validation")
+    direct_allowed = is_safe_direct_recall(
+        query,
+        recall,
+        constraints=build_task_constraints(query),
+    )
+    trace.end("language_validation", direct_memory_language_valid=direct_allowed)
+    if not direct_allowed:
         raise RuntimeError("The benchmark input did not produce a direct recall hit.")
 
     trace.begin("context_assembly")
@@ -55,7 +64,8 @@ def _run_once(store, state, query):
     trace.mark_duration("ollama_load", 0)
     trace.mark_duration("ollama_prompt_evaluation", 0)
     trace.mark_duration("ollama_generation", 0)
-    trace.mark_duration("post_processing", 0)
+    trace.begin("post_processing")
+    trace.end("post_processing", guard_path="language_validation_only")
     snapshot = trace.snapshot()
     return {
         "route": "current_window_memory",
@@ -75,6 +85,10 @@ def _run_once(store, state, query):
         "context_assembly_ms": snapshot["phases_ms"].get("context_assembly", 0),
         "prompt_tokens": 0,
         "ollama_model_ms": 0,
+        "language_validation_ms": snapshot["phases_ms"].get(
+            "language_validation",
+            0,
+        ),
         "post_processing_ms": snapshot["phases_ms"].get("post_processing", 0),
         "total_ms": snapshot["total_ms"],
         "phases_ms": snapshot["phases_ms"],
@@ -98,6 +112,7 @@ def _summary(rows):
         "retrieval": stats("retrieval_ms"),
         "context_assembly": stats("context_assembly_ms"),
         "ollama_model": stats("ollama_model_ms"),
+        "language_validation": stats("language_validation_ms"),
         "post_processing": stats("post_processing_ms"),
         "prompt_tokens": 0,
     }
@@ -106,11 +121,19 @@ def _summary(rows):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runs", type=int, default=5)
+    parser.add_argument(
+        "--warmup-runs",
+        type=int,
+        default=1,
+        help="Excluded fast-path warmups before recorded runs (default: 1).",
+    )
     parser.add_argument("--state", default=DEFAULT_STATE)
     parser.add_argument("--query", default=DEFAULT_QUERY)
     args = parser.parse_args(argv)
     if args.runs < 1:
         parser.error("--runs must be at least 1")
+    if args.warmup_runs < 0:
+        parser.error("--warmup-runs cannot be negative")
 
     with tempfile.TemporaryDirectory(prefix="localai-memory-benchmark-") as temp_dir:
         store = MemoryStore(Path(temp_dir) / "memory.sqlite3")
@@ -120,6 +143,8 @@ def main(argv=None):
             compacted_message_count=1,
             source_message_count=1,
         )
+        for _ in range(args.warmup_runs):
+            _run_once(store, args.state, args.query)
         rows = [_run_once(store, args.state, args.query) for _ in range(args.runs)]
         # MemoryStore opens short-lived sqlite connections.  Force their
         # cleanup before Windows removes the temporary benchmark database.
