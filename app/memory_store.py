@@ -91,6 +91,10 @@ def secret_memory_reason(*, key="", value="", subject=""):
             return f"secret key field: {token}"
         if token == normalized_subject or token in normalized_subject.split("_"):
             return f"secret subject field: {token}"
+        if "_" in token and (
+            token in normalized_key or token in normalized_subject
+        ):
+            return f"secret key field: {token}"
 
     text = str(value or "")
     for pattern in _SECRET_VALUE_PATTERNS:
@@ -828,51 +832,81 @@ class MemoryStore:
         document_frequency = Counter()
         tokenized = []
         for item in candidates:
-            content = "\n".join(
-                part
-                for part in (
-                    str(item.get("indexed_state") or ""),
-                    str(item.get("summary") or ""),
-                )
-                if part
-            )
+            user_lines = []
+            seen_lines = set()
+            for source in (
+                str(item.get("indexed_state") or ""),
+                str(item.get("summary") or ""),
+            ):
+                for line in source.splitlines():
+                    cleaned_line = line.strip()
+                    if not cleaned_line.casefold().startswith("- user:"):
+                        continue
+                    normalized_line = canonical_match_text(cleaned_line)
+                    if normalized_line in seen_lines:
+                        continue
+                    seen_lines.add(normalized_line)
+                    user_lines.append(cleaned_line)
+            content = "\n".join(user_lines)
             content_tokens = {
                 token
                 for token in canonical_match_text(content).split()
                 if len(token) >= 3 and token not in ignored
             }
-            tokenized.append((item, content, content_tokens))
+            line_tokens = [
+                (
+                    line,
+                    {
+                        token
+                        for token in canonical_match_text(line).split()
+                        if len(token) >= 3 and token not in ignored
+                    },
+                )
+                for line in user_lines
+            ]
+            tokenized.append((item, content, content_tokens, line_tokens))
             document_frequency.update(content_tokens)
 
         ranked = []
         candidate_count = max(1, len(tokenized))
-        for item, content, content_tokens in tokenized:
+        for item, content, content_tokens, line_tokens in tokenized:
             if is_secret_memory_candidate(
                 key=content,
                 value=content,
                 subject=content,
             ):
                 continue
-            overlap_tokens = query_tokens & content_tokens
-            if len(overlap_tokens) < 2:
+            matched_lines = []
+            best_overlap = set()
+            for line, tokens in line_tokens:
+                overlap = query_tokens & tokens
+                if len(overlap) > len(best_overlap):
+                    best_overlap = overlap
+                if len(overlap) >= min(2, len(query_tokens)):
+                    matched_lines.append(line)
+            overlap_tokens = best_overlap
+            discriminative_single = bool(
+                len(query_tokens) == 1
+                and len(overlap_tokens) == 1
+                and len(next(iter(overlap_tokens))) >= 7
+                and document_frequency[next(iter(overlap_tokens))] == 1
+            )
+            if len(overlap_tokens) < 2 and not discriminative_single:
                 continue
             weighted_overlap = sum(
                 1.0 + (candidate_count / max(1, document_frequency[token]))
                 for token in overlap_tokens
             )
             coverage = len(overlap_tokens) / max(1, len(query_tokens))
-            user_lines = "\n".join(
-                line for line in content.splitlines()
-                if line.strip().casefold().startswith("- user:")
-            )
-            user_tokens = set(canonical_match_text(user_lines).split())
-            user_overlap = len(query_tokens & user_tokens)
+            user_overlap = len(overlap_tokens)
             if user_overlap < 1:
                 continue
             score = weighted_overlap + (coverage * 4.0) + (user_overlap * 2.0)
             if score < 6.0:
                 continue
-            ranked.append((score, user_overlap, item.get("updated_at", ""), item))
+            result = dict(item)
+            result["matched_state"] = "\n".join(matched_lines[:3])
+            ranked.append((score, user_overlap, item.get("updated_at", ""), result))
         ranked.sort(key=lambda entry: (entry[0], entry[1], entry[2]), reverse=True)
         return [entry[3] for entry in ranked[: max(0, min(int(limit), 10))]]
 

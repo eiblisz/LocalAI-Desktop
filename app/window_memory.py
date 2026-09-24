@@ -193,12 +193,7 @@ class WindowMemoryService:
                 "relevance. Use only this content and never expose retrieval metadata.",
             ]
             for item in context.global_windows:
-                state = str(item.get("indexed_state") or "").strip()
-                summary = str(item.get("summary") or "").strip()
-                content = state or "\n".join(
-                    line for line in summary.splitlines()
-                    if line.strip().casefold().startswith("- user:")
-                )
+                content = str(item.get("matched_state") or "").strip()
                 if content:
                     lines.append(content[:1200])
             if len(lines) > 2:

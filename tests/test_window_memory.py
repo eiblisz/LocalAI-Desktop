@@ -127,6 +127,20 @@ def test_casual_user_sentence_is_not_aggressively_indexed(tmp_path):
     assert store.get_window_memory("chat-a") is None
 
 
+def test_incremental_window_index_rejects_multiword_secret_label(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    service = WindowMemoryService(store)
+
+    result = service.index_user_message(
+        "chat-a",
+        "Remember my API key is local-short-key-123.",
+        source_message_count=1,
+    )
+
+    assert result is None
+    assert store.get_window_memory("chat-a") is None
+
+
 def test_model_switch_recall_routes_to_same_persisted_window_memory(tmp_path):
     store = MemoryStore(tmp_path / "memory.sqlite3")
     store.upsert_window_memory(
@@ -303,6 +317,50 @@ def test_cross_window_search_returns_no_unrelated_fallback(tmp_path):
 
     assert context.global_windows == []
     assert "James Hetfield" not in service.context_text(context)
+
+
+def test_cross_window_context_serializes_only_the_matching_user_state(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    store.upsert_window_memory(
+        "chat-a",
+        "- User: The project codename is Kék Sárkány 7319.",
+        compacted_message_count=2,
+        source_message_count=14,
+    )
+    store.upsert_window_indexed_state(
+        "chat-a",
+        "- User: The selected music artist is James Hetfield.",
+        source_message_count=15,
+    )
+    service = WindowMemoryService(store)
+
+    context = service.prepare_context(
+        "chat-b",
+        [],
+        "What was the project codename in the other conversation?",
+    )
+    serialized = service.context_text(context)
+
+    assert "Kék Sárkány 7319" in serialized
+    assert "James Hetfield" not in serialized
+
+
+def test_discriminative_single_concept_can_match_window_state(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    service = WindowMemoryService(store)
+    service.index_user_message(
+        "chat-a",
+        "The identifier is ZX-42.",
+        source_message_count=1,
+    )
+
+    matches = store.search_window_memories(
+        "What was the identifier in the other conversation?",
+        exclude_chat_id="chat-b",
+    )
+
+    assert [item["chat_id"] for item in matches] == ["chat-a"]
+    assert "ZX-42" in matches[0]["matched_state"]
 
 
 def test_assistant_only_summary_is_not_cross_window_authority(tmp_path):
@@ -489,6 +547,7 @@ def test_cross_window_registry_is_bounded_and_summary_only(tmp_path):
         "chat_id",
         "summary",
         "indexed_state",
+        "matched_state",
         "compacted_message_count",
         "source_message_count",
         "created_at",
