@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from app.memory_runtime import remember_explicit_request
+from app.memory_runtime import remember_explicit_request, remember_response
 from app.memory_store import MemoryStore
 
 
@@ -162,3 +162,42 @@ def test_secret_extraction_fails_before_any_write(tmp_path):
         )
 
     assert store.list_memories() == []
+
+
+def test_response_remember_normalizes_persists_and_deduplicates(tmp_path):
+    payload = {
+        "memories": [{
+            "category": "PROJECT",
+            "scope": "LocalAI",
+            "subject": "Window memory",
+            "key": "storage",
+            "value": "Use the canonical SQLite store.",
+        }]
+    }
+    client = FakeClient(payload)
+    path = tmp_path / "memory.sqlite3"
+    store = MemoryStore(path)
+
+    first = remember_response(
+        client,
+        "qwen",
+        "The project decision is to use the canonical SQLite store.",
+        store,
+        source_chat_id="chat-a",
+        source_message_id="message-a",
+    )
+    second = remember_response(
+        client,
+        "gemma",
+        "The project decision is to use the canonical SQLite store.",
+        store,
+        source_chat_id="chat-a",
+        source_message_id="message-a",
+    )
+
+    assert first[0]["id"] == second[0]["id"]
+    assert len(MemoryStore(path).list_memories()) == 1
+    sources = store.list_memory_sources(first[0]["id"])
+    assert len(sources) == 2
+    assert {item["source_type"] for item in sources} == {"response_remember"}
+    assert {item["source_ref"] for item in sources} == {"message-a"}

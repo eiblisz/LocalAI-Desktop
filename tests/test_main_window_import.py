@@ -159,7 +159,7 @@ def test_normal_chat_has_web_on_auto_off_modes():
     assert "contract.use_web" in run
     assert "ChatWebWorker" in run
     assert "AdaptiveChatWorker" in run
-    assert 'allow_web_fallback=self.web_mode != "OFF"' in run
+    assert 'getattr(contract, "conversation_local", False)' in run
 
 
 def test_web_auto_detects_explicit_search_intent():
@@ -377,11 +377,14 @@ def test_send_injects_memory_into_system_prompt_not_saved_chat():
     send_source = inspect.getsource(MainWindow._send)
     messages_source = inspect.getsource(MainWindow._action_messages_for_model)
 
-    assert "memory_context = self._build_memory_context(prompt)" in messages_source
+    assert "if conversation_local or other_window_request" in messages_source
+    assert "else self._build_memory_context(prompt)" in messages_source
+    assert "CURRENT CONVERSATION AUTHORITY:" in messages_source
     assert 'system_prompt = f"{system_prompt}\\n\\n{memory_context}"' in messages_source
     assert 'messages = [{"role": "system", "content": system_prompt}]' in messages_source
     assert '{"role": "user", "content": text}' in send_source
     assert 'self.current_chat["messages"].append({"role": "system"' not in send_source
+    assert 'getattr(window_memory, "index_user_message", None)' in send_source
 
 def test_explicit_memory_request_uses_dedicated_background_worker():
     from app.main_window import MainWindow
@@ -500,9 +503,9 @@ def test_direct_user_memory_answer_reads_only_active_user_profile_memories():
 
 
 def test_memory_context_marks_person_relations_as_not_user_relations():
-    from app.main_window import MainWindow
+    from app.memory_runtime import semantic_memory_context_lines
 
-    source = inspect.getsource(MainWindow._build_memory_context)
+    source = inspect.getsource(semantic_memory_context_lines)
 
     assert 'normalized_key.endswith("_of")' in source
     assert "Durable person fact" in source

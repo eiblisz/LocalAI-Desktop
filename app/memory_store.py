@@ -1,10 +1,12 @@
 import re
 import sqlite3
 import uuid
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
 from .config import MEMORY_CANONICAL_DIR
+from .text_normalization import canonical_match_text
 
 
 DEFAULT_MEMORY_DB = MEMORY_CANONICAL_DIR / "memory.sqlite3"
@@ -37,6 +39,8 @@ _SECRET_KEY_TOKENS = {
     "api_key",
     "apikey",
     "password",
+    "passphrase",
+    "passcode",
     "passwd",
     "pwd",
     "secret",
@@ -45,6 +49,8 @@ _SECRET_KEY_TOKENS = {
     "refresh_token",
     "private_key",
     "privatekey",
+    "recovery_phrase",
+    "seed_phrase",
     "otp",
     "one_time_password",
     "auth_cookie",
@@ -89,6 +95,10 @@ def secret_memory_reason(*, key="", value="", subject=""):
             return f"secret key field: {token}"
         if token == normalized_subject or token in normalized_subject.split("_"):
             return f"secret subject field: {token}"
+        if "_" in token and (
+            token in normalized_key or token in normalized_subject
+        ):
+            return f"secret key field: {token}"
 
     text = str(value or "")
     for pattern in _SECRET_VALUE_PATTERNS:
@@ -186,8 +196,42 @@ class MemoryStore:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS window_memories (
+                    chat_id TEXT PRIMARY KEY,
+                    summary TEXT NOT NULL,
+                    compacted_message_count INTEGER NOT NULL DEFAULT 0,
+                    source_message_count INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_window_memories_updated
+                ON window_memories(updated_at DESC);
+
+                CREATE TABLE IF NOT EXISTS response_feedback (
+                    chat_id TEXT NOT NULL,
+                    message_id TEXT NOT NULL,
+                    feedback_type TEXT NOT NULL,
+                    active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (chat_id, message_id, feedback_type)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_response_feedback_chat
+                ON response_feedback(chat_id, message_id);
                 """
             )
+            window_columns = {
+                row["name"]
+                for row in db.execute("PRAGMA table_info(window_memories)").fetchall()
+            }
+            if "indexed_state" not in window_columns:
+                db.execute(
+                    "ALTER TABLE window_memories "
+                    "ADD COLUMN indexed_state TEXT NOT NULL DEFAULT ''"
+                )
 
     @staticmethod
     def _validate_enum(name, value, allowed):
@@ -284,6 +328,8 @@ class MemoryStore:
         value,
         source_chat_id=None,
         source_excerpt=None,
+        source_type="explicit_user",
+        source_ref=None,
         importance="IMPORTANT",
         confidence=1.0,
     ):
@@ -316,8 +362,8 @@ class MemoryStore:
             memory = self._row_to_dict(existing)
             self._record_source(
                 memory["id"],
-                source_type="explicit_user",
-                source_ref=source_chat_id,
+                source_type=source_type,
+                source_ref=source_ref or source_chat_id,
                 excerpt=source_excerpt,
             )
             return memory
@@ -336,8 +382,8 @@ class MemoryStore:
 
         self._record_source(
             memory["id"],
-            source_type="explicit_user",
-            source_ref=source_chat_id,
+            source_type=source_type,
+            source_ref=source_ref or source_chat_id,
             excerpt=source_excerpt,
         )
         return memory
@@ -648,3 +694,260 @@ class MemoryStore:
             if cursor.rowcount != 1:
                 raise KeyError(memory_id)
         return self.get_memory(memory_id)
+
+    def get_window_memory(self, chat_id):
+        chat_id = _clean(chat_id)
+        if not chat_id:
+            return None
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM window_memories WHERE chat_id = ?",
+                (chat_id,),
+            ).fetchone()
+        return self._row_to_dict(row)
+
+    def upsert_window_memory(
+        self,
+        chat_id,
+        summary,
+        *,
+        compacted_message_count,
+        source_message_count,
+    ):
+        chat_id = _clean(chat_id)
+        summary = str(summary or "").strip()
+        if not chat_id:
+            raise ValueError("chat_id is required")
+        if not summary:
+            raise ValueError("window memory summary is required")
+
+        now = _now()
+        with self._connect() as db:
+            db.execute(
+                """
+                INSERT INTO window_memories (
+                    chat_id, summary, compacted_message_count,
+                    source_message_count, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(chat_id) DO UPDATE SET
+                    summary = excluded.summary,
+                    compacted_message_count = excluded.compacted_message_count,
+                    source_message_count = excluded.source_message_count,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    chat_id,
+                    summary,
+                    max(0, int(compacted_message_count)),
+                    max(0, int(source_message_count)),
+                    now,
+                    now,
+                ),
+            )
+        return self.get_window_memory(chat_id)
+
+    def upsert_window_indexed_state(
+        self,
+        chat_id,
+        indexed_state,
+        *,
+        source_message_count,
+    ):
+        chat_id = _clean(chat_id)
+        indexed_state = str(indexed_state or "").strip()
+        if not chat_id:
+            raise ValueError("chat_id is required")
+        if not indexed_state:
+            raise ValueError("indexed window state is required")
+
+        now = _now()
+        with self._connect() as db:
+            db.execute(
+                """
+                INSERT INTO window_memories (
+                    chat_id, summary, indexed_state, compacted_message_count,
+                    source_message_count, created_at, updated_at
+                ) VALUES (?, '', ?, 0, ?, ?, ?)
+                ON CONFLICT(chat_id) DO UPDATE SET
+                    indexed_state = excluded.indexed_state,
+                    source_message_count = MAX(
+                        window_memories.source_message_count,
+                        excluded.source_message_count
+                    ),
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    chat_id,
+                    indexed_state,
+                    max(0, int(source_message_count)),
+                    now,
+                    now,
+                ),
+            )
+        return self.get_window_memory(chat_id)
+
+    def list_window_memories(self, *, exclude_chat_id=None, limit=50):
+        limit = max(0, min(int(limit), 200))
+        if not limit:
+            return []
+        params = []
+        where = ""
+        if exclude_chat_id:
+            where = " WHERE chat_id != ?"
+            params.append(_clean(exclude_chat_id))
+        params.append(limit)
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT * FROM window_memories
+                """
+                + where
+                + " ORDER BY updated_at DESC LIMIT ?",
+                params,
+            ).fetchall()
+        return [self._row_to_dict(row) for row in rows]
+
+    def search_window_memories(
+        self,
+        query,
+        *,
+        exclude_chat_id=None,
+        limit=3,
+        candidate_limit=50,
+    ):
+        ignored = {
+            "the", "a", "an", "is", "was", "what", "which", "given", "other",
+            "another", "conversation", "chat", "this", "in", "about",
+            "mi", "mit", "volt", "van", "egy", "masik", "masikban", "ebben",
+            "beszelgetes", "beszelgetesben", "megadott", "kapcsolatban",
+            "der", "die", "das", "was", "ist", "war", "anderen", "gesprach",
+        }
+        query_tokens = {
+            token
+            for token in canonical_match_text(query).split()
+            if len(token) >= 3 and token not in ignored
+        }
+        if not query_tokens or int(limit) < 1:
+            return []
+        candidates = self.list_window_memories(
+            exclude_chat_id=exclude_chat_id,
+            limit=candidate_limit,
+        )
+        document_frequency = Counter()
+        tokenized = []
+        for item in candidates:
+            user_lines = []
+            seen_lines = set()
+            for source in (
+                str(item.get("indexed_state") or ""),
+                str(item.get("summary") or ""),
+            ):
+                for line in source.splitlines():
+                    cleaned_line = line.strip()
+                    if not cleaned_line.casefold().startswith("- user:"):
+                        continue
+                    normalized_line = canonical_match_text(cleaned_line)
+                    if normalized_line in seen_lines:
+                        continue
+                    seen_lines.add(normalized_line)
+                    user_lines.append(cleaned_line)
+            content = "\n".join(user_lines)
+            content_tokens = {
+                token
+                for token in canonical_match_text(content).split()
+                if len(token) >= 3 and token not in ignored
+            }
+            line_tokens = [
+                (
+                    line,
+                    {
+                        token
+                        for token in canonical_match_text(line).split()
+                        if len(token) >= 3 and token not in ignored
+                    },
+                )
+                for line in user_lines
+            ]
+            tokenized.append((item, content, content_tokens, line_tokens))
+            document_frequency.update(content_tokens)
+
+        ranked = []
+        candidate_count = max(1, len(tokenized))
+        for item, content, content_tokens, line_tokens in tokenized:
+            if is_secret_memory_candidate(
+                key=content,
+                value=content,
+                subject=content,
+            ):
+                continue
+            matched_lines = []
+            best_overlap = set()
+            for line, tokens in line_tokens:
+                overlap = query_tokens & tokens
+                if len(overlap) > len(best_overlap):
+                    best_overlap = overlap
+                if len(overlap) >= min(2, len(query_tokens)):
+                    matched_lines.append(line)
+            overlap_tokens = best_overlap
+            discriminative_single = bool(
+                len(query_tokens) == 1
+                and len(overlap_tokens) == 1
+                and len(next(iter(overlap_tokens))) >= 7
+                and document_frequency[next(iter(overlap_tokens))] == 1
+            )
+            if len(overlap_tokens) < 2 and not discriminative_single:
+                continue
+            weighted_overlap = sum(
+                1.0 + (candidate_count / max(1, document_frequency[token]))
+                for token in overlap_tokens
+            )
+            coverage = len(overlap_tokens) / max(1, len(query_tokens))
+            user_overlap = len(overlap_tokens)
+            if user_overlap < 1:
+                continue
+            score = weighted_overlap + (coverage * 4.0) + (user_overlap * 2.0)
+            if score < 6.0:
+                continue
+            result = dict(item)
+            result["matched_state"] = "\n".join(matched_lines[:3])
+            ranked.append((score, user_overlap, item.get("updated_at", ""), result))
+        ranked.sort(key=lambda entry: (entry[0], entry[1], entry[2]), reverse=True)
+        return [entry[3] for entry in ranked[: max(0, min(int(limit), 10))]]
+
+    def set_response_feedback(self, chat_id, message_id, feedback_type, *, active=True):
+        chat_id = _clean(chat_id)
+        message_id = _clean(message_id)
+        feedback_type = _clean(feedback_type).lower()
+        if not chat_id or not message_id:
+            raise ValueError("chat_id and message_id are required")
+        if feedback_type not in {"thumbs_up", "remember"}:
+            raise ValueError("invalid response feedback type")
+        now = _now()
+        with self._connect() as db:
+            db.execute(
+                """
+                INSERT INTO response_feedback (
+                    chat_id, message_id, feedback_type, active, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(chat_id, message_id, feedback_type) DO UPDATE SET
+                    active = excluded.active,
+                    updated_at = excluded.updated_at
+                """,
+                (chat_id, message_id, feedback_type, bool(active), now, now),
+            )
+        return self.get_response_feedback(chat_id, message_id)
+
+    def get_response_feedback(self, chat_id, message_id):
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT feedback_type, active
+                FROM response_feedback
+                WHERE chat_id = ? AND message_id = ?
+                """,
+                (_clean(chat_id), _clean(message_id)),
+            ).fetchall()
+        return {
+            row["feedback_type"]: bool(row["active"])
+            for row in rows
+        }

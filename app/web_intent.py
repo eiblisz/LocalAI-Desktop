@@ -559,7 +559,11 @@ def plan_user_actions(text, *, force_web=False, disable_web=False):
             plan=plan_user_action(
                 unit,
                 force_web=force_web,
-                disable_web=disable_web,
+                disable_web=(
+                    disable_web(unit)
+                    if callable(disable_web)
+                    else disable_web
+                ),
             ),
         )
         for unit in split_user_action_units(text)

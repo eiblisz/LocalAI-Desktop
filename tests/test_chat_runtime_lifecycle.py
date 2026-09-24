@@ -190,6 +190,48 @@ def test_first_worker_answer_chunk_renders_immediately():
     assert calls == ["render"]
 
 
+def test_completed_raw_response_is_stored_and_given_to_renderer_unchanged():
+    complete = "A tesztprojekt kódneve Kék Sárkány 7319."
+    chat = {"id": "chat-a", "messages": []}
+    store = FakeStore({"chat-a": chat})
+    rendered = []
+    harness = SimpleNamespace(
+        partial_assistant=complete,
+        current_chat=deepcopy(chat),
+        generation_chat_id="chat-a",
+        pending_request_trace=None,
+        worker=SimpleNamespace(
+            source_metadata=[],
+            diagnostic_metadata={
+                "response_pipeline": {
+                    "raw_chars": len(complete),
+                    "final_chars": len(complete),
+                    "raw_final_equal": True,
+                }
+            },
+        ),
+        store=store,
+        status=FakeStatus(),
+        stop_button=FakeButton(),
+        _stop_thinking_indicator=lambda: None,
+        _load_chat_list=lambda: None,
+        _render_chat=lambda: rendered.append(
+            harness.current_chat["messages"][-1]["content"]
+        ),
+    )
+    harness._generation_target_chat = MethodType(
+        MainWindow._generation_target_chat,
+        harness,
+    )
+
+    MainWindow._on_finished(harness)
+
+    stored = store.chats["chat-a"]["messages"][-1]
+    assert stored["content"] == complete
+    assert rendered == [complete]
+    assert stored["diagnostic"]["response_pipeline"]["raw_final_equal"] is True
+
+
 def test_send_does_not_accept_new_message_while_thread_is_still_finishing():
     harness = SimpleNamespace(
         input=SimpleNamespace(toPlainText=lambda: "új kérdés"),
