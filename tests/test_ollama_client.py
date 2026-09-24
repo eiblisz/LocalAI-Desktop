@@ -522,6 +522,47 @@ def test_chat_stream_uses_normal_output_budget_and_returns_completion_metadata(
     assert metadata["total_duration"] == 70_000_000
 
 
+def test_chat_stream_accepts_a_bounded_per_request_output_budget(monkeypatch):
+    import json
+
+    captured = {}
+
+    class StreamResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def close(self):
+            return None
+
+        def raise_for_status(self):
+            return None
+
+        def iter_lines(self):
+            yield json.dumps({
+                "message": {"content": "complete"},
+                "done": True,
+                "done_reason": "stop",
+            }).encode("utf-8")
+
+    def fake_post(_url, **kwargs):
+        captured.update(kwargs)
+        return StreamResponse()
+
+    monkeypatch.setattr("app.ollama_client.requests.post", fake_post)
+    OllamaClient().chat_stream(
+        model="qwen-test",
+        messages=[{"role": "user", "content": "long response"}],
+        on_token=lambda _token: None,
+        should_stop=lambda: False,
+        num_predict=2048,
+    )
+
+    assert captured["json"]["options"]["num_predict"] == 2048
+
+
 def test_chat_stream_rejects_length_truncated_response(monkeypatch):
     import json
 
