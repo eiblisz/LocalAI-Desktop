@@ -271,6 +271,16 @@ def test_current_chat_scope_outranks_ordinary_long_wording():
     assert report[0].conversation_local is True
 
 
+def test_explicit_global_memory_scope_outranks_conversation_topic():
+    contracts = plan_chat_actions(
+        ActionRuntime(),
+        "What is in your global memory about this conversation?",
+        web_mode="ON",
+    )
+
+    assert contracts[0].conversation_local is False
+
+
 def test_long_chat_compacts_old_messages_and_keeps_recent_raw_context(tmp_path):
     store = MemoryStore(tmp_path / "memory.sqlite3")
     service = WindowMemoryService(store)

@@ -64,9 +64,6 @@ def is_conversation_local_request(
         return False
 
     has_scope = bool(tokens & scope_terms) and bool(tokens & deictic_terms)
-    if has_scope:
-        return True
-
     adjacent_pairs = set(zip(normalized_sequence, normalized_sequence[1:]))
     has_durable_scope = bool(tokens & durable_scope_terms) or bool(
         adjacent_pairs.intersection({
@@ -76,6 +73,8 @@ def is_conversation_local_request(
     )
     if has_durable_scope and (tokens & memory_terms or has_recall):
         return False
+    if has_scope:
+        return True
 
     communication_stems = (
         "mondtam", "kozoltem", "megadtam", "said", "told", "provided", "gave",
