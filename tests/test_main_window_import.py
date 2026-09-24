@@ -377,7 +377,8 @@ def test_send_injects_memory_into_system_prompt_not_saved_chat():
     send_source = inspect.getsource(MainWindow._send)
     messages_source = inspect.getsource(MainWindow._action_messages_for_model)
 
-    assert "memory_context = self._build_memory_context(prompt)" in messages_source
+    assert 'memory_context = "" if conversation_local else self._build_memory_context(prompt)' in messages_source
+    assert "CURRENT CONVERSATION AUTHORITY:" in messages_source
     assert 'system_prompt = f"{system_prompt}\\n\\n{memory_context}"' in messages_source
     assert 'messages = [{"role": "system", "content": system_prompt}]' in messages_source
     assert '{"role": "user", "content": text}' in send_source
@@ -500,9 +501,9 @@ def test_direct_user_memory_answer_reads_only_active_user_profile_memories():
 
 
 def test_memory_context_marks_person_relations_as_not_user_relations():
-    from app.main_window import MainWindow
+    from app.memory_runtime import semantic_memory_context_lines
 
-    source = inspect.getsource(MainWindow._build_memory_context)
+    source = inspect.getsource(semantic_memory_context_lines)
 
     assert 'normalized_key.endswith("_of")' in source
     assert "Durable person fact" in source
