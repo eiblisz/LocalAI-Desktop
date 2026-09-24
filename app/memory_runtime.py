@@ -1,4 +1,4 @@
-from .memory_extractor import extract_explicit_memories
+from .memory_extractor import extract_explicit_memories, extract_response_memories
 
 
 def remember_explicit_request(
@@ -33,4 +33,33 @@ def remember_explicit_request(
         )
         written.append(memory)
 
+    return written
+
+
+def remember_response(
+    client,
+    model,
+    response_text,
+    store,
+    *,
+    source_chat_id=None,
+    source_message_id=None,
+):
+    candidates = extract_response_memories(client, model, response_text)
+    written = []
+    for candidate in candidates:
+        memory = store.remember_explicit(
+            category=candidate["category"],
+            scope=candidate["scope"],
+            subject=candidate["subject"],
+            key=candidate["key"],
+            value=candidate["value"],
+            source_chat_id=source_chat_id,
+            source_excerpt=response_text,
+            source_type="response_remember",
+            source_ref=source_message_id or source_chat_id,
+            importance="IMPORTANT",
+            confidence=1.0,
+        )
+        written.append(memory)
     return written

@@ -186,6 +186,31 @@ class MemoryStore:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS window_memories (
+                    chat_id TEXT PRIMARY KEY,
+                    summary TEXT NOT NULL,
+                    compacted_message_count INTEGER NOT NULL DEFAULT 0,
+                    source_message_count INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_window_memories_updated
+                ON window_memories(updated_at DESC);
+
+                CREATE TABLE IF NOT EXISTS response_feedback (
+                    chat_id TEXT NOT NULL,
+                    message_id TEXT NOT NULL,
+                    feedback_type TEXT NOT NULL,
+                    active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (chat_id, message_id, feedback_type)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_response_feedback_chat
+                ON response_feedback(chat_id, message_id);
                 """
             )
 
@@ -284,6 +309,8 @@ class MemoryStore:
         value,
         source_chat_id=None,
         source_excerpt=None,
+        source_type="explicit_user",
+        source_ref=None,
         importance="IMPORTANT",
         confidence=1.0,
     ):
@@ -316,8 +343,8 @@ class MemoryStore:
             memory = self._row_to_dict(existing)
             self._record_source(
                 memory["id"],
-                source_type="explicit_user",
-                source_ref=source_chat_id,
+                source_type=source_type,
+                source_ref=source_ref or source_chat_id,
                 excerpt=source_excerpt,
             )
             return memory
@@ -336,8 +363,8 @@ class MemoryStore:
 
         self._record_source(
             memory["id"],
-            source_type="explicit_user",
-            source_ref=source_chat_id,
+            source_type=source_type,
+            source_ref=source_ref or source_chat_id,
             excerpt=source_excerpt,
         )
         return memory
@@ -648,3 +675,139 @@ class MemoryStore:
             if cursor.rowcount != 1:
                 raise KeyError(memory_id)
         return self.get_memory(memory_id)
+
+    def get_window_memory(self, chat_id):
+        chat_id = _clean(chat_id)
+        if not chat_id:
+            return None
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM window_memories WHERE chat_id = ?",
+                (chat_id,),
+            ).fetchone()
+        return self._row_to_dict(row)
+
+    def upsert_window_memory(
+        self,
+        chat_id,
+        summary,
+        *,
+        compacted_message_count,
+        source_message_count,
+    ):
+        chat_id = _clean(chat_id)
+        summary = str(summary or "").strip()
+        if not chat_id:
+            raise ValueError("chat_id is required")
+        if not summary:
+            raise ValueError("window memory summary is required")
+
+        now = _now()
+        with self._connect() as db:
+            db.execute(
+                """
+                INSERT INTO window_memories (
+                    chat_id, summary, compacted_message_count,
+                    source_message_count, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(chat_id) DO UPDATE SET
+                    summary = excluded.summary,
+                    compacted_message_count = excluded.compacted_message_count,
+                    source_message_count = excluded.source_message_count,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    chat_id,
+                    summary,
+                    max(0, int(compacted_message_count)),
+                    max(0, int(source_message_count)),
+                    now,
+                    now,
+                ),
+            )
+        return self.get_window_memory(chat_id)
+
+    def list_window_memories(self, *, exclude_chat_id=None, limit=50):
+        limit = max(0, min(int(limit), 200))
+        if not limit:
+            return []
+        params = []
+        where = ""
+        if exclude_chat_id:
+            where = " WHERE chat_id != ?"
+            params.append(_clean(exclude_chat_id))
+        params.append(limit)
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT * FROM window_memories
+                """
+                + where
+                + " ORDER BY updated_at DESC LIMIT ?",
+                params,
+            ).fetchall()
+        return [self._row_to_dict(row) for row in rows]
+
+    def search_window_memories(
+        self,
+        query,
+        *,
+        exclude_chat_id=None,
+        limit=3,
+        candidate_limit=50,
+    ):
+        query_tokens = set(re.findall(r"[a-z0-9_]+", _clean(query).lower()))
+        if not query_tokens or int(limit) < 1:
+            return []
+        ranked = []
+        for item in self.list_window_memories(
+            exclude_chat_id=exclude_chat_id,
+            limit=candidate_limit,
+        ):
+            summary_tokens = set(
+                re.findall(r"[a-z0-9_]+", str(item.get("summary") or "").lower())
+            )
+            overlap = len(query_tokens & summary_tokens)
+            if overlap < 2:
+                continue
+            ranked.append((overlap, item.get("updated_at", ""), item))
+        ranked.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
+        return [entry[2] for entry in ranked[: max(0, min(int(limit), 10))]]
+
+    def set_response_feedback(self, chat_id, message_id, feedback_type, *, active=True):
+        chat_id = _clean(chat_id)
+        message_id = _clean(message_id)
+        feedback_type = _clean(feedback_type).lower()
+        if not chat_id or not message_id:
+            raise ValueError("chat_id and message_id are required")
+        if feedback_type not in {"thumbs_up", "remember"}:
+            raise ValueError("invalid response feedback type")
+        now = _now()
+        with self._connect() as db:
+            db.execute(
+                """
+                INSERT INTO response_feedback (
+                    chat_id, message_id, feedback_type, active, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(chat_id, message_id, feedback_type) DO UPDATE SET
+                    active = excluded.active,
+                    updated_at = excluded.updated_at
+                """,
+                (chat_id, message_id, feedback_type, bool(active), now, now),
+            )
+        return self.get_response_feedback(chat_id, message_id)
+
+    def get_response_feedback(self, chat_id, message_id):
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT feedback_type, active
+                FROM response_feedback
+                WHERE chat_id = ? AND message_id = ?
+                """,
+                (_clean(chat_id), _clean(message_id)),
+            ).fetchall()
+        return {
+            row["feedback_type"]: bool(row["active"])
+            for row in rows
+        }

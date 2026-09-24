@@ -82,6 +82,7 @@ from .memory_answers import direct_user_memory_answer
 from .memory_dialog import MemoryDialog
 from .memory_extractor import is_explicit_memory_request
 from .memory_store import MemoryStore
+from .window_memory import WindowMemoryService
 from .ollama_client import OllamaClient
 from .ollama_resource_coordinator import OWNER_LOCALAI_DESKTOP, OWNER_SCHEDULER
 from .resource_monitor import format_resource_summary, get_system_metrics
@@ -106,6 +107,7 @@ from .workers import (
     MarketDataWorker,
     MultiAssetMarketDataWorker,
     MemoryWriteWorker,
+    ResponseMemoryWorker,
     ScheduledTaskWorker,
 )
 
@@ -155,6 +157,7 @@ class MainWindow(QMainWindow):
         )
         self.store = ChatStore()
         self.memory_store = MemoryStore()
+        self.window_memory = WindowMemoryService(self.memory_store)
         self.current_chat = None
         self.attachment_context = []
         self.thread = None
@@ -176,6 +179,8 @@ class MainWindow(QMainWindow):
         self.pending_request_trace = None
         self.expanded_source_message_ids = set()
         self.expanded_diagnostic_message_ids = set()
+        self.pending_response_memory_chat_id = ""
+        self.pending_response_memory_message_id = ""
         self.show_closed = False
         self.thinking_phase = 0
         self.thinking_base_text = "Feldolgozás folyamatban"
@@ -1294,8 +1299,30 @@ class MainWindow(QMainWindow):
         if memory_context:
             system_prompt = f"{system_prompt}\n\n{memory_context}"
 
-        messages = [{"role": "system", "content": system_prompt}]
         chat_messages = list(self.pending_action_history_messages)
+        window_context = self.window_memory.prepare_context(
+            self.generation_chat_id,
+            chat_messages,
+            prompt,
+        )
+        window_context_text = self.window_memory.context_text(window_context)
+        if window_context_text:
+            system_prompt = f"{system_prompt}\n\n{window_context_text}"
+        if self.pending_request_trace is not None:
+            self.pending_request_trace.add_metadata(
+                window_memory_loaded=bool(window_context.summary),
+                global_memory_loaded=bool(memory_context),
+                related_window_count=len(window_context.global_windows),
+                recent_raw_message_count=len(window_context.recent_messages),
+                recent_raw_context_chars=sum(
+                    len(str(item.get("content") or ""))
+                    for item in window_context.recent_messages
+                ),
+                window_compaction_occurred=window_context.compacted,
+            )
+
+        messages = [{"role": "system", "content": system_prompt}]
+        chat_messages = list(window_context.recent_messages)
         original_index = -1
         for index in range(len(chat_messages) - 1, -1, -1):
             if (
@@ -1389,9 +1416,9 @@ class MainWindow(QMainWindow):
         if direct_memory_answer:
             target_chat = self._generation_target_chat()
             if target_chat is not None:
-                target_chat["messages"].append(
-                    {"role": "assistant", "content": direct_memory_answer}
-                )
+                assistant_message = {"role": "assistant", "content": direct_memory_answer}
+                assistant_message["id"] = uuid.uuid4().hex
+                target_chat["messages"].append(assistant_message)
                 self.store.save(target_chat)
             self.status.setText("Memory answer")
             if target_chat is not None:
@@ -1699,7 +1726,11 @@ class MainWindow(QMainWindow):
 
         if target_chat is not None:
             target_chat["messages"].append(
-                {"role": "assistant", "content": content}
+                {
+                    "id": uuid.uuid4().hex,
+                    "role": "assistant",
+                    "content": content,
+                }
             )
             self.store.save(target_chat)
 
@@ -2022,6 +2053,121 @@ class MainWindow(QMainWindow):
             self.expanded_diagnostic_message_ids.add(key)
         self._render_chat()
 
+    def _response_actions_html(self, message, message_index):
+        if not self.current_chat or not str(message.get("content") or "").strip():
+            return ""
+        chat_id = str(self.current_chat.get("id") or "")
+        message_id = str(message.get("id") or f"message-{message_index}")
+        feedback = self.memory_store.get_response_feedback(chat_id, message_id)
+        liked = bool(feedback.get("thumbs_up"))
+        remembered = bool(feedback.get("remember"))
+        like_color = "#8FBE9B" if liked else "#8F99A6"
+        memory_color = "#F06A75" if remembered else "#8F99A6"
+        like_title = "Useful response" if not liked else "Remove useful-response feedback"
+        memory_title = (
+            "Saved to long-term memory"
+            if remembered
+            else "Remember relevant information in long-term memory"
+        )
+        return (
+            "<div style='margin-top:8px;font-size:14px;'>"
+            f"<a title='{html.escape(like_title, quote=True)}' "
+            f"style='color:{like_color};text-decoration:none;margin-right:12px;' "
+            f"href='localai-feedback://thumbs_up/{message_index}'>👍</a>"
+            f"<a title='{html.escape(memory_title, quote=True)}' "
+            f"style='color:{memory_color};text-decoration:none;' "
+            f"href='localai-feedback://remember/{message_index}'>◉</a>"
+            "</div>"
+        )
+
+    def _response_action_message(self, message_index):
+        if not self.current_chat:
+            return None
+        messages = self.current_chat.get("messages", [])
+        if message_index < 0 or message_index >= len(messages):
+            return None
+        message = messages[message_index]
+        if message.get("role") != "assistant":
+            return None
+        if not message.get("id"):
+            message["id"] = uuid.uuid4().hex
+            self.store.save(self.current_chat)
+        return message
+
+    def _handle_response_action(self, action, message_index):
+        message = self._response_action_message(message_index)
+        if message is None:
+            return
+        chat_id = str(self.current_chat.get("id") or "")
+        message_id = str(message.get("id") or "")
+
+        if action == "thumbs_up":
+            current = self.memory_store.get_response_feedback(chat_id, message_id)
+            active = not bool(current.get("thumbs_up"))
+            self.memory_store.set_response_feedback(
+                chat_id,
+                message_id,
+                "thumbs_up",
+                active=active,
+            )
+            self.status.setText("Response marked useful" if active else "Feedback removed")
+            self._render_chat()
+            return
+
+        if action != "remember" or self.worker is not None or self.thread is not None:
+            return
+        current = self.memory_store.get_response_feedback(chat_id, message_id)
+        if current.get("remember"):
+            self.status.setText("Response already saved to memory")
+            return
+
+        model = self.model_combo.currentText().strip()
+        if not model or model.startswith("No Ollama"):
+            self.status.setText("A local model is required to normalize memory")
+            return
+        self.pending_response_memory_chat_id = chat_id
+        self.pending_response_memory_message_id = message_id
+        self.thread = QThread()
+        self.worker = ResponseMemoryWorker(
+            self.client,
+            model,
+            message.get("content", ""),
+            self.memory_store,
+            chat_id,
+            message_id,
+        )
+        self.worker.moveToThread(self.thread)
+        self.thread.started.connect(self.worker.run)
+        self.worker.finished.connect(self._on_response_memory_finished)
+        self.worker.failed.connect(self._on_response_memory_failed)
+        self.worker.finished.connect(self.thread.quit)
+        self.worker.failed.connect(self.thread.quit)
+        self.thread.finished.connect(self._cleanup_worker)
+        self.status.setText("Saving response to memory...")
+        self.thread.start()
+
+    def _on_response_memory_finished(self):
+        saved_count = int(getattr(self.worker, "saved_count", 0) or 0)
+        if saved_count:
+            self.memory_store.set_response_feedback(
+                self.pending_response_memory_chat_id,
+                self.pending_response_memory_message_id,
+                "remember",
+                active=True,
+            )
+            self.status.setText(f"Response memory saved: {saved_count} item(s)")
+        else:
+            self.status.setText("No durable memory found in response")
+        self.pending_response_memory_chat_id = ""
+        self.pending_response_memory_message_id = ""
+        self._render_chat()
+
+    def _on_response_memory_failed(self, message):
+        self.status.setText("Response memory save failed")
+        self.status.setToolTip(" ".join(str(message or "").split())[:500])
+        self.pending_response_memory_chat_id = ""
+        self.pending_response_memory_message_id = ""
+
     def _render_chat(self, include_partial=False, streaming=False):
         self._refresh_chat_extensions_button()
         keep_bottom = (
@@ -2098,6 +2244,7 @@ class MainWindow(QMainWindow):
                     self._response_timing_html(message)
                     + self._sources_html(message, message_index)
                     + self._diagnostic_html(message, message_index)
+                    + self._response_actions_html(message, message_index)
                 )
 
             html_parts.append(
@@ -2899,6 +3046,11 @@ class MainWindow(QMainWindow):
                 return
             if url.scheme().lower() == "localai-diagnostic":
                 self._toggle_diagnostics(url.host() or url.path().strip("/"))
+                return
+            if url.scheme().lower() == "localai-feedback":
+                action = url.host()
+                message_index = int(url.path().strip("/"))
+                self._handle_response_action(action, message_index)
                 return
             if url.scheme().lower() in {"http", "https"}:
                 self._open_resource(url.toString())

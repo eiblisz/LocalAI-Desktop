@@ -343,3 +343,43 @@ def extract_explicit_memories(client, model, user_text):
         raise ValueError("too many explicit memories in one request")
 
     return [validate_memory_candidate(item) for item in items]
+
+
+def extract_response_memories(client, model, response_text):
+    """Normalize an explicitly selected assistant response into durable candidates."""
+    response_text = _clean(response_text)
+    if not response_text:
+        return []
+
+    raw = client.chat_once(
+        model=model,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "The user explicitly selected an assistant response to save to long-term "
+                    "memory. Extract only concrete, reusable facts, decisions, preferences, "
+                    "rules, lessons, or project state stated in that response. Do not save "
+                    "speculation, citations, incidental web text, or conversational filler. "
+                    "Create atomic records using USER_PROFILE, PROJECT, PREFERENCE, RULE, "
+                    "LESSON, or WORKING. Use concise stable keys. Return an empty list if "
+                    "nothing is suitable. Never invent missing information. Return only data "
+                    "matching the supplied JSON schema."
+                ),
+            },
+            {"role": "user", "content": response_text},
+        ],
+        response_format=MEMORY_EXTRACTION_SCHEMA,
+    )
+    try:
+        payload = json.loads(raw)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("memory extractor returned invalid JSON") from exc
+    if not isinstance(payload, dict) or set(payload) != {"memories"}:
+        raise ValueError("memory extractor payload contains unexpected fields")
+    items = payload.get("memories")
+    if not isinstance(items, list):
+        raise ValueError("memory extractor memories must be a list")
+    if len(items) > MAX_EXPLICIT_MEMORIES:
+        raise ValueError("too many explicit memories in one response")
+    return [validate_memory_candidate(item) for item in items]

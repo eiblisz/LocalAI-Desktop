@@ -149,6 +149,50 @@ class MemoryWriteWorker(QObject):
         return None
 
 
+class ResponseMemoryWorker(QObject):
+    finished = Signal()
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        client,
+        model,
+        response_text,
+        memory_store,
+        source_chat_id,
+        source_message_id,
+    ):
+        super().__init__()
+        self.client = client
+        self.model = model
+        self.response_text = str(response_text or "").strip()
+        self.memory_store = memory_store
+        self.source_chat_id = str(source_chat_id or "").strip()
+        self.source_message_id = str(source_message_id or "").strip()
+        self.saved_count = 0
+
+    @Slot()
+    def run(self):
+        try:
+            from .memory_runtime import remember_response
+
+            written = remember_response(
+                self.client,
+                self.model,
+                self.response_text,
+                self.memory_store,
+                source_chat_id=self.source_chat_id or None,
+                source_message_id=self.source_message_id or None,
+            )
+            self.saved_count = len(written)
+            self.finished.emit()
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+    def stop(self):
+        return None
+
+
 class MarketDataWorker(QObject):
     token = Signal(str)
     finished = Signal()
