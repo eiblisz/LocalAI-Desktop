@@ -135,6 +135,7 @@ def guard_context_response(
     *,
     constraints=None,
     control=None,
+    output_budget=None,
 ):
     draft = str(response_text or "").strip()
     if not draft:
@@ -160,20 +161,25 @@ def guard_context_response(
     kwargs = {}
     if control is not None:
         kwargs["control"] = control
+    if output_budget is not None:
+        kwargs["num_predict"] = int(output_budget)
 
-    try:
-        repaired = client.chat_once(
-            model=model,
-            messages=repair_messages,
-            **kwargs,
-        ).strip()
-    except TypeError as exc:
-        if "control" not in str(exc):
+    while True:
+        try:
+            repaired = client.chat_once(
+                model=model,
+                messages=repair_messages,
+                **kwargs,
+            ).strip()
+            break
+        except TypeError as exc:
+            if "control" in str(exc) and "control" in kwargs:
+                kwargs.pop("control")
+                continue
+            if "num_predict" in str(exc) and "num_predict" in kwargs:
+                kwargs.pop("num_predict")
+                continue
             raise
-        repaired = client.chat_once(
-            model=model,
-            messages=repair_messages,
-        ).strip()
 
     stale_after = stale_subject_substitution(
         current_prompt,

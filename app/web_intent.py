@@ -122,7 +122,7 @@ def is_factual_risk_request(text):
 
 
 def looks_like_web_request(text):
-    normalized = " ".join(str(text or "").lower().split())
+    normalized = _fold(text)
     markers = [
         "keress rá",
         "keress ra",
@@ -153,8 +153,6 @@ def looks_like_web_request(text):
         "browse the web",
         "latest news",
         "current price",
-        "eur",
-        "€",
         "ár alatt",
         "ar alatt",
         "mennyiért",
@@ -171,13 +169,26 @@ def looks_like_web_request(text):
         "vasarlas",
         "buy",
         "price",
-        "under €",
         "under eur",
         "in stock",
         "available now",
     ]
+    def contains_marker(marker):
+        phrase = _fold(marker)
+        if not phrase:
+            return False
+        return bool(re.search(
+            rf"(?<!\w){re.escape(phrase)}(?!\w)",
+            normalized,
+            flags=re.IGNORECASE,
+        ))
+
+    currency_cue = bool(
+        re.search(r"(?<!\w)eur(?!\w)|€", str(text or ""), re.IGNORECASE)
+    )
     return (
-        _contains_any(normalized, markers)
+        any(contains_marker(marker) for marker in markers)
+        or currency_cue
         or bool(re.search(r"\bkeress\w*\b", normalized, flags=re.IGNORECASE))
         or is_freshness_sensitive_request(text)
         or is_factual_risk_request(text)
@@ -213,6 +224,7 @@ def is_freshness_sensitive_request(text):
         "aktuális",
         "aktualis",
         "mostani",
+        "friss",
         "legfrissebb",
         "legújabb",
         "legujabb",
@@ -251,6 +263,7 @@ def is_freshness_sensitive_request(text):
 
     markers = (
         "legfrissebb",
+        "friss",
         "friss hírek",
         "friss hirek",
         "aktuális",

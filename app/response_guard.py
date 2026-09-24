@@ -138,6 +138,7 @@ def guard_response(
     *,
     constraints=None,
     control=None,
+    output_budget=None,
 ):
     """
     Validate one final model response and perform at most one bounded repair.
@@ -162,25 +163,25 @@ def guard_response(
         validation,
         constraints=constraints,
     )
+    call_kwargs = {"model": model, "messages": repair_messages}
     if control is not None:
+        call_kwargs["control"] = control
+    if output_budget is not None:
+        call_kwargs["num_predict"] = int(output_budget)
+    while True:
         try:
-            repaired = client.chat_once(
-                model=model,
-                messages=repair_messages,
-                control=control,
-            ).strip()
+            repaired = client.chat_once(**call_kwargs).strip()
+            break
         except TypeError as exc:
-            if "control" not in str(exc):
-                raise
-            repaired = client.chat_once(
-                model=model,
-                messages=repair_messages,
-            ).strip()
-    else:
-        repaired = client.chat_once(
-            model=model,
-            messages=repair_messages,
-        ).strip()
+            # Lightweight test and extension clients may implement the older
+            # client signature. The real Ollama client receives the shared budget.
+            if "control" in str(exc) and "control" in call_kwargs:
+                call_kwargs.pop("control")
+                continue
+            if "num_predict" in str(exc) and "num_predict" in call_kwargs:
+                call_kwargs.pop("num_predict")
+                continue
+            raise
 
     repaired_validation = validate_response(
         user_text,

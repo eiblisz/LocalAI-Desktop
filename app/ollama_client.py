@@ -329,6 +329,7 @@ class OllamaClient:
         timeout: float = 600.0,
         response_format=None,
         control=None,
+        num_predict=None,
     ) -> str:
         if control is not None:
             control.claim_model_call()
@@ -339,6 +340,11 @@ class OllamaClient:
 
         request_id = uuid.uuid4().hex
         self._set_request_state(model, request_id, STATE_MODEL_LOADING)
+        output_budget = (
+            OLLAMA_NUM_PREDICT
+            if num_predict is None
+            else max(1, int(num_predict))
+        )
         payload = {
             "model": model,
             "messages": messages,
@@ -348,7 +354,7 @@ class OllamaClient:
             # they emit a visible answer.  The explicit request is harmless
             # for ordinary models and can be opt-in overridden by the operator.
             "think": OLLAMA_THINKING_ENABLED,
-            "options": {"num_predict": OLLAMA_NUM_PREDICT},
+            "options": {"num_predict": output_budget},
         }
         if response_format is not None:
             if not isinstance(response_format, (str, dict)):
@@ -430,6 +436,7 @@ class OllamaClient:
         should_stop: Callable[[], bool],
         timeout: float = 600.0,
         control=None,
+        num_predict=None,
     ) -> None:
         if control is not None:
             control.claim_model_call()
@@ -440,12 +447,17 @@ class OllamaClient:
 
         request_id = uuid.uuid4().hex
         self._set_request_state(model, request_id, STATE_MODEL_LOADING)
+        output_budget = (
+            OLLAMA_NUM_PREDICT
+            if num_predict is None
+            else max(1, int(num_predict))
+        )
         payload = {
             "model": model,
             "messages": messages,
             "stream": True,
             "think": OLLAMA_THINKING_ENABLED,
-            "options": {"num_predict": OLLAMA_NUM_PREDICT},
+            "options": {"num_predict": output_budget},
         }
         final_item = {}
         done_reason = ""

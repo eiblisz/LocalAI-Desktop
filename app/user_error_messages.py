@@ -39,6 +39,15 @@ def public_error(message, *, language="hu"):
                 "I could not find enough reliable public sources for this answer. Please try again later or use more specific keywords."
             ),
         )
+    if "output-token limit" in lowered or "output token limit" in lowered:
+        return PublicError(
+            "generation_length_limit",
+            (
+                "A válasz elérte a biztonságos kimeneti korlátot, ezért nem jelenítek meg csonka szöveget. Próbáld meg rövidebb kéréssel."
+                if hungarian else
+                "The response reached its safe output limit, so I did not show a truncated answer. Please try a shorter request."
+            ),
+        )
     return PublicError(
         "execution_failed",
         (

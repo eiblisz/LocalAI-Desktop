@@ -27,6 +27,8 @@ from .artifact_service import (
     infer_artifact_requests,
 )
 from .config import DEFAULT_SYSTEM_PROMPT
+from .generation_policy import build_generation_policy
+from .ollama_client import OllamaClient
 from .extension_authority import (
     ExtensionAuthority,
     ExtensionExecutionContext,
@@ -443,6 +445,7 @@ class DiscordBotBridge(QObject):
                 batch_size=len(contracts),
             )
             profile = contract.constraints.request_profile
+            synthesis_policy = getattr(contract, "synthesis_policy", None)
             child_trace.add_metadata(
                 child_status="running",
                 child_profile=profile.kind,
@@ -453,6 +456,16 @@ class DiscordBotBridge(QObject):
                 conversation_local=bool(
                     getattr(contract, "conversation_local", False)
                 ),
+                synthesis_route=str(
+                    getattr(synthesis_policy, "synthesis_route", "LOCAL")
+                ),
+                response_length=str(
+                    getattr(contract.constraints, "response_length", "normal")
+                ),
+                output_budget=int(
+                    getattr(contract.constraints, "output_budget", 1024)
+                ),
+                web_required=bool(getattr(contract, "use_web", False)),
             )
             try:
                 async with message.channel.typing():
@@ -467,6 +480,16 @@ class DiscordBotBridge(QObject):
                         constraints=contract.constraints,
                         conversation_local=bool(
                             getattr(contract, "conversation_local", False)
+                        ),
+                        synthesis_route=getattr(
+                            synthesis_policy,
+                            "synthesis_route",
+                            None,
+                        ),
+                        output_budget=getattr(
+                            contract.constraints,
+                            "output_budget",
+                            None,
                         ),
                     )
                 child_trace.add_metadata(child_status="passed")
@@ -913,12 +936,18 @@ class DiscordBotBridge(QObject):
         *,
         trace=None,
         explicit_batch_child=False,
+        output_budget=None,
+        synthesis_route=None,
     ):
         kwargs = {}
         if trace is not None:
             kwargs["trace"] = trace
         if explicit_batch_child:
             kwargs["explicit_batch_child"] = True
+        if output_budget is not None and isinstance(self.ollama_client, OllamaClient):
+            kwargs["output_budget"] = int(output_budget)
+        if synthesis_route is not None and isinstance(self.ollama_client, OllamaClient):
+            kwargs["synthesis_route"] = str(synthesis_route)
         return run_chat_web_request(
             self.ollama_client,
             self.settings.model,
@@ -1055,6 +1084,8 @@ class DiscordBotBridge(QObject):
         explicit_batch_child=False,
         constraints=None,
         conversation_local=False,
+        synthesis_route=None,
+        output_budget=None,
     ):
         if action_plan.has(ACTION_MEMORY_WRITE):
             answer, chat_id = self._remember_remote(prompt)
@@ -1094,6 +1125,8 @@ class DiscordBotBridge(QObject):
             explicit_batch_child=explicit_batch_child,
             constraints=constraints,
             conversation_local=conversation_local,
+            synthesis_route=synthesis_route,
+            output_budget=output_budget,
         )
         return {"chat_id": chat_id, "messages": [answer], "artifacts": []}
 
@@ -1108,6 +1141,8 @@ class DiscordBotBridge(QObject):
         explicit_batch_child=False,
         constraints=None,
         conversation_local=False,
+        synthesis_route=None,
+        output_budget=None,
     ):
         if use_web is None:
             crypto_available, multi_asset_available = (
@@ -1139,6 +1174,28 @@ class DiscordBotBridge(QObject):
             )
         if allow_web_fallback is None:
             allow_web_fallback = self._current_web_mode() != "OFF"
+
+        constraints = constraints or build_task_constraints(prompt)
+        generation_policy = build_generation_policy(
+            prompt,
+            profile=constraints.request_profile,
+            use_web=bool(use_web),
+            conversation_local=conversation_local,
+        )
+        synthesis_route = str(
+            synthesis_route or generation_policy.synthesis_route
+        ).upper()
+        output_budget = max(
+            1,
+            int(output_budget or generation_policy.output_budget),
+        )
+        if trace is not None:
+            trace.add_metadata(
+                synthesis_route=synthesis_route,
+                response_length=generation_policy.response_length,
+                output_budget=output_budget,
+                web_required=bool(use_web),
+            )
 
         chat = self._load_remote_chat()
         chat["model"] = self.settings.model
@@ -1284,14 +1341,23 @@ class DiscordBotBridge(QObject):
                     prompt,
                     trace=trace,
                     explicit_batch_child=explicit_batch_child,
+                    output_budget=output_budget,
+                    synthesis_route=synthesis_route,
                 )
         else:
             if trace is not None:
                 trace.begin("model_inference")
-            answer = self.ollama_client.chat_once(
-                model=self.settings.model,
-                messages=messages,
-            ).strip()
+            if isinstance(self.ollama_client, OllamaClient):
+                answer = self.ollama_client.chat_once(
+                    model=self.settings.model,
+                    messages=messages,
+                    num_predict=output_budget,
+                ).strip()
+            else:
+                answer = self.ollama_client.chat_once(
+                    model=self.settings.model,
+                    messages=messages,
+                ).strip()
             if trace is not None:
                 trace.end("model_inference")
             if allow_web_fallback and answer_requires_web_fallback(prompt, answer):
@@ -1300,6 +1366,8 @@ class DiscordBotBridge(QObject):
                     prompt,
                     trace=trace,
                     explicit_batch_child=explicit_batch_child,
+                    output_budget=output_budget,
+                    synthesis_route="WEB",
                 )
 
         if not answer:

@@ -228,6 +228,7 @@ def guard_grounded_answer(
     trace=None,
     force_verify=False,
     language_instruction="",
+    output_budget=None,
 ):
     draft = _collapse_adjacent_proper_name_repetition(str(answer or "").strip())
     unsupported = unsupported_grounded_literals(draft, authority_text)
@@ -246,9 +247,9 @@ def guard_grounded_answer(
     if trace is not None:
         trace.begin("factual_guard_repair")
 
-    repair = client.chat_once(
-        model=model,
-        messages=[
+    repair_kwargs = {
+        "model": model,
+        "messages": [
             {
                 "role": "system",
                 "content": (
@@ -285,7 +286,16 @@ def guard_grounded_answer(
                 ),
             },
         ],
-    ).strip()
+    }
+    if output_budget is not None:
+        repair_kwargs["num_predict"] = int(output_budget)
+    try:
+        repair = client.chat_once(**repair_kwargs).strip()
+    except TypeError as exc:
+        if "num_predict" not in str(exc) or "num_predict" not in repair_kwargs:
+            raise
+        repair_kwargs.pop("num_predict")
+        repair = client.chat_once(**repair_kwargs).strip()
 
     if trace is not None:
         trace.end("factual_guard_repair")

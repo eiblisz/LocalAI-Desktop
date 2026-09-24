@@ -1536,6 +1536,7 @@ class MainWindow(QMainWindow):
             batch_size=self.pending_action_batch_size,
         )
         profile = contract.constraints.request_profile
+        synthesis_policy = getattr(contract, "synthesis_policy", None)
         self.pending_request_trace.add_metadata(
             batch_size=self.pending_action_batch_size,
             child_index=contract.index,
@@ -1552,6 +1553,16 @@ class MainWindow(QMainWindow):
             conversation_local=bool(
                 getattr(contract, "conversation_local", False)
             ),
+            synthesis_route=str(
+                getattr(synthesis_policy, "synthesis_route", "LOCAL")
+            ),
+            response_length=str(
+                getattr(contract.constraints, "response_length", "normal")
+            ),
+            output_budget=int(
+                getattr(contract.constraints, "output_budget", 1024)
+            ),
+            web_required=bool(getattr(contract, "use_web", False)),
         )
         prompt = contract.prompt
         model = self.pending_action_model
@@ -1764,6 +1775,12 @@ class MainWindow(QMainWindow):
                     "explicit_batch_child",
                     False,
                 ),
+                output_budget=getattr(contract.constraints, "output_budget", None),
+                synthesis_route=getattr(
+                    synthesis_policy,
+                    "synthesis_route",
+                    None,
+                ),
             )
         elif contract.route == ROUTE_CHAT:
             self.worker = AdaptiveChatWorker(
@@ -1783,6 +1800,12 @@ class MainWindow(QMainWindow):
                     contract,
                     "explicit_batch_child",
                     False,
+                ),
+                output_budget=getattr(contract.constraints, "output_budget", None),
+                synthesis_route=getattr(
+                    synthesis_policy,
+                    "synthesis_route",
+                    None,
                 ),
             )
         else:
