@@ -43,7 +43,7 @@ from .document_tools import (
 )
 from .language_policy import response_language_instruction
 from .memory_answers import direct_user_memory_answer
-from .memory_runtime import remember_explicit_request
+from .memory_runtime import remember_explicit_request, semantic_memory_context_lines
 from .request_trace import RequestTrace
 from .task_constraints import build_task_constraints, task_constraints_instruction
 from .user_error_messages import public_error
@@ -615,34 +615,7 @@ class DiscordBotBridge(QObject):
             "For relationship_to_user memories, the value is the subject's literal relationship to the user.",
         ]
 
-        for memory in memories:
-            category = str(memory.get("category", "")).strip()
-            subject = str(memory.get("subject", "")).strip()
-            key = str(memory.get("key", "")).strip()
-            value = str(memory.get("value", "")).strip()
-
-            normalized_key = key.casefold()
-            if category == "USER_PROFILE" and normalized_key in {
-                "name",
-                "user_name",
-                "preferred_name",
-            }:
-                lines.append(f"- Durable user fact: the user's name is {value}.")
-                continue
-
-            if category == "USER_PROFILE" and normalized_key == "relationship_to_user":
-                lines.append(f"- Durable user fact: {subject} is the user's {value}.")
-                continue
-
-            if category == "USER_PROFILE" and normalized_key.endswith("_of"):
-                relation_text = normalized_key.replace("_", " ")
-                lines.append(
-                    f"- Durable person fact: {subject} is the {relation_text} {value}. "
-                    "This is a relationship between two people, not a relationship to the user."
-                )
-                continue
-
-            lines.append(f"- [{category}] {subject} | {key}: {value}")
+        lines.extend(semantic_memory_context_lines(memories))
 
         return "\n".join(lines)
 
@@ -820,7 +793,13 @@ class DiscordBotBridge(QObject):
         answer, path = results[0]
         return answer, chat_id, path
 
-    def _remote_system_prompt(self, prompt, constraints=None):
+    def _remote_system_prompt(
+        self,
+        prompt,
+        constraints=None,
+        *,
+        conversation_local=False,
+    ):
         constraints = constraints or build_task_constraints(prompt)
         system_prompt = (
             f"{DEFAULT_SYSTEM_PROMPT}\n\n"
@@ -841,16 +820,34 @@ class DiscordBotBridge(QObject):
         )
         if constraint_instruction:
             system_prompt = f"{system_prompt}\n\n{constraint_instruction}"
-        memory_context = self._build_memory_context(prompt)
+        if conversation_local:
+            system_prompt = (
+                f"{system_prompt}\n\nCURRENT CONVERSATION AUTHORITY:\n"
+                "The user is asking about this Discord conversation. Use only its "
+                "raw messages. If the requested fact was not stated here, say so. "
+                "Do not infer it from long-term memory."
+            )
+        memory_context = "" if conversation_local else self._build_memory_context(prompt)
         if memory_context:
             system_prompt = f"{system_prompt}\n\n{memory_context}"
         return system_prompt
 
-    def _messages_for_prompt(self, chat, prompt, constraints=None):
+    def _messages_for_prompt(
+        self,
+        chat,
+        prompt,
+        constraints=None,
+        *,
+        conversation_local=False,
+    ):
         messages = [
             {
                 "role": "system",
-                "content": self._remote_system_prompt(prompt, constraints),
+                "content": self._remote_system_prompt(
+                    prompt,
+                    constraints,
+                    conversation_local=conversation_local,
+                ),
             }
         ]
         history = [
@@ -1049,6 +1046,7 @@ class DiscordBotBridge(QObject):
             isolated_history=isolated_history,
             explicit_batch_child=explicit_batch_child,
             constraints=constraints,
+            conversation_local=conversation_local,
         )
         return {"chat_id": chat_id, "messages": [answer], "artifacts": []}
 
@@ -1062,6 +1060,7 @@ class DiscordBotBridge(QObject):
         isolated_history=None,
         explicit_batch_child=False,
         constraints=None,
+        conversation_local=False,
     ):
         if use_web is None:
             crypto_available, multi_asset_available = (
@@ -1108,7 +1107,9 @@ class DiscordBotBridge(QObject):
             })
         self.chat_store.save(chat)
 
-        direct_answer = self._direct_compound_answer(prompt)
+        direct_answer = (
+            "" if conversation_local else self._direct_compound_answer(prompt)
+        )
         if direct_answer:
             chat["messages"].append(
                 {"role": "assistant", "content": direct_answer}
@@ -1127,6 +1128,7 @@ class DiscordBotBridge(QObject):
             model_chat,
             prompt,
             constraints=constraints,
+            conversation_local=conversation_local,
         )
 
         if use_web:

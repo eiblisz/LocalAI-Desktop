@@ -1,6 +1,42 @@
 from .memory_extractor import extract_explicit_memories, extract_response_memories
 
 
+def semantic_memory_context_lines(memories):
+    """Serialize approved memory facts without exposing internal storage labels."""
+    lines = []
+    for memory in memories:
+        category = str(memory.get("category", "")).strip()
+        subject = str(memory.get("subject", "")).strip()
+        key = str(memory.get("key", "")).strip()
+        value = str(memory.get("value", "")).strip()
+        if not value:
+            continue
+
+        normalized_key = key.casefold()
+        if category == "USER_PROFILE" and normalized_key in {
+            "name",
+            "user_name",
+            "preferred_name",
+        }:
+            lines.append(f"- Durable user fact: the user's name is {value}.")
+            continue
+
+        if category == "USER_PROFILE" and normalized_key == "relationship_to_user":
+            lines.append(f"- Durable user fact: {subject} is the user's {value}.")
+            continue
+
+        if category == "USER_PROFILE" and normalized_key.endswith("_of"):
+            relation_text = normalized_key.replace("_", " ")
+            lines.append(
+                f"- Durable person fact: {subject} is the {relation_text} {value}. "
+                "This is a relationship between two people, not a relationship to the user."
+            )
+            continue
+
+        lines.append(f"- Durable memory value: {value}")
+    return lines
+
+
 def remember_explicit_request(
     client,
     model,

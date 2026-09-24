@@ -389,7 +389,56 @@ def test_remote_prompt_injects_relevant_persistent_memory_for_model(tmp_path: Pa
     assert answer == "Rendben."
     system = ollama.messages[0]["content"]
     assert "LONG-TERM MEMORY CONTEXT:" in system
-    assert "[PROJECT] LocalAI Desktop | preferred_remote_name: Prometheusz" in system
+    assert "Durable memory value: Prometheusz" in system
+    assert "preferred_remote_name" not in system
+
+
+def test_remote_current_conversation_query_excludes_long_term_memory(tmp_path: Path):
+    class FakeOllama:
+        def __init__(self):
+            self.messages = None
+
+        def chat_once(self, model, messages):
+            self.messages = messages
+            return "Ebben a beszélgetésben nem adtál meg kódnevet."
+
+    memory_store = MemoryStore(tmp_path / "memory.sqlite3")
+    memory_store.remember_explicit(
+        category="PROJECT",
+        scope="USER",
+        subject="Economic_History",
+        key="preferred_test_color",
+        value="Kék Sárkány 7319",
+        source_chat_id="another-chat",
+        source_excerpt="Unrelated memory.",
+    )
+    ollama = FakeOllama()
+    bridge = DiscordBotBridge(
+        ollama_client=ollama,
+        chat_store=ChatStore(tmp_path / "chats"),
+        settings=DiscordBotSettings(
+            extension_id="ext-local-scope",
+            name="Prometheusz",
+            guild_id=111111111111111111,
+            channel_id=222222222222222222,
+            allowed_user_id=333333333333333333,
+            model="qwen3-coder:30b",
+        ),
+        token="T" * 40,
+        memory_store=memory_store,
+    )
+
+    bridge._answer_prompt(
+        "Mi a tesztprojekt kódneve ebben a beszélgetésben?",
+        conversation_local=True,
+    )
+
+    system = ollama.messages[0]["content"]
+    assert "CURRENT CONVERSATION AUTHORITY:" in system
+    assert "LONG-TERM MEMORY CONTEXT:" not in system
+    assert "Kék Sárkány 7319" not in system
+    assert "Economic_History" not in system
+    assert "preferred_test_color" not in system
 
 
 def test_compound_prometheusz_identity_and_memory_question_is_deterministic(tmp_path: Path):

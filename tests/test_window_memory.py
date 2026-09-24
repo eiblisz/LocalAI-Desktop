@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from app.memory_store import MemoryStore
 from app.main_window import MainWindow
 from app.action_runtime import ActionRuntime, ROUTE_CHAT
@@ -14,6 +16,28 @@ def _conversation(turns):
             {"role": "assistant", "content": f"Result {index}: completed successfully."},
         ])
     return messages
+
+
+def _desktop_messages(store, service, chat_id, history, prompt, *, local):
+    host = SimpleNamespace(
+        memory_store=store,
+        window_memory=service,
+        generation_chat_id=chat_id,
+        pending_action_history_messages=list(history),
+        pending_request_trace=None,
+        pending_action_original_text=prompt,
+        pending_action_context_suffix="",
+        pending_action_images=[],
+    )
+    host._build_memory_context = lambda query: MainWindow._build_memory_context(
+        host,
+        query,
+    )
+    return MainWindow._action_messages_for_model(
+        host,
+        prompt,
+        conversation_local=local,
+    )
 
 
 def test_window_memory_persists_and_is_isolated(tmp_path):
@@ -97,6 +121,122 @@ def test_conversation_local_recall_does_not_load_other_window_summary(tmp_path):
     assert unrelated.summary == ""
     assert unrelated.global_windows == []
     assert "Kék Sárkány 7319" not in service.context_text(unrelated)
+
+
+def test_current_conversation_recall_excludes_other_windows_and_global_metadata(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    store.upsert_window_memory(
+        "chat-a",
+        "- User: A tesztprojekt kódneve Kék Sárkány 7319.",
+        compacted_message_count=4,
+        source_message_count=16,
+    )
+    store.add_memory(
+        category="PROJECT",
+        scope="GLOBAL",
+        subject="Economic_History",
+        key="preferred_test_color",
+        value="A teszt színe green",
+        importance="REMEMBER",
+    )
+    service = WindowMemoryService(store)
+    prompt = "Mi a tesztprojekt kódneve ebben a beszélgetésben?"
+
+    messages = _desktop_messages(
+        store,
+        service,
+        "chat-b",
+        [],
+        prompt,
+        local=True,
+    )
+    serialized = "\n".join(str(item.get("content") or "") for item in messages)
+
+    assert "CURRENT CONVERSATION AUTHORITY:" in serialized
+    assert "Kék Sárkány 7319" not in serialized
+    assert "Economic_History" not in serialized
+    assert "preferred_test_color" not in serialized
+    assert "green" not in serialized
+
+
+def test_current_conversation_recall_keeps_its_own_window_value(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    store.upsert_window_memory(
+        "chat-a",
+        "- User: A tesztprojekt kódneve Kék Sárkány 7319.",
+        compacted_message_count=4,
+        source_message_count=16,
+    )
+    service = WindowMemoryService(store)
+    prompt = "Mi a tesztprojekt kódneve ebben a beszélgetésben?"
+
+    messages = _desktop_messages(
+        store,
+        service,
+        "chat-a",
+        [],
+        prompt,
+        local=True,
+    )
+
+    assert "Kék Sárkány 7319" in messages[0]["content"]
+
+
+def test_explicit_other_window_recall_can_use_bounded_related_memory(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    store.upsert_window_memory(
+        "chat-a",
+        "- User: A tesztprojekt kódneve Kék Sárkány 7319.",
+        compacted_message_count=4,
+        source_message_count=16,
+    )
+    service = WindowMemoryService(store)
+    prompt = "Mi volt a másik beszélgetésben megadott tesztprojekt kódneve?"
+    contracts = plan_chat_actions(ActionRuntime(), prompt, web_mode="ON")
+
+    messages = _desktop_messages(
+        store,
+        service,
+        "chat-b",
+        [],
+        prompt,
+        local=contracts[0].conversation_local,
+    )
+
+    assert contracts[0].conversation_local is False
+    assert "RELATED WINDOW MEMORY:" in messages[0]["content"]
+    assert "Kék Sárkány 7319" in messages[0]["content"]
+
+
+def test_explicit_long_term_memory_query_keeps_global_memory_available(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    store.add_memory(
+        category="PROJECT",
+        scope="GLOBAL",
+        subject="Economic_History",
+        key="preferred_test_color",
+        value="A teszt színe green",
+        importance="REMEMBER",
+    )
+    service = WindowMemoryService(store)
+    prompt = "Mi van a hosszú távú memóriában a teszt színéről?"
+    contracts = plan_chat_actions(ActionRuntime(), prompt, web_mode="ON")
+
+    messages = _desktop_messages(
+        store,
+        service,
+        "chat-b",
+        [],
+        prompt,
+        local=contracts[0].conversation_local,
+    )
+    system = messages[0]["content"]
+
+    assert contracts[0].conversation_local is False
+    assert "LONG-TERM MEMORY CONTEXT:" in system
+    assert "Durable memory value: A teszt színe green" in system
+    assert "Economic_History" not in system
+    assert "preferred_test_color" not in system
 
 
 def test_long_chat_compacts_old_messages_and_keeps_recent_raw_context(tmp_path):

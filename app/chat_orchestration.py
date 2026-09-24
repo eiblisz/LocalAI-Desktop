@@ -29,6 +29,17 @@ def is_conversation_local_request(
     if not tokens:
         return False
 
+    memory_terms = {
+        "memoria", "memory", "gedachtnis",
+    }
+    durable_terms = {
+        "globalis", "hosszu", "tavu", "tartos",
+        "global", "long", "term", "durable",
+        "langzeit", "dauerhaft",
+    }
+    if tokens & memory_terms and tokens & durable_terms:
+        return False
+
     scope_terms = {
         "beszelgetes", "beszelgetesben", "beszelgetesnek",
         "chat", "chatben", "szal", "szalban", "kontextus", "kontextusban",
@@ -40,6 +51,12 @@ def is_conversation_local_request(
         "this", "current", "our", "here",
         "dies", "diesem", "dieser", "unser", "hier",
     }
+    other_window_terms = {
+        "masik", "masikban", "other", "another", "anderen", "anderer",
+    }
+    if tokens & scope_terms and tokens & other_window_terms:
+        return False
+
     recall_stems = (
         "emleksz", "felidez", "remember", "recall", "erinner",
     )

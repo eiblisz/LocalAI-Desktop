@@ -81,6 +81,7 @@ from .language_policy import response_language_instruction
 from .memory_answers import direct_user_memory_answer
 from .memory_dialog import MemoryDialog
 from .memory_extractor import is_explicit_memory_request
+from .memory_runtime import semantic_memory_context_lines
 from .memory_store import MemoryStore
 from .window_memory import WindowMemoryService
 from .ollama_client import OllamaClient
@@ -1103,38 +1104,7 @@ class MainWindow(QMainWindow):
             "to the user; answer direct relationship questions from that fact.",
         ]
 
-        for memory in memories:
-            category = str(memory.get("category", "")).strip()
-            subject = str(memory.get("subject", "")).strip()
-            key = str(memory.get("key", "")).strip()
-            value = str(memory.get("value", "")).strip()
-
-            normalized_key = key.casefold()
-            if category == "USER_PROFILE" and normalized_key in {
-                "name",
-                "user_name",
-                "preferred_name",
-            }:
-                lines.append(f"- Durable user fact: the user's name is {value}.")
-                continue
-
-            if category == "USER_PROFILE" and normalized_key == "relationship_to_user":
-                lines.append(
-                    f"- Durable user fact: {subject} is the user's {value}."
-                )
-                continue
-
-            if category == "USER_PROFILE" and normalized_key.endswith("_of"):
-                relation_text = normalized_key.replace("_", " ")
-                lines.append(
-                    f"- Durable person fact: {subject} is the {relation_text} {value}. "
-                    "This is a relationship between two people, not a relationship to the user."
-                )
-                continue
-
-            lines.append(
-                f"- [{category}] {subject} | {key}: {value}"
-            )
+        lines.extend(semantic_memory_context_lines(memories))
 
         return "\n".join(lines)
 
@@ -1323,7 +1293,14 @@ class MainWindow(QMainWindow):
         )
         if constraint_instruction:
             system_prompt = f"{system_prompt}\n\n{constraint_instruction}"
-        memory_context = self._build_memory_context(prompt)
+        if conversation_local:
+            system_prompt = (
+                f"{system_prompt}\n\nCURRENT CONVERSATION AUTHORITY:\n"
+                "The user is asking about this chat. Use only this chat's current "
+                "window memory and raw messages. If the requested fact was not stated "
+                "here, say so. Do not infer it from other chats or long-term memory."
+            )
+        memory_context = "" if conversation_local else self._build_memory_context(prompt)
         if memory_context:
             system_prompt = f"{system_prompt}\n\n{memory_context}"
 
@@ -1439,7 +1416,10 @@ class MainWindow(QMainWindow):
 
         direct_memory_answer = (
             ""
-            if contract.route == ROUTE_MEMORY_WRITE
+            if (
+                contract.route == ROUTE_MEMORY_WRITE
+                or bool(getattr(contract, "conversation_local", False))
+            )
             else self._direct_user_memory_answer(prompt)
         )
         if direct_memory_answer:
