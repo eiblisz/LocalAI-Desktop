@@ -5,7 +5,7 @@ from typing import Callable
 
 import requests
 
-from .config import OLLAMA_BASE_URL, OLLAMA_THINKING_ENABLED
+from .config import OLLAMA_BASE_URL, OLLAMA_NUM_PREDICT, OLLAMA_THINKING_ENABLED
 from .ollama_process_control import (
     list_external_ollama_consumers,
     list_ollama_model_processes,
@@ -21,6 +21,10 @@ from .ollama_resource_coordinator import (
     ResourceLeaseStore,
 )
 from .vram_release import loaded_ollama_models, unload_ollama_model
+
+
+class IncompleteGenerationError(RuntimeError):
+    pass
 
 
 class OllamaClient:
@@ -344,6 +348,7 @@ class OllamaClient:
             # they emit a visible answer.  The explicit request is harmless
             # for ordinary models and can be opt-in overridden by the operator.
             "think": OLLAMA_THINKING_ENABLED,
+            "options": {"num_predict": OLLAMA_NUM_PREDICT},
         }
         if response_format is not None:
             if not isinstance(response_format, (str, dict)):
@@ -388,6 +393,11 @@ class OllamaClient:
                     finally:
                         control.cancellation.unregister(close_callback)
                 result = "".join(parts)
+            if str(item.get("done_reason") or "").strip().lower() == "length":
+                raise IncompleteGenerationError(
+                    "Ollama stopped at the configured output-token limit; "
+                    "the incomplete response was rejected."
+                )
         except Exception as exc:
             self._set_request_state(
                 model,
@@ -429,7 +439,10 @@ class OllamaClient:
             "messages": messages,
             "stream": True,
             "think": OLLAMA_THINKING_ENABLED,
+            "options": {"num_predict": OLLAMA_NUM_PREDICT},
         }
+        final_item = {}
+        done_reason = ""
 
         try:
             self._set_request_state(model, request_id, STATE_INFERENCE_ACTIVE)
@@ -454,6 +467,7 @@ class OllamaClient:
                     if not raw_line:
                         continue
                     item = json.loads(raw_line.decode("utf-8"))
+                    final_item = item
                     chunk = item.get("message", {}).get("content", "")
                     if chunk:
                         on_token(chunk)
@@ -474,6 +488,12 @@ class OllamaClient:
                         break
                 if control is not None:
                     control.cancellation.unregister(close_callback)
+                done_reason = str(final_item.get("done_reason") or "").strip().lower()
+                if done_reason == "length":
+                    raise IncompleteGenerationError(
+                        "Ollama stopped at the configured output-token limit; "
+                        "the incomplete response was rejected."
+                    )
         except Exception as exc:
             self._set_request_state(
                 model,
@@ -490,3 +510,8 @@ class OllamaClient:
                 STATE_IDLE,
                 observe_pid=True,
             )
+            return {
+                "done_reason": done_reason,
+                "prompt_eval_count": final_item.get("prompt_eval_count"),
+                "eval_count": final_item.get("eval_count"),
+            }

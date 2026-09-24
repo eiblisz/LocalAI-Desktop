@@ -49,6 +49,7 @@ def test_chat_once_forwards_explicit_native_response_format(monkeypatch):
         "messages": [{"role": "user", "content": "test"}],
         "stream": False,
         "think": False,
+        "options": {"num_predict": 1024},
         "format": schema,
     }
     assert captured["timeout"] == 600.0
@@ -70,6 +71,7 @@ def test_chat_once_omits_format_when_not_explicitly_selected(monkeypatch):
 
     assert "format" not in captured["json"]
     assert captured["json"]["think"] is False
+    assert captured["json"]["options"]["num_predict"] == 1024
 
 
 def test_chat_request_allows_explicit_operator_thinking_opt_in(monkeypatch):
@@ -462,3 +464,91 @@ def test_controlled_chat_once_closes_active_response_on_cancel(monkeypatch):
 
     assert response.closed is True
     assert "should-not-continue" not in result
+
+
+def test_chat_stream_uses_normal_output_budget_and_returns_completion_metadata(
+    monkeypatch,
+):
+    import json
+
+    captured = {}
+
+    class StreamResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def close(self):
+            return None
+
+        def raise_for_status(self):
+            return None
+
+        def iter_lines(self):
+            yield json.dumps({
+                "message": {"content": "Kék Sárkány 7319"},
+                "done": True,
+                "done_reason": "stop",
+                "eval_count": 12,
+            }).encode("utf-8")
+
+    def fake_post(_url, **kwargs):
+        captured.update(kwargs)
+        return StreamResponse()
+
+    monkeypatch.setattr("app.ollama_client.requests.post", fake_post)
+    tokens = []
+    metadata = OllamaClient().chat_stream(
+        model="qwen-test",
+        messages=[{"role": "user", "content": "Recall the codename"}],
+        on_token=tokens.append,
+        should_stop=lambda: False,
+    )
+
+    assert captured["json"]["options"]["num_predict"] == 1024
+    assert "stop" not in captured["json"]
+    assert tokens == ["Kék Sárkány 7319"]
+    assert metadata["done_reason"] == "stop"
+    assert metadata["eval_count"] == 12
+
+
+def test_chat_stream_rejects_length_truncated_response(monkeypatch):
+    import json
+
+    from app.ollama_client import IncompleteGenerationError
+
+    class StreamResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def close(self):
+            return None
+
+        def raise_for_status(self):
+            return None
+
+        def iter_lines(self):
+            yield json.dumps({
+                "message": {"content": "Megértettem. Jegyzem a tesztprojekt k"},
+                "done": True,
+                "done_reason": "length",
+                "eval_count": 10,
+            }).encode("utf-8")
+
+    monkeypatch.setattr(
+        "app.ollama_client.requests.post",
+        lambda *_args, **_kwargs: StreamResponse(),
+    )
+
+    with pytest.raises(IncompleteGenerationError):
+        OllamaClient().chat_stream(
+            model="qwen-test",
+            messages=[{"role": "user", "content": "Remember the codename"}],
+            on_token=lambda _token: None,
+            should_stop=lambda: False,
+        )

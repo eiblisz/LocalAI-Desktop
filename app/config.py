@@ -16,6 +16,10 @@ OLLAMA_THINKING_ENABLED = os.environ.get("LOCALAI_OLLAMA_THINK", "").strip().low
     "yes",
     "on",
 }
+OLLAMA_NUM_PREDICT = max(
+    256,
+    int(os.environ.get("LOCALAI_OLLAMA_NUM_PREDICT", "1024") or 1024),
+)
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 RUNTIME_DIR = runtime_root()

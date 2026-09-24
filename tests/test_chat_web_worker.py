@@ -1175,6 +1175,61 @@ def test_adaptive_chat_worker_keeps_confident_local_answer_without_web(monkeypat
     assert worker.used_web_fallback is False
 
 
+def test_conversation_local_worker_preserves_complete_raw_and_final_response():
+    complete = (
+        "Megértettem. A tesztprojekt kódneve Kék Sárkány 7319, "
+        "és később vissza tudom idézni ebben a beszélgetésben."
+    )
+
+    class LocalClient:
+        def chat_once(self, model, messages, timeout=600.0):
+            return complete
+
+    tokens = []
+    worker = workers.AdaptiveChatWorker(
+        LocalClient(),
+        "qwen-test",
+        [{"role": "user", "content": "Project codename is Kék Sárkány 7319."}],
+        "Project codename is Kék Sárkány 7319.",
+        allow_web_fallback=False,
+    )
+    worker.token.connect(tokens.append)
+    worker.run()
+
+    assert tokens == [complete]
+    assert worker.raw_model_output == complete
+    assert worker.final_output == complete
+    pipeline = worker.diagnostic_metadata["response_pipeline"]
+    assert pipeline["raw_final_equal"] is True
+    assert pipeline["raw_chars"] == pipeline["final_chars"] == len(complete)
+
+
+def test_same_window_recall_worker_can_return_complete_codename():
+    complete = "A tesztprojekt kódneve Kék Sárkány 7319."
+
+    class LocalClient:
+        def chat_once(self, model, messages, timeout=600.0):
+            assert "Kék Sárkány 7319" in str(messages)
+            return complete
+
+    tokens = []
+    worker = workers.AdaptiveChatWorker(
+        LocalClient(),
+        "gemma-test",
+        [
+            {"role": "user", "content": "A kódnév Kék Sárkány 7319."},
+            {"role": "user", "content": "Mi a projekt kódneve?"},
+        ],
+        "Mi a projekt kódneve?",
+        allow_web_fallback=False,
+    )
+    worker.token.connect(tokens.append)
+    worker.run()
+
+    assert tokens == [complete]
+    assert worker.final_output.endswith("7319.")
+
+
 def test_web_worker_replaces_stale_secondary_release_with_first_party_current_fact(monkeypatch):
     class WrongReleaseClient(DummyWebClient):
         def chat_stream(

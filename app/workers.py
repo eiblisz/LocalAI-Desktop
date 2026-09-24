@@ -1,3 +1,4 @@
+import hashlib
 import re
 import threading
 import unicodedata
@@ -1982,6 +1983,10 @@ class AdaptiveChatWorker(QObject):
         self._stop_event = threading.Event()
         self.execution_control = ExecutionControl()
         self.used_web_fallback = False
+        self.raw_model_output = ""
+        self.final_output = ""
+        self.generation_metadata = {}
+        self.diagnostic_metadata = {}
 
     @Slot()
     def run(self):
@@ -1996,7 +2001,7 @@ class AdaptiveChatWorker(QObject):
 
             if isinstance(self.client, OllamaClient):
                 draft_parts = []
-                self.client.chat_stream(
+                metadata = self.client.chat_stream(
                     model=self.model,
                     messages=self.messages,
                     on_token=draft_parts.append,
@@ -2004,11 +2009,14 @@ class AdaptiveChatWorker(QObject):
                     control=self.execution_control,
                 )
                 draft = "".join(draft_parts).strip()
+                self.generation_metadata = dict(metadata or {})
             else:
                 draft = self.client.chat_once(
                     model=self.model,
                     messages=self.messages,
                 ).strip()
+                self.generation_metadata = {}
+            self.raw_model_output = draft
 
             if self.trace is not None:
                 self.trace.end("model_inference")
@@ -2075,6 +2083,23 @@ class AdaptiveChatWorker(QObject):
             if self._stop_event.is_set():
                 self.finished.emit()
                 return
+
+            self.final_output = final
+            self.diagnostic_metadata = {
+                "response_pipeline": {
+                    "raw_chars": len(self.raw_model_output),
+                    "final_chars": len(self.final_output),
+                    "raw_final_equal": self.raw_model_output == self.final_output,
+                    "raw_sha256": hashlib.sha256(
+                        self.raw_model_output.encode("utf-8")
+                    ).hexdigest()[:16],
+                    "final_sha256": hashlib.sha256(
+                        self.final_output.encode("utf-8")
+                    ).hexdigest()[:16],
+                    "done_reason": self.generation_metadata.get("done_reason", ""),
+                    "eval_count": self.generation_metadata.get("eval_count"),
+                }
+            }
 
             if self.trace is not None:
                 self.trace.end("post_processing")
