@@ -442,6 +442,42 @@ def test_remote_current_conversation_query_excludes_long_term_memory(tmp_path: P
     assert "preferred_test_color" not in system
 
 
+def test_remote_current_window_recall_skips_model_and_keeps_exact_value(tmp_path: Path):
+    class FailingOllama:
+        def chat_once(self, *_args, **_kwargs):
+            raise AssertionError("model must not run for an unambiguous local recall")
+
+    bridge = DiscordBotBridge(
+        ollama_client=FailingOllama(),
+        chat_store=ChatStore(tmp_path / "chats"),
+        settings=DiscordBotSettings(
+            extension_id="ext-direct-current-window",
+            name="Prometheusz",
+            guild_id=111111111111111111,
+            channel_id=222222222222222222,
+            allowed_user_id=333333333333333333,
+            model="gemma4:26b",
+        ),
+        token="T" * 40,
+    )
+    chat = bridge._load_remote_chat()
+    chat["messages"].append({
+        "role": "user",
+        "content": "A tesztprojekt kódneve Kék Sárkány 7319.",
+    })
+    bridge.chat_store.save(chat)
+
+    answer, chat_id = bridge._answer_prompt(
+        "Mi a tesztprojekt kódneve ebben a beszélgetésben?",
+        conversation_local=True,
+        allow_web_fallback=False,
+    )
+
+    persisted = bridge.chat_store.load(chat_id)
+    assert answer == "Kék Sárkány 7319."
+    assert persisted["messages"][-1]["diagnostic"]["direct_memory_fast_path"] is True
+
+
 def test_compound_prometheusz_identity_and_memory_question_is_deterministic(tmp_path: Path):
     class FailingOllama:
         def chat_once(self, model, messages):

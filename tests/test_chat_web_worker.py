@@ -1,6 +1,33 @@
 from app import workers
 
 
+def test_native_ollama_timing_separates_load_prompt_generation_and_queue():
+    from app.request_trace import RequestTrace
+
+    trace = RequestTrace("test")
+    workers._record_ollama_timing(
+        trace,
+        {
+            "load_duration": 10_000_000,
+            "prompt_eval_duration": 20_000_000,
+            "eval_duration": 30_000_000,
+            "total_duration": 70_000_000,
+            "prompt_eval_count": 120,
+            "eval_count": 12,
+        },
+        100.0,
+    )
+
+    snapshot = trace.snapshot()
+    assert snapshot["phases_ms"] == {
+        "ollama_load": 10.0,
+        "ollama_prompt_evaluation": 20.0,
+        "ollama_generation": 30.0,
+        "ollama_queue_or_transport": 30.0,
+    }
+    assert snapshot["metadata"]["ollama_prompt_eval_count"] == 120
+
+
 class DummyWebClient:
     def __init__(self):
         self.once_calls = []

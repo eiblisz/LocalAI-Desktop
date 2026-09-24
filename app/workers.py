@@ -79,6 +79,36 @@ from .web_search_tool import (
 )
 
 
+def _record_ollama_timing(trace, metadata, wall_ms):
+    """Attach optional native Ollama timing without assuming a specific model."""
+    if trace is None or not isinstance(metadata, dict):
+        return
+
+    def milliseconds(name):
+        try:
+            return max(0.0, float(metadata.get(name) or 0.0) / 1_000_000.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    load_ms = milliseconds("load_duration")
+    prompt_ms = milliseconds("prompt_eval_duration")
+    generation_ms = milliseconds("eval_duration")
+    total_ms = milliseconds("total_duration")
+    native_runtime_ms = total_ms or (load_ms + prompt_ms + generation_ms)
+    trace.mark_duration("ollama_load", load_ms)
+    trace.mark_duration("ollama_prompt_evaluation", prompt_ms)
+    trace.mark_duration("ollama_generation", generation_ms)
+    trace.mark_duration(
+        "ollama_queue_or_transport",
+        max(0.0, float(wall_ms or 0.0) - native_runtime_ms),
+    )
+    trace.add_metadata(
+        ollama_native_total_ms=round(total_ms, 2),
+        ollama_prompt_eval_count=metadata.get("prompt_eval_count"),
+        ollama_generated_count=metadata.get("eval_count"),
+    )
+
+
 class ChatWorker(QObject):
     token = Signal(str)
     finished = Signal()
@@ -1998,6 +2028,7 @@ class AdaptiveChatWorker(QObject):
             if self.trace is not None:
                 self.trace.begin("model_inference")
             self.phase.emit(f"{self.model} válaszol")
+            model_started = perf_counter()
 
             if isinstance(self.client, OllamaClient):
                 draft_parts = []
@@ -2020,6 +2051,11 @@ class AdaptiveChatWorker(QObject):
 
             if self.trace is not None:
                 self.trace.end("model_inference")
+                _record_ollama_timing(
+                    self.trace,
+                    self.generation_metadata,
+                    (perf_counter() - model_started) * 1000.0,
+                )
                 self.trace.begin("post_processing")
 
             if (
@@ -2097,6 +2133,7 @@ class AdaptiveChatWorker(QObject):
                         self.final_output.encode("utf-8")
                     ).hexdigest()[:16],
                     "done_reason": self.generation_metadata.get("done_reason", ""),
+                    "prompt_eval_count": self.generation_metadata.get("prompt_eval_count"),
                     "eval_count": self.generation_metadata.get("eval_count"),
                 }
             }
