@@ -57,6 +57,17 @@ def test_explicit_korean_request_allows_hangul_script():
     ) == ()
 
 
+def test_quoted_unicode_name_and_source_metadata_are_tolerated():
+    prompt = "Válaszolj magyarul."
+    constraints = build_task_constraints(prompt)
+
+    assert unexpected_script_issues(
+        prompt,
+        'A cikk a „서울경제” nevet használja.\nForrás: 서울경제',
+        constraints=constraints,
+    ) == ()
+
+
 def test_guard_repairs_once_and_preserves_required_factual_literals_in_instruction():
     prompt = "Válaszolj magyarul: a modell ára 42 EUR, forrás https://example.test."
     constraints = build_task_constraints(prompt)
@@ -74,9 +85,44 @@ def test_guard_repairs_once_and_preserves_required_factual_literals_in_instructi
 
     assert result == "A modell ára 42 EUR, forrás: https://example.test."
     assert len(client.calls) == 1
+
+
+def test_guard_rejects_repair_that_changes_grounded_literals():
+    prompt = "Válaszolj magyarul."
+    constraints = build_task_constraints(prompt)
+    client = RepairClient("Az ár 43 EUR. Forrás: https://other.test.")
+
+    with pytest.raises(ResponseValidationError, match="factual_literal_changed"):
+        guard_response(
+            client,
+            "qwen-test",
+            prompt,
+            "The price is 42 EUR. Source: https://example.test.",
+            constraints=constraints,
+        )
+
+    assert len(client.calls) == 1
     system = client.calls[0][1][0]["content"]
     assert "Preserve every URL, number" in system
     assert "Do not add new facts" in system
+
+
+def test_guard_allows_locale_only_number_formatting_changes():
+    prompt = "Válaszolj magyarul."
+    constraints = build_task_constraints(prompt)
+    client = RepairClient(
+        "A növekedés 3,1% volt, az érték pedig 1 000 EUR."
+    )
+
+    result = guard_response(
+        client,
+        "qwen-test",
+        prompt,
+        "The growth was 3.1%, and the value was 1,000 EUR.",
+        constraints=constraints,
+    )
+
+    assert result == "A növekedés 3,1% volt, az érték pedig 1 000 EUR."
 
 
 def test_guard_fails_closed_after_one_bad_repair():

@@ -2,8 +2,10 @@ import re
 from dataclasses import dataclass
 
 from .language_policy import (
-    detect_user_language,
+    effective_response_language,
+    repair_preserves_factual_literals,
     response_language_matches,
+    response_validation_text,
 )
 from .task_constraints import TaskConstraints
 
@@ -45,7 +47,7 @@ def _expected_language(user_text, constraints=None):
         language = str(constraints.response_language or "").strip().lower()
         if language in {"hu", "de", "en"}:
             return language
-    return detect_user_language(user_text)
+    return effective_response_language(user_text)
 
 
 def _script_change_explicitly_requested(user_text):
@@ -60,7 +62,7 @@ def unexpected_script_issues(user_text, response_text, constraints=None):
     if _script_change_explicitly_requested(user_text):
         return ()
 
-    text = str(response_text or "")
+    text = response_validation_text(response_text)
     issues = []
     if _HANGUL_RE.search(text):
         issues.append("unexpected_hangul")
@@ -185,6 +187,14 @@ def guard_response(
         repaired,
         constraints=constraints,
     )
+    if not repair_preserves_factual_literals(draft, repaired):
+        repaired_validation = ResponseValidation(
+            valid=False,
+            expected_language=repaired_validation.expected_language,
+            issues=tuple(dict.fromkeys(
+                repaired_validation.issues + ("factual_literal_changed",)
+            )),
+        )
     if repaired and repaired_validation.valid:
         return repaired
 
