@@ -368,6 +368,7 @@ class OllamaClient:
                 result = item.get("message", {}).get("content", "")
             else:
                 parts = []
+                item = {}
                 with requests.post(
                     f"{self.base_url}/api/chat",
                     json=payload,
@@ -393,6 +394,11 @@ class OllamaClient:
                     finally:
                         control.cancellation.unregister(close_callback)
                 result = "".join(parts)
+                if not control.cancellation.is_cancelled() and not item.get("done"):
+                    raise IncompleteGenerationError(
+                        "Ollama ended the response stream without a completion marker; "
+                        "the incomplete response was rejected."
+                    )
             if str(item.get("done_reason") or "").strip().lower() == "length":
                 raise IncompleteGenerationError(
                     "Ollama stopped at the configured output-token limit; "
@@ -443,6 +449,7 @@ class OllamaClient:
         }
         final_item = {}
         done_reason = ""
+        stopped = False
 
         try:
             self._set_request_state(model, request_id, STATE_INFERENCE_ACTIVE)
@@ -463,6 +470,7 @@ class OllamaClient:
                     if control is not None:
                         control.check()
                     if should_stop():
+                        stopped = True
                         break
                     if not raw_line:
                         continue
@@ -489,7 +497,12 @@ class OllamaClient:
                 if control is not None:
                     control.cancellation.unregister(close_callback)
                 done_reason = str(final_item.get("done_reason") or "").strip().lower()
-                if done_reason == "length":
+                if not stopped and not final_item.get("done"):
+                    raise IncompleteGenerationError(
+                        "Ollama ended the response stream without a completion marker; "
+                        "the incomplete response was rejected."
+                    )
+                if not stopped and done_reason == "length":
                     raise IncompleteGenerationError(
                         "Ollama stopped at the configured output-token limit; "
                         "the incomplete response was rejected."

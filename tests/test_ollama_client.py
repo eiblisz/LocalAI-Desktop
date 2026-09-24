@@ -552,3 +552,41 @@ def test_chat_stream_rejects_length_truncated_response(monkeypatch):
             on_token=lambda _token: None,
             should_stop=lambda: False,
         )
+
+
+def test_chat_stream_rejects_response_without_terminal_completion(monkeypatch):
+    import json
+
+    from app.ollama_client import IncompleteGenerationError
+
+    class StreamResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def close(self):
+            return None
+
+        def raise_for_status(self):
+            return None
+
+        def iter_lines(self):
+            yield json.dumps({
+                "message": {"content": "A tesztprojekt kódneve"},
+                "done": False,
+            }).encode("utf-8")
+
+    monkeypatch.setattr(
+        "app.ollama_client.requests.post",
+        lambda *_args, **_kwargs: StreamResponse(),
+    )
+
+    with pytest.raises(IncompleteGenerationError):
+        OllamaClient().chat_stream(
+            model="qwen-test",
+            messages=[{"role": "user", "content": "Recall the codename"}],
+            on_token=lambda _token: None,
+            should_stop=lambda: False,
+        )
