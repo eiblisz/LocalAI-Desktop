@@ -453,8 +453,9 @@ def test_sentence_audit_combines_overlapping_exact_spans_before_repair():
     assert trace.snapshot()["metadata"]["language_repair_span_count"] == 1
 
 
-def test_sentence_audit_rejects_a_response_that_omits_a_sentence_judgment():
+def test_sentence_audit_omission_degrades_without_discarding_complete_answer():
     prompt = "Válaszolj magyarul."
+    draft = "Az első mondat rendben van. A második is rendben van."
 
     class IncompleteAuditClient:
         supports_hungarian_fluency_audit = True
@@ -463,13 +464,19 @@ def test_sentence_audit_rejects_a_response_that_omits_a_sentence_judgment():
             assert len(_audit_segments(messages)) == 2
             return json.dumps({"judgments": [[0, "pass"]]})
 
-    with pytest.raises(FluencyAuditFailed, match="must judge every response sentence"):
-        guard_response(
-            IncompleteAuditClient(),
-            "gemma4:26b",
-            prompt,
-            "Az első mondat rendben van. A második is rendben van.",
-        )
+    trace = RequestTrace("desktop")
+    result = guard_response(
+        IncompleteAuditClient(),
+        "gemma4:26b",
+        prompt,
+        draft,
+        trace=trace,
+    )
+
+    assert result == draft
+    snapshot = trace.snapshot()
+    assert snapshot["metadata"]["hungarian_fluency_audit_result"] == "degraded"
+    assert "must judge every response sentence" in snapshot["metadata"]["fluency_audit_failure_reason"]
 
 
 def test_clean_long_hungarian_answer_passes_without_editorial_repair():
