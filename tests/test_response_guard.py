@@ -11,12 +11,16 @@ from app.task_constraints import build_task_constraints
 
 
 class RepairClient:
+    supports_hungarian_fluency_audit = True
+
     def __init__(self, repaired):
         self.repaired = repaired
         self.calls = []
 
     def chat_once(self, model, messages, timeout=600.0):
         self.calls.append((model, messages))
+        if "Hungarian fluency classifier" in messages[0]["content"]:
+            return '{"status":"pass","findings":[]}'
         return self.repaired
 
 
@@ -32,19 +36,21 @@ def test_hungarian_response_rejects_accidental_hangul_leakage():
 
     assert result.valid is False
     assert "unexpected_hangul" in result.issues
+    assert result.evidence == ("잘못",)
 
 
 def test_hungarian_response_rejects_accidental_cjk_leakage():
     prompt = "Válaszolj magyarul."
     constraints = build_task_constraints(prompt)
 
-    issues = unexpected_script_issues(
+    result = validate_response(
         prompt,
         "Ez magyar szöveg 日本 véletlen beszúrással.",
         constraints=constraints,
     )
 
-    assert "unexpected_cjk" in issues
+    assert "unexpected_cjk" in result.issues
+    assert result.evidence == ("日本",)
 
 
 def test_explicit_korean_request_allows_hangul_script():
@@ -85,7 +91,7 @@ def test_guard_repairs_once_and_preserves_required_factual_literals_in_instructi
     )
 
     assert result == "A modell ára 42 EUR. Forrás: https://example.test."
-    assert len(client.calls) == 1
+    assert len(client.calls) == 2
 
 
 def test_guard_rejects_span_repair_that_changes_grounded_literals():
@@ -106,8 +112,8 @@ def test_guard_rejects_span_repair_that_changes_grounded_literals():
     assert metadata["ollama_failure_classification"] == "integrity_failed"
     assert metadata["ollama_call_phase"] == "repair_integrity_validation"
 
-    assert len(client.calls) == 1
-    system = client.calls[0][1][0]["content"]
+    assert len(client.calls) == 2
+    system = client.calls[1][1][0]["content"]
     assert "Preserve every number" in system
     assert "strict JSON" in system
 
@@ -126,7 +132,7 @@ def test_guard_rejects_span_repair_that_changes_a_proper_name():
             constraints=constraints,
         )
 
-    assert len(client.calls) == 1
+    assert len(client.calls) == 2
 
 
 def test_clean_response_keeps_outer_whitespace_unchanged():
@@ -142,7 +148,7 @@ def test_clean_response_keeps_outer_whitespace_unchanged():
         draft,
         constraints=constraints,
     ) == draft
-    assert client.calls == []
+    assert len(client.calls) == 1
 
 
 def test_guard_allows_locale_only_number_formatting_changes():
@@ -177,4 +183,4 @@ def test_guard_fails_closed_after_one_bad_repair():
             constraints=constraints,
         )
 
-    assert len(client.calls) == 1
+    assert len(client.calls) == 2

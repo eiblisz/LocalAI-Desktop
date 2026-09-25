@@ -57,6 +57,15 @@ def public_error(message, *, language="hu"):
                 "I could not safely repair a language issue in the response. Please try again."
             ),
         )
+    if "fluency_audit_failed" in lowered:
+        return PublicError(
+            "fluency_audit_failed",
+            (
+                "A válasz magyar nyelvi ellenőrzése most nem adott biztonságos eredményt. Próbáld meg újra."
+                if hungarian else
+                "The Hungarian fluency check did not return a safe result. Please try again."
+            ),
+        )
     if "repair_integrity_failed" in lowered:
         return PublicError(
             "repair_integrity_failed",

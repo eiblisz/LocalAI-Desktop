@@ -112,6 +112,9 @@ def _request_failure_details(exc):
 
 
 class OllamaClient:
+    # The shared response guard may use strict JSON for a bounded fluency audit.
+    supports_hungarian_fluency_audit = True
+
     def __init__(
         self,
         base_url: str = OLLAMA_BASE_URL,

@@ -60,7 +60,7 @@ def test_direct_fact_profile_gets_a_narrow_request_scoped_budget():
     )
 
     assert control.budget.timeout_seconds == 45
-    assert control.budget.max_model_calls == 2
+    assert control.budget.max_model_calls == 3
     assert control.claim_search() == 1
     assert control.claim_page_fetch() == 1
     assert control.claim_repair() == 1

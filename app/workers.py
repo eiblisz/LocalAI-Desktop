@@ -121,6 +121,8 @@ def _record_ollama_failure(trace, exc):
         call_phase = metadata.get("ollama_call_phase")
         if call_phase == "primary_generation":
             trace.end("primary_generation", primary_generation_result="failed")
+        elif call_phase == "hungarian_fluency_audit":
+            trace.end("hungarian_fluency_audit", hungarian_fluency_audit_result="failed")
         elif call_phase == "language_repair":
             trace.end("language_repair", language_repair_result="failed")
 
