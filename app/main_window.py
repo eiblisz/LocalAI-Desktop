@@ -2273,6 +2273,7 @@ class MainWindow(QMainWindow):
             ("Fluency audit failure", metadata.get("fluency_audit_failure_reason")),
             ("Fluency sentences audited", metadata.get("fluency_sentences_audited")),
             ("Fluency sentences failed", metadata.get("fluency_sentences_failed")),
+            ("Fluency sentences unresolved", metadata.get("fluency_sentences_unresolved")),
             ("Fluency reason codes", metadata.get("fluency_reason_codes")),
             ("Language repair result", metadata.get("language_repair_result")),
             ("Repair span count", metadata.get("language_repair_span_count")),
