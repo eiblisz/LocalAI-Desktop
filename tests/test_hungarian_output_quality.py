@@ -4,6 +4,7 @@ import inspect
 import pytest
 
 from app.language_policy import (
+    hungarian_output_quality_evidence,
     hungarian_output_quality_issues,
     repair_preserves_response_shape,
 )
@@ -36,14 +37,22 @@ class SingleGenerationClient:
 
 def test_hungarian_quality_flags_generic_foreign_and_unicode_corruption():
     answer = (
-        "A mesterséges intelligencia több módszert használ. "
-        "A szöveg loosely inspirált példát ad, majd \ufffd hibás karaktert tartalmaz."
+        "A mesters\u00e9ges intelligencia t\u00f6bb m\u00f3dszert haszn\u00e1l. "
+        "A sz\u00f6veg loosely inspired p\u00e9ld\u00e1t ad, majd \ufffd hib\u00e1s karaktert tartalmaz."
     )
 
     issues = hungarian_output_quality_issues(answer)
 
     assert "foreign_language_fragment" in issues
     assert "corrupted_unicode" in issues
+
+
+def test_hungarian_quality_reports_only_bounded_foreign_fragment_evidence():
+    evidence = hungarian_output_quality_evidence(
+        "A rendszer called inference l\u00e9p\u00e9st hajtott v\u00e9gre."
+    )
+
+    assert evidence["foreign_language_fragment"] == ("called inference",)
 
 
 def test_legitimate_technical_terms_are_not_treated_as_foreign_fragments():
@@ -53,6 +62,26 @@ def test_legitimate_technical_terms_are_not_treated_as_foreign_fragments():
     )
 
     assert "foreign_language_fragment" not in hungarian_output_quality_issues(answer)
+
+
+@pytest.mark.parametrize("term", [
+    "A g\u00e9pi tanul\u00e1s (machine learning) mint\u00e1kat elemez.",
+    "A deep learning t\u00f6bb r\u00e9tegben dolgozhat.",
+    "Az embedding vektoros reprezent\u00e1ci\u00f3t k\u00e9sz\u00edt.",
+    "A Large Language Models (LLM) sz\u00f6veget dolgoznak fel.",
+    "A context window, training, inference, tool use, GPU \u00e9s Python fontos fogalmak.",
+])
+def test_isolated_english_technical_terminology_is_not_a_foreign_fragment(term):
+    assert "foreign_language_fragment" not in hungarian_output_quality_issues(term)
+
+
+@pytest.mark.parametrize("answer", [
+    "A sz\u00f6veg loosely inspired r\u00e9sszel folytat\u00f3dik.",
+    "A folyamat called inference l\u00e9p\u00e9st is haszn\u00e1l.",
+    "While black holes are difficult to study, this is an English sentence.",
+])
+def test_contextual_english_prose_is_still_flagged(answer):
+    assert "foreign_language_fragment" in hungarian_output_quality_issues(answer)
 
 
 def test_clean_long_hungarian_answer_passes_without_editorial_repair():
@@ -81,6 +110,29 @@ def test_clean_long_hungarian_answer_passes_without_editorial_repair():
     assert validation.valid is True
     assert result == draft
     assert len(client.calls) == 0
+
+
+def test_clean_long_hungarian_ai_answer_with_technical_terms_needs_no_repair():
+    prompt = "\u00cdrj r\u00e9szletes magyar \u00f6sszefoglal\u00f3t a mesters\u00e9ges intelligenci\u00e1r\u00f3l."
+    constraints = build_task_constraints(prompt)
+    paragraph = (
+        "A g\u00e9pi tanul\u00e1s (machine learning), a deep learning \u00e9s az embedding "
+        "seg\u00edt a mint\u00e1k feldolgoz\u00e1s\u00e1ban. A Large Language Models (LLM) "
+        "a context window, training, inference, tool use, GPU \u00e9s Python eszk\u00f6zeit "
+        "is haszn\u00e1lhatja. "
+    )
+    draft = "\n\n".join(paragraph * 4 for _ in range(10))
+    client = EditorialRepairClient("this must not be used")
+
+    assert guard_response(
+        client,
+        "gemma4:26b",
+        prompt,
+        draft,
+        constraints=constraints,
+        output_budget=2048,
+    ) == draft
+    assert client.calls == []
 
 
 def test_desktop_clean_long_answer_uses_only_primary_generation_call():
@@ -132,7 +184,7 @@ def test_contaminated_long_hungarian_answer_gets_one_bounded_editorial_repair():
         for index in range(1, 5)
     ]
     draft = "\n\n".join(paragraphs).replace(
-        "adatmintákból", "loosely adatminta alapján", 1
+        "adatmintákból", "loosely inspired adatminta alapján", 1
     )
     class SpanRepairClient:
         def __init__(self):
@@ -147,12 +199,12 @@ def test_contaminated_long_hungarian_answer_gets_one_bounded_editorial_repair():
                 "repairs": [{
                     "id": item["id"],
                     "text": item["text"].replace(
-                        "loosely adatminta alapján", "adatmintákból"
+                        "loosely inspired adatminta alapján", "adatmintákból"
                     ),
                 } for item in payload],
             })
 
-    repaired = draft.replace("loosely adatminta alapján", "adatmintákból")
+    repaired = draft.replace("loosely inspired adatminta alapján", "adatmintákból")
     client = SpanRepairClient()
     trace = RequestTrace("desktop")
 
@@ -173,8 +225,11 @@ def test_contaminated_long_hungarian_answer_gets_one_bounded_editorial_repair():
         "BOUNDED SPANS TO REPAIR:\n", 1
     )[1])
     assert len(payload) == 1
-    assert "loosely" in payload[0]["text"]
+    assert "loosely inspired" in payload[0]["text"]
     snapshot = trace.snapshot()
+    assert json.loads(snapshot["metadata"]["language_validation_evidence"]) == [
+        "loosely inspired",
+    ]
     assert snapshot["metadata"]["language_repair_span_count"] == 1
     assert snapshot["metadata"]["language_repair_result"] == "completed"
     assert snapshot["metadata"]["repair_integrity_result"] == "pass"
@@ -189,7 +244,7 @@ def test_multiple_separated_contaminated_spans_preserve_untouched_text():
     untouched = "A harmadik bekezdés változatlan marad, benne az LLM és a GPU kifejezésekkel."
     draft = (
         "Az OpenAI modell ára 42 EUR, forrás: https://example.test. 잘못 mondat.\n\n"
-        "A második bekezdés loosely kevert nyelvű maradt.\n\n"
+        "A második bekezdés loosely inspired kevert nyelvű maradt.\n\n"
         + untouched
     )
 
@@ -207,7 +262,7 @@ def test_multiple_separated_contaminated_spans_preserve_untouched_text():
                     "id": item["id"],
                     "text": item["text"]
                     .replace("잘못", "hibás")
-                    .replace("loosely", "véletlenül"),
+                    .replace("loosely inspired", "véletlenül"),
                 }
                 for item in payload
             ]})
@@ -232,7 +287,7 @@ def test_multiple_separated_contaminated_spans_preserve_untouched_text():
 def test_bounded_repair_that_keeps_contamination_is_language_repair_failure():
     prompt = "Válaszolj magyarul."
     constraints = build_task_constraints(prompt)
-    client = EditorialRepairClient("Ez a mondat továbbra is 잘못 szöveget tartalmaz.")
+    client = EditorialRepairClient("Ez a mondat továbbra is loosely inspired szöveget tartalmaz.")
     trace = RequestTrace("desktop")
 
     with pytest.raises(LanguageRepairFailed, match="language_repair_failed") as exc:
@@ -240,7 +295,7 @@ def test_bounded_repair_that_keeps_contamination_is_language_repair_failure():
             client,
             "gemma4:26b",
             prompt,
-            "Ez a mondat 잘못 szöveget tartalmaz.",
+            "Ez a mondat loosely inspired szöveget tartalmaz.",
             constraints=constraints,
             trace=trace,
         )
@@ -251,6 +306,9 @@ def test_bounded_repair_that_keeps_contamination_is_language_repair_failure():
     snapshot = trace.snapshot()
     assert snapshot["metadata"]["language_repair_result"] == "completed"
     assert snapshot["metadata"]["repair_integrity_result"] == "failed"
+    assert json.loads(snapshot["metadata"]["repair_integrity_evidence"]) == [
+        "loosely inspired",
+    ]
 
 
 def test_discord_and_desktop_use_the_shared_span_repair_guard():

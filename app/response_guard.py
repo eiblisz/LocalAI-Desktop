@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from .language_policy import (
     effective_response_language,
-    hungarian_output_quality_issues,
+    hungarian_output_quality_evidence,
     repair_preserves_factual_literals,
     repair_preserves_response_shape,
     response_language_matches,
@@ -38,6 +38,7 @@ class ResponseValidation:
     valid: bool
     expected_language: str
     issues: tuple[str, ...] = ()
+    evidence: tuple[str, ...] = ()
 
 
 _HANGUL_RE = re.compile(r"[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]")
@@ -100,6 +101,7 @@ def validate_response(
 ):
     expected = _expected_language(user_text, constraints)
     issues = list(unexpected_script_issues(user_text, response_text, constraints))
+    evidence = []
 
     if expected in {"hu", "de", "en"} and not response_language_matches(
         user_text,
@@ -107,15 +109,24 @@ def validate_response(
     ):
         issues.append("language_mismatch")
     if expected == "hu":
-        issues.extend(
-            hungarian_output_quality_issues(response_text)
+        quality_evidence = hungarian_output_quality_evidence(response_text)
+        issues.extend(quality_evidence)
+        evidence.extend(
+            snippet
+            for snippets in quality_evidence.values()
+            for snippet in snippets
         )
 
     return ResponseValidation(
         valid=not issues,
         expected_language=expected,
         issues=tuple(dict.fromkeys(issues)),
+        evidence=tuple(dict.fromkeys(evidence)),
     )
+
+
+def _validation_evidence_json(validation):
+    return json.dumps(list(validation.evidence), ensure_ascii=False)
 
 
 def _repair_messages(user_text, spans, constraints=None):
@@ -310,6 +321,7 @@ def guard_response(
             "language_validation",
             language_validation_result=("pass" if validation.valid else "repair_required"),
             language_validation_issues=",".join(validation.issues),
+            language_validation_evidence=_validation_evidence_json(validation),
         )
     if validation.valid:
         return draft
@@ -435,12 +447,14 @@ def guard_response(
             issues=tuple(dict.fromkeys(
                 repaired_validation.issues + (integrity_issue,)
             )),
+            evidence=repaired_validation.evidence,
         )
     if trace is not None:
         trace.end(
             "repair_integrity_validation",
             repair_integrity_result=("pass" if repaired and repaired_validation.valid else "failed"),
             repair_integrity_issues=",".join(repaired_validation.issues),
+            repair_integrity_evidence=_validation_evidence_json(repaired_validation),
         )
     if integrity_issue:
         raise _tag_repair_failure(

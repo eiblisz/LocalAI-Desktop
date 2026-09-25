@@ -122,7 +122,7 @@ def test_guard_rejects_span_repair_that_changes_a_proper_name():
             client,
             "qwen-test",
             prompt,
-            "James Hetfield loosely ismert zen\u00e9sz.",
+            "James Hetfield loosely inspired ismert zen\u00e9sz.",
             constraints=constraints,
         )
 

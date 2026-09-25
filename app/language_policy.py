@@ -137,11 +137,23 @@ _HUNGARIAN_ALLOWED_TECHNICAL_TERMS = {
     "tool use",
 }
 _CORRUPTED_UNICODE_RE = re.compile(r"[\ufffd\u0000-\u0008\u000b\u000c\u000e-\u001f]")
-_FOREIGN_WORD_RE = re.compile(
-    r"\b(?:[a-z]{4,}(?:ing|edly|ness|ment|tion|sion|ously|fully|lessly|wise)|[a-z]{5,}ly|"
-    r"(?:the|and|with|from|called|source|language|because|while|where))\b",
+_ASCII_WORD_RE = re.compile(r"[A-Za-z]+(?:[-'][A-Za-z]+)?")
+_ENGLISH_ADVERB_PARTICIPLE_RE = re.compile(
+    r"\b[a-z]{5,}ly\s+[a-z]{4,}(?:ed|ing)\b",
     flags=re.IGNORECASE,
 )
+_ENGLISH_FUNCTION_WORDS = {
+    "the", "and", "or", "with", "from", "is", "are", "was", "were",
+    "be", "been", "in", "of", "to", "by", "on", "as", "this", "that",
+    "it", "one", "because", "while", "where", "when", "which", "who",
+    "called",
+}
+_ENGLISH_STRONG_GRAMMAR_WORDS = {
+    "the", "this", "that", "because", "while", "where", "when", "which",
+    "who", "called",
+}
+_QUALITY_SENTENCE_RE = re.compile(r"[^.!?\n]+(?:[.!?]+|$)", flags=re.UNICODE)
+_MAX_QUALITY_EVIDENCE = 8
 _CAPITALIZED_LITERAL_RE = re.compile(
     r"\b(?:[A-ZÁÉÍÓÖŐÚÜŰ]{2,}[A-ZÁÉÍÓÖŐÚÜŰ0-9:_./-]*|"
     r"[A-ZÁÉÍÓÖŐÚÜŰ][\w-]*[A-ZÁÉÍÓÖŐÚÜŰ][\w-]*)\b",
@@ -369,32 +381,79 @@ def repair_preserves_factual_literals(original, repaired):
     return all(actual[value] >= count for value, count in required.items())
 
 
+def _bounded_quality_evidence(value, limit=220):
+    compact = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(compact) <= limit:
+        return compact
+    return compact[:limit - 3].rstrip() + "..."
+
+
+def _foreign_language_fragments(prose):
+    """Return high-confidence, bounded English prose fragments only.
+
+    English-looking suffixes are deliberately insufficient on their own:
+    technical Hungarian prose commonly contains words such as ``embedding``
+    and ``learning``.  A fragment needs grammatical/contextual English
+    evidence, not just an ASCII morphology match.
+    """
+    findings = []
+    for sentence_match in _QUALITY_SENTENCE_RE.finditer(str(prose or "")):
+        sentence = sentence_match.group(0)
+        compact = _bounded_quality_evidence(sentence)
+        if not compact:
+            continue
+
+        for match in _ENGLISH_ADVERB_PARTICIPLE_RE.finditer(sentence):
+            findings.append(_bounded_quality_evidence(match.group(0)))
+
+        tokens = [match.group(0).casefold() for match in _ASCII_WORD_RE.finditer(sentence)]
+        function_positions = [
+            index for index, token in enumerate(tokens)
+            if token in _ENGLISH_FUNCTION_WORDS
+        ]
+        function_words = {tokens[index] for index in function_positions}
+
+        for index, token in enumerate(tokens[:-1]):
+            if token == "called":
+                findings.append("called " + tokens[index + 1])
+
+        has_sentence_grammar = (
+            len(function_positions) >= 3
+            or (
+                len(function_positions) >= 2
+                and bool(function_words & _ENGLISH_STRONG_GRAMMAR_WORDS)
+            )
+        )
+        if has_sentence_grammar:
+            findings.append(compact)
+
+    return tuple(dict.fromkeys(findings))[:_MAX_QUALITY_EVIDENCE]
+
+
+def hungarian_output_quality_evidence(text):
+    """Return issue-to-bounded-response-span evidence for Hungarian quality checks."""
+    prose = response_validation_text(text)
+    evidence = {}
+    corrupted = _CORRUPTED_UNICODE_RE.search(prose)
+    if corrupted:
+        evidence["corrupted_unicode"] = (
+            _bounded_quality_evidence(prose[max(0, corrupted.start() - 40):corrupted.end() + 40]),
+        )
+    foreign_fragments = _foreign_language_fragments(prose)
+    if foreign_fragments:
+        evidence["foreign_language_fragment"] = foreign_fragments
+    return evidence
+
+
 def hungarian_output_quality_issues(text):
     """Return generic editorial-quality issues for Hungarian prose.
 
     This deliberately avoids a list of individual misspellings.  The
-    deterministic checks catch broken Unicode and unmistakable foreign-word
-    morphology.  It intentionally does not treat length as a defect: healthy
+    deterministic checks catch broken Unicode and high-confidence foreign-prose
+    context. It intentionally does not treat length as a defect: healthy
     long Hungarian answers must not create another model call.
     """
-    prose = response_validation_text(text)
-    issues = []
-    if _CORRUPTED_UNICODE_RE.search(prose):
-        issues.append("corrupted_unicode")
-    allowed_tokens = {
-        token.casefold()
-        for term in _HUNGARIAN_ALLOWED_TECHNICAL_TERMS
-        for token in term.split()
-    }
-    foreign_words = [
-        match.group(0).casefold()
-        for match in _FOREIGN_WORD_RE.finditer(prose)
-        if match.group(0).casefold() not in allowed_tokens
-    ]
-    if foreign_words:
-        issues.append("foreign_language_fragment")
-
-    return tuple(dict.fromkeys(issues))
+    return tuple(hungarian_output_quality_evidence(text))
 
 
 def protected_response_literals(text):

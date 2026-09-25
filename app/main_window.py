@@ -2267,9 +2267,11 @@ class MainWindow(QMainWindow):
             ("Ollama call phase", metadata.get("ollama_call_phase")),
             ("Language validation result", metadata.get("language_validation_result")),
             ("Language validation issues", metadata.get("language_validation_issues")),
+            ("Language validation evidence", metadata.get("language_validation_evidence")),
             ("Language repair result", metadata.get("language_repair_result")),
             ("Repair integrity result", metadata.get("repair_integrity_result")),
             ("Repair integrity issues", metadata.get("repair_integrity_issues")),
+            ("Repair integrity evidence", metadata.get("repair_integrity_evidence")),
             (
                 "Profile",
                 diagnostic.get("request_kind")
