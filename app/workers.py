@@ -52,12 +52,12 @@ from .multi_asset_market_data import run_multi_asset_market_request
 from .language_policy import (
     detect_user_language,
     effective_response_language,
-    repair_preserves_factual_literals,
+    repair_preserves_response_shape,
     response_language_instruction,
     response_language_matches,
     response_language_repair_instruction,
 )
-from .ollama_client import OllamaClient
+from .ollama_client import OllamaClient, ollama_failure_metadata
 from .response_guard import guard_response, validate_response
 from .request_semantics import (
     TASK_DIRECT_FACT,
@@ -113,6 +113,12 @@ def _record_ollama_timing(trace, metadata, wall_ms):
         ollama_prompt_eval_count=metadata.get("prompt_eval_count"),
         ollama_generated_count=metadata.get("eval_count"),
     )
+
+
+def _record_ollama_failure(trace, exc):
+    """Preserve a classified root cause before the UI presents a safe error."""
+    if trace is not None:
+        trace.add_metadata(**ollama_failure_metadata(exc))
 
 
 class ChatWorker(QObject):
@@ -765,11 +771,15 @@ class ChatWebWorker(QObject):
         if self.trace is not None:
             self.trace.end("language_repair")
 
-        repaired_validation = validate_response(language_source, repaired)
+        repaired_validation = validate_response(
+            language_source,
+            repaired,
+            editorial_reviewed=True,
+        )
         if (
             repaired
             and repaired_validation.valid
-            and repair_preserves_factual_literals(answer, repaired)
+            and repair_preserves_response_shape(answer, repaired)
         ):
             return repaired
 
@@ -2082,6 +2092,7 @@ class ChatWebWorker(QObject):
             self.token.emit(answer)
             self.finished.emit()
         except Exception as exc:
+            _record_ollama_failure(self.trace, exc)
             self.failed.emit(str(exc))
 
     def stop(self):
@@ -2318,6 +2329,8 @@ class AdaptiveChatWorker(QObject):
 
             if self.constraints is not None:
                 self.phase.emit("Ellenőrzés")
+                if self.trace is not None:
+                    self.trace.begin("language_validation")
                 final = guard_response(
                     self.client,
                     self.model,
@@ -2327,6 +2340,8 @@ class AdaptiveChatWorker(QObject):
                     control=self.execution_control,
                     output_budget=self.output_budget,
                 )
+                if self.trace is not None:
+                    self.trace.end("language_validation")
                 final = guard_context_response(
                     self.client,
                     self.model,
@@ -2369,6 +2384,7 @@ class AdaptiveChatWorker(QObject):
                 self.token.emit(final)
             self.finished.emit()
         except Exception as exc:
+            _record_ollama_failure(self.trace, exc)
             self.failed.emit(str(exc))
 
     def stop(self):

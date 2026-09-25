@@ -3,7 +3,9 @@ from dataclasses import dataclass
 
 from .language_policy import (
     effective_response_language,
+    hungarian_output_quality_issues,
     repair_preserves_factual_literals,
+    repair_preserves_response_shape,
     response_language_matches,
     response_validation_text,
 )
@@ -71,7 +73,13 @@ def unexpected_script_issues(user_text, response_text, constraints=None):
     return tuple(issues)
 
 
-def validate_response(user_text, response_text, constraints=None):
+def validate_response(
+    user_text,
+    response_text,
+    constraints=None,
+    *,
+    editorial_reviewed=False,
+):
     expected = _expected_language(user_text, constraints)
     issues = list(unexpected_script_issues(user_text, response_text, constraints))
 
@@ -80,6 +88,13 @@ def validate_response(user_text, response_text, constraints=None):
         response_text,
     ):
         issues.append("language_mismatch")
+    if expected == "hu":
+        issues.extend(
+            hungarian_output_quality_issues(
+                response_text,
+                editorial_reviewed=editorial_reviewed,
+            )
+        )
 
     return ResponseValidation(
         valid=not issues,
@@ -106,7 +121,10 @@ def _repair_messages(user_text, response_text, validation, constraints=None):
         f"Write the entire final answer in {_language_name(validation.expected_language)}. "
         "Remove accidental foreign-script leakage that is not required by the user. "
         "Preserve every URL, number, date, currency value, product/model name, proper name, "
-        "and factual claim exactly. Preserve the original structure when possible. "
+        "and factual claim exactly. Preserve the original paragraph structure and approximately "
+        "the same length. Keep legitimate English technical terms such as LLM, token, context "
+        "window, training, inference, tool use, GPU and Python. Correct only accidental foreign "
+        "fragments, corrupted Unicode and malformed hybrid words. "
         "Do not add new facts, examples, recommendations, or explanations. "
         "Return only the repaired answer."
     )
@@ -187,13 +205,19 @@ def guard_response(
         user_text,
         repaired,
         constraints=constraints,
+        editorial_reviewed=True,
     )
+    integrity_issue = ""
     if not repair_preserves_factual_literals(draft, repaired):
+        integrity_issue = "factual_literal_changed"
+    elif not repair_preserves_response_shape(draft, repaired):
+        integrity_issue = "response_shape_or_literal_changed"
+    if integrity_issue:
         repaired_validation = ResponseValidation(
             valid=False,
             expected_language=repaired_validation.expected_language,
             issues=tuple(dict.fromkeys(
-                repaired_validation.issues + ("factual_literal_changed",)
+                repaired_validation.issues + (integrity_issue,)
             )),
         )
     if repaired and repaired_validation.valid:

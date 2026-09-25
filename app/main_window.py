@@ -101,6 +101,7 @@ from .resource_monitor import format_resource_summary, get_system_metrics
 from .scheduler_dialog import SchedulerDialog
 from .sidebar_controller import SidebarController
 from .request_trace import RequestTrace
+from .ollama_client import ollama_failure_metadata
 from .user_error_messages import public_error
 from .task_constraints import task_constraints_instruction
 from .scheduler_runtime import SchedulerRuntime
@@ -2020,11 +2021,18 @@ class MainWindow(QMainWindow):
         full_message = " ".join(str(message or "").split())
         public = public_error(full_message)
         if self.pending_request_trace is not None:
+            existing_trace_metadata = dict(
+                self.pending_request_trace.snapshot().get("metadata") or {}
+            )
             self.pending_request_trace.add_metadata(
                 child_status="failed",
                 failure_code=public.code,
                 diagnostic_failure=full_message[:1000],
             )
+            if not existing_trace_metadata.get("ollama_failure_stage"):
+                self.pending_request_trace.add_metadata(
+                    **ollama_failure_metadata(message),
+                )
             self.pending_request_trace.emit_if_enabled()
         diagnostic = (
             self.pending_request_trace.snapshot()
@@ -2251,6 +2259,11 @@ class MainWindow(QMainWindow):
             ),
             ("Status", metadata.get("child_status")),
             ("Failure code", metadata.get("failure_code")),
+            ("Ollama failure stage", metadata.get("ollama_failure_stage")),
+            ("Ollama failure class", metadata.get("ollama_failure_classification")),
+            ("Ollama request sequence", metadata.get("ollama_request_sequence")),
+            ("Ollama initial request", metadata.get("ollama_initial_request")),
+            ("Ollama HTTP status", metadata.get("ollama_http_status")),
             (
                 "Profile",
                 diagnostic.get("request_kind")
@@ -2299,6 +2312,7 @@ class MainWindow(QMainWindow):
             ("Ollama prompt evaluation", phases.get("ollama_prompt_evaluation")),
             ("Ollama generation", phases.get("ollama_generation")),
             ("Language validation", phases.get("language_validation")),
+            ("Language repair", phases.get("language_repair")),
             ("Post-processing", phases.get("post_processing")),
             ("Persistence", phases.get("persistence")),
             ("UI delivery", phases.get("ui_delivery")),
@@ -2330,6 +2344,7 @@ class MainWindow(QMainWindow):
                 "Global memory", "Context assembly", "Search", "Page fetch",
                 "Inference", "Ollama queue/transport", "Ollama load",
                 "Ollama prompt evaluation", "Ollama generation", "Language validation",
+                "Language repair",
                 "Post-processing",
                 "Persistence", "UI delivery",
             }:

@@ -123,6 +123,31 @@ _FACTUAL_LITERAL_RE = re.compile(
     flags=re.IGNORECASE,
 )
 
+# These are interface-level terms rather than a typo list.  They are allowed
+# to remain English in otherwise Hungarian prose and must survive an editorial
+# repair unchanged.
+_HUNGARIAN_ALLOWED_TECHNICAL_TERMS = {
+    "LLM",
+    "GPU",
+    "Python",
+    "token",
+    "context window",
+    "training",
+    "inference",
+    "tool use",
+}
+_CORRUPTED_UNICODE_RE = re.compile(r"[\ufffd\u0000-\u0008\u000b\u000c\u000e-\u001f]")
+_FOREIGN_WORD_RE = re.compile(
+    r"\b(?:[a-z]{4,}(?:ing|edly|ness|ment|tion|sion|ously|fully|lessly|wise)|[a-z]{5,}ly|"
+    r"(?:the|and|with|from|called|source|language|because|while|where))\b",
+    flags=re.IGNORECASE,
+)
+_CAPITALIZED_LITERAL_RE = re.compile(
+    r"\b(?:[A-ZÁÉÍÓÖŐÚÜŰ]{2,}[A-ZÁÉÍÓÖŐÚÜŰ0-9:_./-]*|"
+    r"[A-ZÁÉÍÓÖŐÚÜŰ][\w-]*[A-ZÁÉÍÓÖŐÚÜŰ][\w-]*)\b",
+    flags=re.UNICODE,
+)
+
 PREFERRED_RESPONSE_LANGUAGE = "hu"
 
 _EXPLICIT_LANGUAGE_MARKERS = {
@@ -231,6 +256,9 @@ def response_language_repair_instruction(text):
     if language == "hu":
         return (
             "Rewrite the supplied answer in Hungarian. "
+            "Correct accidental foreign-language fragments, corrupted Unicode and malformed hybrid words. "
+            "Preserve the original paragraph structure and approximately the same length. "
+            "Keep legitimate English technical terms such as LLM, token, context window, training, inference, tool use, GPU and Python. "
             "Írd át az alábbi választ kizárólag magyar nyelvre. "
             "A tényeket, számokat, URL-eket, termékneveket és tulajdonneveket "
             "pontosan őrizd meg. A személynevek írásmódját és szórendjét ne változtasd meg. "
@@ -334,6 +362,82 @@ def repair_preserves_factual_literals(original, repaired):
     required = protected_factual_literals(original)
     actual = protected_factual_literals(repaired)
     return all(actual[value] >= count for value, count in required.items())
+
+
+def hungarian_output_quality_issues(text, *, editorial_reviewed=False):
+    """Return generic editorial-quality issues for Hungarian prose.
+
+    This deliberately avoids a list of individual misspellings.  The
+    deterministic checks catch broken Unicode and unmistakable foreign-word
+    morphology; long prose is sent through one bounded editorial review so a
+    local model can catch the subtler malformed hybrids that rules cannot
+    safely enumerate.
+    """
+    prose = response_validation_text(text)
+    issues = []
+    if _CORRUPTED_UNICODE_RE.search(prose):
+        issues.append("corrupted_unicode")
+    allowed_tokens = {
+        token.casefold()
+        for term in _HUNGARIAN_ALLOWED_TECHNICAL_TERMS
+        for token in term.split()
+    }
+    foreign_words = [
+        match.group(0).casefold()
+        for match in _FOREIGN_WORD_RE.finditer(prose)
+        if match.group(0).casefold() not in allowed_tokens
+    ]
+    if foreign_words:
+        issues.append("foreign_language_fragment")
+
+    # A long answer has enough prose for a useful quality pass.  This catches
+    # malformed hybrid Hungarian without pretending that a fixed typo list can
+    # model Hungarian morphology.  Short factual replies remain fast unless a
+    # concrete issue above is present.
+    if (
+        not editorial_reviewed
+        and (len(prose) >= 900 or len(re.findall(r"\n\s*\n", prose)) >= 3)
+    ):
+        issues.append("long_form_editorial_review")
+    return tuple(dict.fromkeys(issues))
+
+
+def protected_response_literals(text):
+    """Extract technical/proper-name literals that editorial repair may not drop."""
+    raw = str(text or "")
+    literals = []
+    for term in _HUNGARIAN_ALLOWED_TECHNICAL_TERMS:
+        if term.casefold() in raw.casefold():
+            literals.append("technical:" + term.casefold())
+    for value in _CAPITALIZED_LITERAL_RE.findall(response_validation_text(raw)):
+        literals.append("name:" + value.rstrip("._-/:"))
+    return Counter(set(literals))
+
+
+def repair_preserves_response_shape(original, repaired):
+    """Keep a quality repair editorial: preserve facts, structure and length."""
+    source = str(original or "").strip()
+    candidate = str(repaired or "").strip()
+    if not source or not candidate:
+        return False
+    if not repair_preserves_factual_literals(source, candidate):
+        return False
+
+    required_literals = protected_response_literals(source)
+    actual_literals = protected_response_literals(candidate)
+    if any(actual_literals[value] < count for value, count in required_literals.items()):
+        return False
+
+    source_paragraphs = [item for item in re.split(r"\n\s*\n", source) if item.strip()]
+    candidate_paragraphs = [item for item in re.split(r"\n\s*\n", candidate) if item.strip()]
+    if len(source_paragraphs) >= 2 and len(candidate_paragraphs) != len(source_paragraphs):
+        return False
+
+    source_length = len(re.sub(r"\s+", "", source))
+    candidate_length = len(re.sub(r"\s+", "", candidate))
+    if source_length >= 600 and not (source_length * 0.85 <= candidate_length <= source_length * 1.15):
+        return False
+    return True
 
 
 def response_language_matches(user_text, response_text):

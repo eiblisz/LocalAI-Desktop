@@ -1,7 +1,11 @@
 import os
 import pytest
+import requests
 
-from app.ollama_client import OllamaClient
+from app.ollama_client import OllamaClient, ollama_failure_metadata
+from app.request_trace import RequestTrace
+from app.task_constraints import build_task_constraints
+from app.workers import AdaptiveChatWorker
 from app.ollama_resource_coordinator import (
     OWNER_EINSTEIN,
     OWNER_LOCALAI_DESKTOP,
@@ -594,13 +598,119 @@ def test_chat_stream_rejects_length_truncated_response(monkeypatch):
         lambda *_args, **_kwargs: StreamResponse(),
     )
 
-    with pytest.raises(IncompleteGenerationError):
+    with pytest.raises(IncompleteGenerationError) as exc:
         OllamaClient().chat_stream(
             model="qwen-test",
             messages=[{"role": "user", "content": "Remember the codename"}],
             on_token=lambda _token: None,
             should_stop=lambda: False,
         )
+
+    metadata = ollama_failure_metadata(exc.value)
+    assert metadata["ollama_failure_stage"] == "generation_length"
+    assert metadata["ollama_failure_classification"] == "output_token_limit"
+    assert metadata["ollama_initial_request"] is True
+
+
+def test_initial_model_preparation_failure_keeps_root_cause_classified(monkeypatch):
+    client = OllamaClient(auto_prepare_model=True)
+
+    def fail_prepare(_model, timeout=6.0):
+        raise OllamaResourceBusyError("runtime inspection unavailable")
+
+    monkeypatch.setattr(client, "prepare_model", fail_prepare)
+
+    with pytest.raises(OllamaResourceBusyError) as exc:
+        client.chat_once(
+            model="gemma4:26b",
+            messages=[{"role": "user", "content": "long first request"}],
+            num_predict=2048,
+        )
+
+    metadata = ollama_failure_metadata(exc.value)
+    assert metadata["ollama_failure_stage"] == "model_preparation"
+    assert metadata["ollama_failure_classification"] == "model_prepare_failed"
+    assert metadata["ollama_request_sequence"] == 1
+    assert metadata["ollama_initial_request"] is True
+
+
+def test_ollama_transport_failure_is_classified_for_retry_diagnostics(monkeypatch):
+    client = OllamaClient()
+
+    def fail_post(*_args, **_kwargs):
+        raise requests.ConnectionError("connection refused")
+
+    monkeypatch.setattr("app.ollama_client.requests.post", fail_post)
+
+    with pytest.raises(requests.ConnectionError) as exc:
+        client.chat_once(
+            model="gemma4:26b",
+            messages=[{"role": "user", "content": "retry request"}],
+            num_predict=2048,
+        )
+
+    metadata = ollama_failure_metadata(exc.value)
+    assert metadata["ollama_failure_stage"] == "ollama_transport"
+    assert metadata["ollama_failure_classification"] == "transport_connection"
+    assert metadata["ollama_initial_request"] is True
+
+
+def test_long_request_retry_succeeds_without_hiding_the_first_failure(monkeypatch):
+    client = OllamaClient()
+    calls = []
+
+    def post_once_then_succeed(*_args, **_kwargs):
+        calls.append(True)
+        if len(calls) == 1:
+            raise requests.ConnectionError("cold transport unavailable")
+        return _Response()
+
+    monkeypatch.setattr("app.ollama_client.requests.post", post_once_then_succeed)
+
+    with pytest.raises(requests.ConnectionError) as exc:
+        client.chat_once(
+            model="gemma4:26b",
+            messages=[{"role": "user", "content": "long first request"}],
+            num_predict=2048,
+        )
+    assert ollama_failure_metadata(exc.value)["ollama_request_sequence"] == 1
+
+    result = client.chat_once(
+        model="gemma4:26b",
+        messages=[{"role": "user", "content": "long retry"}],
+        num_predict=2048,
+    )
+
+    assert result == "ok"
+    assert len(calls) == 2
+
+
+def test_worker_request_trace_keeps_classified_ollama_failure(monkeypatch):
+    def fail_post(*_args, **_kwargs):
+        raise requests.ConnectionError("runtime is starting")
+
+    monkeypatch.setattr("app.ollama_client.requests.post", fail_post)
+    prompt = "Írj részletes magyar összefoglalót az MI működéséről."
+    trace = RequestTrace("desktop")
+    worker = AdaptiveChatWorker(
+        OllamaClient(),
+        "gemma4:26b",
+        [{"role": "user", "content": prompt}],
+        prompt,
+        constraints=build_task_constraints(prompt),
+        trace=trace,
+        output_budget=2048,
+    )
+    errors = []
+    worker.failed.connect(errors.append)
+
+    worker.run()
+
+    metadata = trace.snapshot()["metadata"]
+    assert errors
+    assert metadata["ollama_failure_stage"] == "ollama_transport"
+    assert metadata["ollama_failure_classification"] == "transport_connection"
+    assert metadata["ollama_initial_request"] is True
 
 
 def test_chat_stream_rejects_response_without_terminal_completion(monkeypatch):

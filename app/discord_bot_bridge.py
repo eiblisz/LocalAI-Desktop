@@ -32,7 +32,7 @@ from .artifact_service import (
 )
 from .config import DEFAULT_SYSTEM_PROMPT
 from .generation_policy import build_generation_policy
-from .ollama_client import OllamaClient
+from .ollama_client import OllamaClient, ollama_failure_metadata
 from .extension_authority import (
     ExtensionAuthority,
     ExtensionExecutionContext,
@@ -65,6 +65,7 @@ from .web_intent import (
     answer_requires_web_fallback,
     plan_user_action,
 )
+from .response_guard import guard_response
 from .workers import run_chat_web_request, run_market_web_request
 
 
@@ -377,6 +378,7 @@ class DiscordBotBridge(QObject):
                     trace.add_metadata(
                         failure_code=public.code,
                         diagnostic_failure=compact,
+                        **ollama_failure_metadata(exc),
                     )
                     trace.emit_if_enabled()
                     try:
@@ -512,6 +514,7 @@ class DiscordBotBridge(QObject):
                     child_status="failed",
                     failure_code=public.code,
                     diagnostic_failure=compact,
+                    **ollama_failure_metadata(child_exc),
                 )
                 last_chat_id = (
                     self._persist_child_failure(
@@ -1331,6 +1334,7 @@ class DiscordBotBridge(QObject):
             trace=trace,
         )
 
+        used_web_response = bool(use_web)
         if use_web:
             if is_crypto_quote_request(prompt):
                 crypto_extension = self._crypto_market_extension()
@@ -1398,6 +1402,7 @@ class DiscordBotBridge(QObject):
             if trace is not None:
                 trace.end("model_inference")
             if allow_web_fallback and answer_requires_web_fallback(prompt, answer):
+                used_web_response = True
                 answer = self._run_chat_web(
                     messages,
                     prompt,
@@ -1409,6 +1414,22 @@ class DiscordBotBridge(QObject):
 
         if not answer:
             answer = "A helyi modell ures valaszt adott."
+
+        # Keep local Discord replies on the same bounded language/quality path
+        # as Desktop replies. Web replies already pass through ChatWebWorker.
+        if not used_web_response:
+            if trace is not None:
+                trace.begin("language_validation")
+            answer = guard_response(
+                self.ollama_client,
+                self.settings.model,
+                prompt,
+                answer,
+                constraints=constraints,
+                output_budget=output_budget,
+            )
+            if trace is not None:
+                trace.end("language_validation")
 
         chat["messages"].append({"role": "assistant", "content": answer})
         self.chat_store.save(chat)
