@@ -212,26 +212,69 @@ def _fluency_audit_segments(response_text):
     return tuple(segments)
 
 
+def _fluency_audit_response_schema(segment_count):
+    count = max(1, int(segment_count))
+    statuses = ["pass"] + sorted(_FLUENCY_REASON_CODES)
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["status", "findings"],
+        "properties": {
+            "status": {
+                "type": "array",
+                "minItems": count,
+                "maxItems": count,
+                "items": {"type": "string", "enum": statuses},
+            },
+            "findings": {
+                "type": "array",
+                "maxItems": min(count, _MAX_FLUENCY_FINDINGS),
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["id", "spans"],
+                    "properties": {
+                        "id": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": count - 1,
+                        },
+                        "spans": {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": _MAX_FLUENCY_SPANS_PER_SENTENCE,
+                            "items": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": _MAX_FLUENCY_SPAN_CHARS,
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    }
+
+
 def _fluency_audit_messages(segments):
     return [
         {
             "role": "system",
             "content": (
-                "You are a Hungarian fluency classifier, not a writer. Inspect only the supplied "
-                "user-visible response segments. You MUST judge every supplied stable id exactly "
-                "once, including clean sentences. Return strict JSON only in this shape: "
-                '{"judgments":[[0,"pass"],[1,"agreement_or_inflection",["exact bad substring"]]]}. '
-                "A passing sentence is exactly [id,\"pass\"]. A failed sentence is exactly "
-                "[id, reason, [one or more exact short substrings copied byte-for-byte from that "
-                "same segment]]. reason must be one of: malformed_morphology, "
+                "You are a Hungarian fluency classifier, not a writer. Inspect every supplied "
+                "user-visible response segment in order. Return strict JSON with two fields: "
+                "status and findings. status MUST contain exactly one entry for every segment, "
+                "in the same order. Each status is pass or one of: malformed_morphology, "
                 "agreement_or_inflection, broken_phrase, hybrid_or_pseudoword, "
-                "duplicated_morphology, semantic_language_corruption. Check every sentence for "
-                "broken Hungarian inflection, agreement, article choice, verb complements, "
-                "pseudo-words, duplicated morphology and locally nonsensical phrasing. A sentence "
-                "that is mostly good can still fail for one short malformed span. Do not rewrite "
-                "anything. Do not flag legitimate English technical terminology, proper names, "
-                "URLs, numbers, code, or quoted source titles. If uncertain about a sentence, "
-                "return its explicit pass judgment."
+                "duplicated_morphology, semantic_language_corruption. findings contains entries "
+                "only for non-pass segments, each as {id, spans}, where id is the supplied stable "
+                "segment id and spans are one or more exact short substrings copied byte-for-byte "
+                "from that same segment. Check every sentence for broken Hungarian inflection, "
+                "agreement, article choice, verb complements, pseudo-words, duplicated morphology "
+                "and locally nonsensical phrasing. A sentence that is mostly good can still fail "
+                "for one short malformed span. Do not rewrite anything. Do not flag legitimate "
+                "English technical terminology, proper names, URLs, numbers, code, or quoted "
+                "source titles. If uncertain about a sentence, mark it pass."
             ),
         },
         {
@@ -293,43 +336,99 @@ def _parse_fluency_audit(raw_response, response_text, segments):
         raise FluencyAuditFailed(
             "fluency_audit_failed: Hungarian fluency audit returned no object"
         )
-    judgments = payload.get("judgments")
-    if not isinstance(judgments, list) or len(judgments) != len(segments):
-        raise FluencyAuditFailed(
-            "fluency_audit_failed: Hungarian fluency audit must judge every response sentence"
-        )
-    raw_response_text = str(response_text or "")
+
+    # Backward-compatible parsing keeps lightweight extension/test clients
+    # working while the real Ollama path uses the more compact, schema-bound
+    # status/findings contract below.
+    if "judgments" in payload:
+        judgments = payload.get("judgments")
+        if not isinstance(judgments, list) or len(judgments) != len(segments):
+            raise FluencyAuditFailed(
+                "fluency_audit_failed: Hungarian fluency audit must judge every response sentence"
+            )
+        status_values = [None] * len(segments)
+        findings_payload = []
+        for item in judgments:
+            if not isinstance(item, list) or len(item) not in {2, 3}:
+                raise FluencyAuditFailed(
+                    "fluency_audit_failed: Hungarian fluency audit judgment is malformed"
+                )
+            identifier = item[0]
+            status = str(item[1] or "").strip().lower()
+            if not isinstance(identifier, int) or not (0 <= identifier < len(segments)):
+                raise FluencyAuditFailed(
+                    "fluency_audit_failed: Hungarian fluency audit id is invalid"
+                )
+            if status_values[identifier] is not None:
+                raise FluencyAuditFailed(
+                    "fluency_audit_failed: Hungarian fluency audit ids are duplicated"
+                )
+            status_values[identifier] = status
+            if status != "pass":
+                if len(item) != 3 or not isinstance(item[2], list):
+                    raise FluencyAuditFailed(
+                        "fluency_audit_failed: Hungarian fluency failure judgment is invalid"
+                    )
+                findings_payload.append({"id": identifier, "spans": item[2]})
+        if any(value is None for value in status_values):
+            raise FluencyAuditFailed(
+                "fluency_audit_failed: Hungarian fluency audit omitted a response sentence"
+            )
+    else:
+        status_values = payload.get("status")
+        findings_payload = payload.get("findings")
+        if (
+            not isinstance(status_values, list)
+            or len(status_values) != len(segments)
+            or not isinstance(findings_payload, list)
+        ):
+            raise FluencyAuditFailed(
+                "fluency_audit_failed: Hungarian fluency audit coverage is incomplete"
+            )
+        status_values = [str(value or "").strip().lower() for value in status_values]
+
+    for status in status_values:
+        if status != "pass" and status not in _FLUENCY_REASON_CODES:
+            raise FluencyAuditFailed(
+                "fluency_audit_failed: Hungarian fluency audit status is invalid"
+            )
+
     segments_by_id = {item["id"]: item for item in segments}
-    seen_ids = set()
+    findings_by_id = {}
+    for finding in findings_payload:
+        if not isinstance(finding, dict):
+            raise FluencyAuditFailed(
+                "fluency_audit_failed: Hungarian fluency finding is malformed"
+            )
+        identifier = finding.get("id")
+        spans = finding.get("spans")
+        if (
+            not isinstance(identifier, int)
+            or identifier not in segments_by_id
+            or identifier in findings_by_id
+            or not isinstance(spans, list)
+        ):
+            raise FluencyAuditFailed(
+                "fluency_audit_failed: Hungarian fluency finding id/spans are invalid"
+            )
+        findings_by_id[identifier] = spans
+
     parsed = []
     failed_sentence_ids = set()
     reason_codes = []
-    for item in judgments:
-        if not isinstance(item, list) or len(item) not in {2, 3}:
-            raise FluencyAuditFailed(
-                "fluency_audit_failed: Hungarian fluency audit judgment is malformed"
-            )
-        identifier = item[0]
-        status = str(item[1] or "").strip().lower()
-        if not isinstance(identifier, int) or identifier not in segments_by_id or identifier in seen_ids:
-            raise FluencyAuditFailed(
-                "fluency_audit_failed: Hungarian fluency audit ids are incomplete or duplicated"
-            )
-        seen_ids.add(identifier)
+    raw_response_text = str(response_text or "")
+    for identifier, status in enumerate(status_values):
         if status == "pass":
-            if len(item) != 2:
+            if identifier in findings_by_id:
                 raise FluencyAuditFailed(
-                    "fluency_audit_failed: passing Hungarian fluency judgment has extra content"
+                    "fluency_audit_failed: passing sentence unexpectedly contains findings"
                 )
             continue
-        if status not in _FLUENCY_REASON_CODES or len(item) != 3 or not isinstance(item[2], list):
-            raise FluencyAuditFailed(
-                "fluency_audit_failed: Hungarian fluency failure judgment is invalid"
-            )
-        spans = item[2]
+
+        spans = findings_by_id.get(identifier)
         if not spans or len(spans) > _MAX_FLUENCY_SPANS_PER_SENTENCE:
             raise FluencyAuditFailed(
-                "fluency_audit_failed: Hungarian fluency failure has invalid span count"
+                "fluency_audit_failed: failed sentence has no bounded evidence"
             )
         segment = segments_by_id[identifier]
         actionable = False
@@ -353,9 +452,12 @@ def _parse_fluency_audit(raw_response, response_text, segments):
             failed_sentence_ids.add(identifier)
             reason_codes.append(status)
 
-    if seen_ids != set(segments_by_id):
+    failed_status_ids = {
+        index for index, status in enumerate(status_values) if status != "pass"
+    }
+    if set(findings_by_id) != failed_status_ids:
         raise FluencyAuditFailed(
-            "fluency_audit_failed: Hungarian fluency audit omitted a response sentence"
+            "fluency_audit_failed: Hungarian fluency findings do not match failed statuses"
         )
     if len(parsed) > _MAX_FLUENCY_FINDINGS:
         raise FluencyAuditFailed(
@@ -398,7 +500,7 @@ def _run_hungarian_fluency_audit(
         "messages": _fluency_audit_messages(segments),
         "num_predict": 512,
         "call_phase": "hungarian_fluency_audit",
-        "response_format": "json",
+        "response_format": _fluency_audit_response_schema(len(segments)),
     }
     if control is not None:
         call_kwargs["control"] = control
@@ -408,9 +510,13 @@ def _run_hungarian_fluency_audit(
             response_text,
             segments,
         )
-    except Exception:
+    except Exception as exc:
         if trace is not None:
-            trace.end("hungarian_fluency_audit", hungarian_fluency_audit_result="failed")
+            trace.end(
+                "hungarian_fluency_audit",
+                hungarian_fluency_audit_result="failed",
+                fluency_audit_failure_reason=_bounded_response_evidence(str(exc), limit=220),
+            )
         raise
 
     if trace is not None:
