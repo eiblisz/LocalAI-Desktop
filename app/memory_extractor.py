@@ -40,10 +40,24 @@ MEMORY_EXTRACTION_SCHEMA = {
 _MEMORY_FIELDS = {"category", "scope", "subject", "key", "value"}
 
 _EXPLICIT_MEMORY_PATTERNS = (
-    re.compile(r"\bjegyezd\s+meg\b", re.IGNORECASE),
-    re.compile(r"\bemlekezz\b", re.IGNORECASE),
-    re.compile(r"\bemlékezz\b", re.IGNORECASE),
-    re.compile(r"\bremember(?:\s+that)?\b", re.IGNORECASE),
+    # Memory writes are commands, not mere mentions of memory UI/features.
+    # Keep detection anchored to the start of the request (after a small set of
+    # polite/deictic wrappers) so phrases such as "a Remember ikon" remain chat.
+    re.compile(
+        r"^\s*(?:(?:kérlek|kerlek|légy\s+szíves|legy\s+szives)[,\s]+)?"
+        r"(?:(?:ezt|azt)\s+)?jegyezd\s+meg\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*(?:(?:kérlek|kerlek|légy\s+szíves|legy\s+szives)[,\s]+)?"
+        r"eml[eé]kezz\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*(?:(?:please|can\s+you|could\s+you)[,\s]+)?"
+        r"remember(?:\s+that)?\b",
+        re.IGNORECASE,
+    ),
 )
 
 
