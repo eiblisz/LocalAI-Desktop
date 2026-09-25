@@ -427,18 +427,20 @@ def _parse_fluency_audit(raw_response, response_text, segments):
                 )
             continue
 
-        failed_sentence_ids.add(identifier)
-        reason_codes.append(status)
         spans = findings_by_id.get(identifier)
         if not spans or len(spans) > _MAX_FLUENCY_SPANS_PER_SENTENCE:
             # Fluency is a quality-only audit. A model may classify a sentence
             # as bad yet omit exact evidence even under a structured schema.
             # Do not turn that inconsistency into a user-visible request
             # failure; keep the sentence untouched and expose it as unresolved.
+            failed_sentence_ids.add(identifier)
             unresolved_sentence_ids.add(identifier)
+            reason_codes.append(status)
             continue
+
         segment = segments_by_id[identifier]
         actionable = False
+        protected_only = True
         for span in spans:
             if not isinstance(span, str) or not span or len(span) > _MAX_FLUENCY_SPAN_CHARS:
                 raise FluencyAuditFailed(
@@ -453,10 +455,21 @@ def _parse_fluency_audit(raw_response, response_text, segments):
             end = start + len(span)
             if _fluency_span_is_protected(raw_response_text, start, end, span, status):
                 continue
+            protected_only = False
             parsed.append({"start": start, "end": end, "text": span, "reason": status})
             actionable = True
-        if not actionable:
+
+        if actionable:
+            failed_sentence_ids.add(identifier)
+            reason_codes.append(status)
+        elif not protected_only:
+            failed_sentence_ids.add(identifier)
             unresolved_sentence_ids.add(identifier)
+            reason_codes.append(status)
+        # If every supplied span is protected (for example "machine learning"
+        # or "Python"), normalize the auditor's false positive to pass. The
+        # protected-term policy is deterministic and takes precedence over the
+        # model classifier.
 
     failed_status_ids = {
         index for index, status in enumerate(status_values) if status != "pass"
