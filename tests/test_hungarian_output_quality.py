@@ -112,12 +112,6 @@ def test_contextual_english_prose_is_still_flagged(answer):
     assert "foreign_language_fragment" in hungarian_output_quality_issues(answer)
 
 
-@pytest.mark.parametrize("suspicious, replacement, reason", [
-    ("működéskére", "működésre", "malformed_morphology"),
-    ("adatfolyamzáshoz", "adatfolyamhoz", "hybrid_or_pseudoword"),
-    ("leglegfontosabb", "legfontosabb", "duplicated_morphology"),
-    ("segítve nekik, hogy", "segít nekik abban, hogy", "broken_phrase"),
-])
 def test_fluency_audit_accepts_schema_bound_status_and_findings_contract():
     prompt = "Válaszolj magyarul."
     constraints = build_task_constraints(prompt)
@@ -156,6 +150,12 @@ def test_fluency_audit_accepts_schema_bound_status_and_findings_contract():
     assert status_schema["maxItems"] == 2
 
 
+@pytest.mark.parametrize("suspicious, replacement, reason", [
+    ("működéskére", "működésre", "malformed_morphology"),
+    ("adatfolyamzáshoz", "adatfolyamhoz", "hybrid_or_pseudoword"),
+    ("leglegfontosabb", "legfontosabb", "duplicated_morphology"),
+    ("segítve nekik, hogy", "segít nekik abban, hogy", "broken_phrase"),
+])
 def test_fluency_audit_repairs_only_the_exact_suspicious_span(
     suspicious,
     replacement,
