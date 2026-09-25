@@ -52,6 +52,7 @@ class FluencyAuditResult:
     findings: tuple = ()
     sentences_audited: int = 0
     sentences_failed: int = 0
+    sentences_unresolved: int = 0
     reason_codes: tuple[str, ...] = ()
 
 
@@ -415,6 +416,7 @@ def _parse_fluency_audit(raw_response, response_text, segments):
 
     parsed = []
     failed_sentence_ids = set()
+    unresolved_sentence_ids = set()
     reason_codes = []
     raw_response_text = str(response_text or "")
     for identifier, status in enumerate(status_values):
@@ -425,11 +427,16 @@ def _parse_fluency_audit(raw_response, response_text, segments):
                 )
             continue
 
+        failed_sentence_ids.add(identifier)
+        reason_codes.append(status)
         spans = findings_by_id.get(identifier)
         if not spans or len(spans) > _MAX_FLUENCY_SPANS_PER_SENTENCE:
-            raise FluencyAuditFailed(
-                "fluency_audit_failed: failed sentence has no bounded evidence"
-            )
+            # Fluency is a quality-only audit. A model may classify a sentence
+            # as bad yet omit exact evidence even under a structured schema.
+            # Do not turn that inconsistency into a user-visible request
+            # failure; keep the sentence untouched and expose it as unresolved.
+            unresolved_sentence_ids.add(identifier)
+            continue
         segment = segments_by_id[identifier]
         actionable = False
         for span in spans:
@@ -448,17 +455,18 @@ def _parse_fluency_audit(raw_response, response_text, segments):
                 continue
             parsed.append({"start": start, "end": end, "text": span, "reason": status})
             actionable = True
-        if actionable:
-            failed_sentence_ids.add(identifier)
-            reason_codes.append(status)
+        if not actionable:
+            unresolved_sentence_ids.add(identifier)
 
     failed_status_ids = {
         index for index, status in enumerate(status_values) if status != "pass"
     }
-    if set(findings_by_id) != failed_status_ids:
+    extra_finding_ids = set(findings_by_id) - failed_status_ids
+    if extra_finding_ids:
         raise FluencyAuditFailed(
-            "fluency_audit_failed: Hungarian fluency findings do not match failed statuses"
+            "fluency_audit_failed: passing sentence unexpectedly contains findings"
         )
+    unresolved_sentence_ids.update(failed_status_ids - set(findings_by_id))
     if len(parsed) > _MAX_FLUENCY_FINDINGS:
         raise FluencyAuditFailed(
             "fluency_audit_failed: Hungarian fluency findings are out of bounds"
@@ -467,6 +475,7 @@ def _parse_fluency_audit(raw_response, response_text, segments):
         findings=tuple(parsed),
         sentences_audited=len(segments),
         sentences_failed=len(failed_sentence_ids),
+        sentences_unresolved=len(unresolved_sentence_ids),
         reason_codes=tuple(dict.fromkeys(reason_codes)),
     )
 
@@ -522,13 +531,18 @@ def _run_hungarian_fluency_audit(
     if trace is not None:
         trace.end(
             "hungarian_fluency_audit",
-            hungarian_fluency_audit_result=("repair_required" if audit.findings else "pass"),
+            hungarian_fluency_audit_result=(
+                "partial"
+                if audit.sentences_unresolved
+                else ("repair_required" if audit.findings else "pass")
+            ),
             fluency_audit_evidence=json.dumps(
                 [item["text"] for item in audit.findings], ensure_ascii=False,
             ),
             fluency_audit_finding_count=len(audit.findings),
             fluency_sentences_audited=audit.sentences_audited,
             fluency_sentences_failed=audit.sentences_failed,
+            fluency_sentences_unresolved=audit.sentences_unresolved,
             fluency_reason_codes=",".join(audit.reason_codes),
         )
     return audit
@@ -848,11 +862,17 @@ def guard_response(
             phase_callback=phase_callback,
         )
     except FluencyAuditFailed as exc:
-        raise _tag_repair_failure(
-            exc,
-            stage="hungarian_fluency_audit",
-            classification="fluency_audit_failed",
-        )
+        # The fluency audit is an editorial quality layer, not an authority or
+        # safety gate. If its structured output is inconsistent, fail open for
+        # fluency while preserving the deterministic language/script guard.
+        # This prevents an optional quality check from discarding a complete
+        # model answer or blocking deterministic CJK/language repair.
+        if trace is not None:
+            trace.add_metadata(
+                hungarian_fluency_audit_result="degraded",
+                fluency_audit_failure_reason=_bounded_response_evidence(str(exc), limit=220),
+            )
+        fluency_audit = FluencyAuditResult()
     if validation.valid and not fluency_audit.findings:
         return draft
 
