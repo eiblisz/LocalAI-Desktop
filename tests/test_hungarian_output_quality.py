@@ -150,6 +150,69 @@ def test_fluency_audit_accepts_schema_bound_status_and_findings_contract():
     assert status_schema["maxItems"] == 2
 
 
+def test_fluency_audit_missing_bounded_evidence_is_partial_not_request_fatal():
+    prompt = "Válaszolj magyarul."
+    constraints = build_task_constraints(prompt)
+    draft = "Ez egy jó mondat. Ez a mondat nyelvileg lehet hibás."
+
+    class MissingEvidenceAuditClient:
+        supports_hungarian_fluency_audit = True
+
+        def __init__(self):
+            self.calls = 0
+
+        def chat_once(self, model, messages, **kwargs):
+            self.calls += 1
+            return json.dumps({
+                "status": ["pass", "malformed_morphology"],
+                "findings": [],
+            })
+
+    client = MissingEvidenceAuditClient()
+    trace = RequestTrace("desktop")
+    result = guard_response(
+        client,
+        "gemma4:26b",
+        prompt,
+        draft,
+        constraints=constraints,
+        trace=trace,
+    )
+
+    assert result == draft
+    assert client.calls == 1
+    snapshot = trace.snapshot()
+    assert snapshot["metadata"]["hungarian_fluency_audit_result"] == "partial"
+    assert snapshot["metadata"]["fluency_sentences_audited"] == 2
+    assert snapshot["metadata"]["fluency_sentences_failed"] == 1
+    assert snapshot["metadata"]["fluency_sentences_unresolved"] == 1
+
+
+def test_fluency_audit_contract_failure_degrades_without_discarding_clean_answer():
+    prompt = "Válaszolj magyarul."
+    draft = "Ez egy teljes, használható magyar válasz."
+
+    class BrokenAuditClient:
+        supports_hungarian_fluency_audit = True
+
+        def chat_once(self, model, messages, **kwargs):
+            return "{not valid json"
+
+    trace = RequestTrace("desktop")
+    result = guard_response(
+        BrokenAuditClient(),
+        "gemma4:26b",
+        prompt,
+        draft,
+        trace=trace,
+    )
+
+    assert result == draft
+    snapshot = trace.snapshot()
+    assert snapshot["metadata"]["hungarian_fluency_audit_result"] == "degraded"
+    assert "valid JSON" in snapshot["metadata"]["fluency_audit_failure_reason"]
+
+
 @pytest.mark.parametrize("suspicious, replacement, reason", [
     ("működéskére", "működésre", "malformed_morphology"),
     ("adatfolyamzáshoz", "adatfolyamhoz", "hybrid_or_pseudoword"),
