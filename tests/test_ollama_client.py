@@ -419,6 +419,52 @@ def test_controlled_chat_once_uses_streaming_and_honors_budget(monkeypatch):
     assert control.budget.model_calls == 1
 
 
+
+def test_controlled_structured_chat_once_uses_non_streaming_json(monkeypatch):
+    from app.runtime_control import ExecutionBudget, ExecutionControl
+
+    captured = {}
+
+    class StructuredResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "message": {
+                    "content": '{"judgments":[[0,"pass"]]}'
+                },
+                "done": True,
+                "done_reason": "stop",
+            }
+
+    def fake_post(url, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return StructuredResponse()
+
+    monkeypatch.setattr("app.ollama_client.requests.post", fake_post)
+    control = ExecutionControl(
+        budget=ExecutionBudget(timeout_seconds=60, max_model_calls=2)
+    )
+
+    result = OllamaClient().chat_once(
+        model="gemma4:26b",
+        messages=[{"role": "user", "content": "audit this sentence"}],
+        control=control,
+        num_predict=512,
+        call_phase="hungarian_fluency_audit",
+        response_format="json",
+    )
+
+    assert result == '{"judgments":[[0,"pass"]]}'
+    assert captured["json"]["stream"] is False
+    assert captured["json"]["format"] == "json"
+    assert captured["json"]["options"]["num_predict"] == 512
+    assert "stream" not in captured
+    assert control.budget.model_calls == 1
+
+
 def test_controlled_chat_once_closes_active_response_on_cancel(monkeypatch):
     import json
 
