@@ -24,12 +24,9 @@ def test_action_runtime_routes_normal_chat_locally():
     assert decision.market_fallback is False
 
 
-def test_action_runtime_keeps_memory_architecture_explanation_on_chat_route():
+def test_action_runtime_memory_feature_mention_is_not_memory_write():
     decision = ActionRuntime().decide(
-        "Írj egy részletes, legalább 8–12 bekezdéses magyar összefoglalót arról, "
-        "hogyan működik a LocalAI Desktop jelenlegi memóriaarchitektúrája: külön térj ki "
-        "a current chat contextre, Window Memoryra, Global Memoryra, cross-window retrievalre, "
-        "model switch viselkedésre, persistence-re, a Remember ikonra és a web routing kapcsolatára."
+        "Magyarázd el, hogyan működik a Window Memory, a Global Memory és a Remember ikon."
     )
 
     assert decision.route == ROUTE_CHAT
