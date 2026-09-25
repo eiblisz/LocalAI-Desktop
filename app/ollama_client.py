@@ -451,10 +451,17 @@ class OllamaClient:
             if num_predict is None
             else max(1, int(num_predict))
         )
+        structured_response = response_format is not None
         payload = {
             "model": model,
             "messages": messages,
-            "stream": bool(control is not None),
+            # Structured JSON helper calls are intentionally non-streaming.
+            # Ollama can occasionally close a structured stream after emitting
+            # complete JSON but before its terminal done marker. The caller
+            # validates the full JSON contract, so avoid that transport-level
+            # false failure while retaining controlled streaming for ordinary
+            # chat generation.
+            "stream": bool(control is not None and not structured_response),
             # Recent Ollama thinking-capable models, including the preferred
             # Gemma model, otherwise spend tokens on hidden reasoning before
             # they emit a visible answer.  The explicit request is harmless
@@ -469,13 +476,15 @@ class OllamaClient:
 
         try:
             self._set_request_state(model, request_id, STATE_INFERENCE_ACTIVE)
-            if control is None:
+            if control is None or structured_response:
                 response = requests.post(
                     f"{self.base_url}/api/chat",
                     json=payload,
                     timeout=timeout,
                 )
                 response.raise_for_status()
+                if control is not None:
+                    control.check()
                 item = response.json()
                 result = item.get("message", {}).get("content", "")
             else:
