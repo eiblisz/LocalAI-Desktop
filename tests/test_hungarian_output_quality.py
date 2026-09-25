@@ -118,6 +118,44 @@ def test_contextual_english_prose_is_still_flagged(answer):
     ("leglegfontosabb", "legfontosabb", "duplicated_morphology"),
     ("segítve nekik, hogy", "segít nekik abban, hogy", "broken_phrase"),
 ])
+def test_fluency_audit_accepts_schema_bound_status_and_findings_contract():
+    prompt = "Válaszolj magyarul."
+    constraints = build_task_constraints(prompt)
+    draft = "Ez egy jó mondat. Ez a mondat működéskére hibát tartalmaz."
+
+    class SchemaAuditClient:
+        supports_hungarian_fluency_audit = True
+
+        def __init__(self):
+            self.audit_format = None
+
+        def chat_once(self, model, messages, **kwargs):
+            if "Hungarian fluency classifier" in messages[0]["content"]:
+                self.audit_format = kwargs.get("response_format")
+                return json.dumps({
+                    "status": ["pass", "malformed_morphology"],
+                    "findings": [{"id": 1, "spans": ["működéskére"]}],
+                })
+            return json.dumps({
+                "repairs": [{"id": 0, "text": "működésre"}],
+            })
+
+    client = SchemaAuditClient()
+    result = guard_response(
+        client,
+        "gemma4:26b",
+        prompt,
+        draft,
+        constraints=constraints,
+    )
+
+    assert result == draft.replace("működéskére", "működésre")
+    assert isinstance(client.audit_format, dict)
+    status_schema = client.audit_format["properties"]["status"]
+    assert status_schema["minItems"] == 2
+    assert status_schema["maxItems"] == 2
+
+
 def test_fluency_audit_repairs_only_the_exact_suspicious_span(
     suspicious,
     replacement,
