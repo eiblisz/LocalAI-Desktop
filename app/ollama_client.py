@@ -455,13 +455,13 @@ class OllamaClient:
         payload = {
             "model": model,
             "messages": messages,
-            # Structured JSON helper calls are intentionally non-streaming.
-            # Ollama can occasionally close a structured stream after emitting
-            # complete JSON but before its terminal done marker. The caller
-            # validates the full JSON contract, so avoid that transport-level
-            # false failure while retaining controlled streaming for ordinary
-            # chat generation.
-            "stream": bool(control is not None and not structured_response),
+            # Keep controlled helper calls on the same streaming transport as
+            # ordinary generation. Some Ollama/model combinations return HTTP
+            # 500 for non-streaming structured requests. If a structured stream
+            # closes after emitting complete JSON but before the terminal done
+            # marker, the JSON contract below can safely accept that content;
+            # the caller still performs its stricter semantic validation.
+            "stream": bool(control is not None),
             # Recent Ollama thinking-capable models, including the preferred
             # Gemma model, otherwise spend tokens on hidden reasoning before
             # they emit a visible answer.  The explicit request is harmless
@@ -476,15 +476,13 @@ class OllamaClient:
 
         try:
             self._set_request_state(model, request_id, STATE_INFERENCE_ACTIVE)
-            if control is None or structured_response:
+            if control is None:
                 response = requests.post(
                     f"{self.base_url}/api/chat",
                     json=payload,
                     timeout=timeout,
                 )
                 response.raise_for_status()
-                if control is not None:
-                    control.check()
                 item = response.json()
                 result = item.get("message", {}).get("content", "")
             else:
@@ -516,16 +514,24 @@ class OllamaClient:
                         control.cancellation.unregister(close_callback)
                 result = "".join(parts)
                 if not control.cancellation.is_cancelled() and not item.get("done"):
-                    raise _tag_ollama_failure(
-                        IncompleteGenerationError(
-                            "Ollama ended the response stream without a completion marker; "
-                            "the incomplete response was rejected."
-                        ),
-                        stage="stream_completion",
-                        classification="stream_terminated_without_completion",
-                        request_sequence=request_sequence,
-                        call_phase=call_phase,
-                    )
+                    structured_json_complete = False
+                    if structured_response and result.strip():
+                        try:
+                            json.loads(result)
+                            structured_json_complete = True
+                        except (TypeError, ValueError, json.JSONDecodeError):
+                            structured_json_complete = False
+                    if not structured_json_complete:
+                        raise _tag_ollama_failure(
+                            IncompleteGenerationError(
+                                "Ollama ended the response stream without a completion marker; "
+                                "the incomplete response was rejected."
+                            ),
+                            stage="stream_completion",
+                            classification="stream_terminated_without_completion",
+                            request_sequence=request_sequence,
+                            call_phase=call_phase,
+                        )
             if str(item.get("done_reason") or "").strip().lower() == "length":
                 raise _tag_ollama_failure(
                     IncompleteGenerationError(
