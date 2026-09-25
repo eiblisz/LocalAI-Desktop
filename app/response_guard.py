@@ -602,6 +602,32 @@ def _merge_repair_spans(*span_groups):
     )]
 
 
+def _repair_response_schema(spans):
+    """Constrain bounded repairs to the smallest structured response Ollama can emit."""
+    count = len(spans)
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["repairs"],
+        "properties": {
+            "repairs": {
+                "type": "array",
+                "minItems": count,
+                "maxItems": count,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["id", "text"],
+                    "properties": {
+                        "id": {"type": "integer", "minimum": 0, "maximum": max(0, count - 1)},
+                        "text": {"type": "string", "minLength": 1, "maxLength": _MAX_REPAIR_SPAN_CHARS},
+                    },
+                },
+            },
+        },
+    }
+
+
 def _parse_span_repairs(raw_response, spans):
     raw = str(raw_response or "").strip()
     if raw.startswith("```") and raw.endswith("```"):
@@ -770,7 +796,10 @@ def guard_response(
     if output_budget is not None:
         call_kwargs["num_predict"] = min(768, max(64, int(output_budget)))
     call_kwargs["call_phase"] = "language_repair"
-    call_kwargs["response_format"] = "json"
+    # Use a strict schema rather than generic JSON mode. Gemma occasionally
+    # keeps elaborating inside unconstrained JSON until the repair token cap is
+    # reached even though only a few short spans need edits.
+    call_kwargs["response_format"] = _repair_response_schema(spans)
     if trace is not None:
         trace.begin("language_repair")
         trace.add_metadata(
