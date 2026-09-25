@@ -384,7 +384,9 @@ def test_remote_prompt_injects_relevant_persistent_memory_for_model(tmp_path: Pa
         memory_store=memory_store,
     )
 
-    answer, _chat_id = bridge._answer_prompt("Mit tudsz a LocalAI Desktop Prometheusz nevéről?")
+    answer, _chat_id = bridge._answer_prompt(
+        "Mit tudsz a LocalAI Desktop projektem Prometheusz nevéről?"
+    )
 
     assert answer == "Rendben."
     system = ollama.messages[0]["content"]
@@ -422,7 +424,12 @@ def test_remote_fresh_general_prompt_omits_unrelated_persistent_memory(tmp_path:
     )
 
     system = bridge._remote_system_prompt(
-        "Give a general ten-paragraph explanation of AI in Hungarian."
+        (
+            "Írj egy részletes, legalább 10 bekezdéses magyar összefoglalót "
+            "arról, hogyan működik a mesterséges intelligencia "
+            "általánosságban, különös tekintettel a lokális modellek "
+            "előnyei-hátrányai."
+        )
     )
 
     assert "LONG-TERM MEMORY CONTEXT:" not in system

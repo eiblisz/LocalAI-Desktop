@@ -1,15 +1,44 @@
 from app.memory_scope import resolve_memory_context_scope
 
 
+ACCEPTANCE_PROMPT = (
+    "Írj egy részletes, legalább 10 bekezdéses magyar összefoglalót arról, "
+    "hogyan működik a mesterséges intelligencia általánosságban, különös "
+    "tekintettel a lokális modellek előnyei-hátrányai."
+)
+
+
 def test_fresh_general_knowledge_omits_all_runtime_memory_scopes():
-    scope = resolve_memory_context_scope(
-        "Adj egy altalanos, tiz bekezdeses magyarazatot az AI-rol."
-    )
+    scope = resolve_memory_context_scope(ACCEPTANCE_PROMPT)
 
     assert scope.memory_scope == "fresh_general"
     assert scope.include_current_memory is False
     assert scope.include_cross_window is False
     assert scope.include_global_memory is False
+
+
+def test_domain_overlap_without_user_reference_does_not_enable_global_memory():
+    for prompt in (
+        "Explain how local AI models work.",
+        "What are the advantages of local models?",
+        "How should Atlas Desktop be improved?",
+    ):
+        scope = resolve_memory_context_scope(prompt)
+
+        assert scope.memory_scope == "fresh_general"
+        assert scope.include_global_memory is False
+
+
+def test_clear_user_project_reference_keeps_global_memory_eligible():
+    for prompt in (
+        "How should I improve my Atlas Desktop project?",
+        "What model did I choose as default for my project?",
+        "What do you remember about my Atlas project?",
+    ):
+        scope = resolve_memory_context_scope(prompt)
+
+        assert scope.memory_scope == "relevant_memory"
+        assert scope.include_global_memory is True
 
 
 def test_explicit_durable_memory_request_keeps_global_memory_available():

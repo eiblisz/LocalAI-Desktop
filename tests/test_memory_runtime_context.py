@@ -29,7 +29,7 @@ def test_runtime_memory_context_includes_relevant_canonical_memory(tmp_path):
         importance="REMEMBER",
     )
 
-    context = _build_context(store, "Tell me about the BTCUSDT project")
+    context = _build_context(store, "Tell me about my BTCUSDT project")
 
     assert "LONG-TERM MEMORY CONTEXT:" in context
     assert "BTCUSDT 15m realistic" in context

@@ -7,7 +7,6 @@ context merely because a stored item happens to share a broad word.
 """
 
 from dataclasses import dataclass
-import re
 
 from .text_normalization import canonical_match_text
 
@@ -16,7 +15,7 @@ def _semantic_tokens(value):
     return {
         token
         for token in canonical_match_text(value).split()
-        if len(token) >= 3
+        if len(token) >= 3 or token in {"my", "our", "en"}
     }
 
 
@@ -54,11 +53,11 @@ def is_global_memory_request(user_text):
     )
 
 
-_PERSONAL_MEMORY_TOKENS = {
+_PERSONAL_STATE_TOKENS = {
     "nevem", "lanyom", "fiam", "parom", "ferjem", "felesegem",
-    "anyam", "apam", "testverem", "csaladom", "projektem",
-    "beallitasom", "kedvencem", "profilom", "adatim", "cimem",
-    "my", "mine", "ours", "profile", "preferences", "settings",
+    "anyam", "apam", "testverem", "csaladom", "projektem", "projektunk",
+    "modellem", "modellunk", "beallitasom", "beallitasunk", "kedvencem",
+    "profilom", "adatim", "cimem", "my", "mine", "our", "ours",
 }
 
 _RECALL_STEMS = (
@@ -74,13 +73,6 @@ _CONTEXT_REFERENCE_TOKENS = {
     "above", "continue", "continuation", "also",
 }
 
-_GENERIC_KNOWLEDGE_TOKENS = {
-    "ai", "mesterseges", "intelligencia", "artificial", "intelligence",
-    "explain", "magyarazd", "magyarazat", "overview", "bevezetes",
-    "general", "altalanos", "stable", "knowledge", "tudas",
-}
-
-
 def _has_recall_cue(tokens):
     return any(
         token.startswith(stem)
@@ -89,40 +81,18 @@ def _has_recall_cue(tokens):
     )
 
 
-def _has_specific_reference(user_text, tokens):
-    """Identify a named or identifier-like subject without entity allowlists."""
-    raw_tokens = re.findall(r"[^\W_]+(?:[-_:][^\W_]+)*", str(user_text or ""))
-    for index, raw in enumerate(raw_tokens):
-        folded = canonical_match_text(raw)
-        folded_parts = folded.split()
-        if (
-            not folded_parts
-            or folded in _GENERIC_KNOWLEDGE_TOKENS
-            or folded_parts[0] in _GENERIC_KNOWLEDGE_TOKENS
-        ):
-            continue
-        if any(character.isdigit() for character in raw) or "_" in raw or ":" in raw:
-            return True
-        # Do not mistake a sentence-initial question word for a proper name.
-        if (
-            index > 0
-            and len(raw) >= 4
-            and raw != raw.lower()
-            and raw != raw.capitalize()
-        ):
-            return True
-    return False
-
-
 def is_durable_memory_query(user_text):
-    """Whether durable memory may be semantically relevant to this prompt."""
+    """Require a user-state reference before durable semantic retrieval.
+
+    The memory store performs the second, semantic-overlap check.  A shared
+    domain, named product, model family, or number is deliberately insufficient
+    here: durable context is for the user's state, preferences, history, or
+    project rather than for generic knowledge about the same topic.
+    """
     if is_global_memory_request(user_text):
         return True
     tokens = _semantic_tokens(user_text)
-    return bool(
-        tokens & _PERSONAL_MEMORY_TOKENS
-        or _has_specific_reference(user_text, tokens)
-    )
+    return bool(tokens & _PERSONAL_STATE_TOKENS)
 
 
 def _has_current_context_reference(user_text):
