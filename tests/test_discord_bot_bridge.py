@@ -394,6 +394,41 @@ def test_remote_prompt_injects_relevant_persistent_memory_for_model(tmp_path: Pa
     assert "never quote as answer" in system
 
 
+def test_remote_fresh_general_prompt_omits_unrelated_persistent_memory(tmp_path: Path):
+    memory_store = MemoryStore(tmp_path / "memory.sqlite3")
+    memory_store.remember_explicit(
+        category="PROJECT",
+        scope="USER",
+        subject="Private AI project",
+        key="private_preference",
+        value="Use a blue interface.",
+        source_chat_id="seed",
+        source_excerpt="Private preference.",
+        importance="PINNED",
+    )
+    bridge = DiscordBotBridge(
+        ollama_client=SimpleNamespace(),
+        chat_store=ChatStore(tmp_path / "chats"),
+        settings=DiscordBotSettings(
+            extension_id="ext-fresh-general",
+            name="Prometheusz",
+            guild_id=111111111111111111,
+            channel_id=222222222222222222,
+            allowed_user_id=333333333333333333,
+            model="gemma4:26b",
+        ),
+        token="T" * 40,
+        memory_store=memory_store,
+    )
+
+    system = bridge._remote_system_prompt(
+        "Give a general ten-paragraph explanation of AI in Hungarian."
+    )
+
+    assert "LONG-TERM MEMORY CONTEXT:" not in system
+    assert "Use a blue interface." not in system
+
+
 def test_remote_current_conversation_query_excludes_long_term_memory(tmp_path: Path):
     class FakeOllama:
         def __init__(self):

@@ -1,3 +1,8 @@
+from .memory_scope import (
+    is_global_memory_request,
+    is_other_window_request,
+    resolve_memory_context_scope,
+)
 from .text_normalization import canonical_match_text
 
 
@@ -15,37 +20,6 @@ def _semantic_tokens(value):
         for token in canonical_match_text(value).split()
         if len(token) >= 3
     }
-
-
-def is_other_window_request(user_text):
-    tokens = _semantic_tokens(user_text)
-    scope_terms = {
-        "beszelgetes", "beszelgetesben", "beszelgetesnek",
-        "chat", "chatben", "szal", "szalban",
-        "conversation", "thread", "gesprach", "verlauf",
-    }
-    other_terms = {
-        "masik", "masikban", "other", "another", "anderen", "anderer",
-    }
-    return bool(tokens & scope_terms and tokens & other_terms)
-
-
-def is_global_memory_request(user_text):
-    sequence = canonical_match_text(user_text).split()
-    tokens = set(sequence)
-    memory_terms = {"memoria", "memory", "gedachtnis"}
-    durable_terms = {
-        "globalis", "globalisan", "tartos", "global", "globally",
-        "durable", "langzeit", "dauerhaft",
-    }
-    pairs = set(zip(sequence, sequence[1:]))
-    return bool(
-        tokens & memory_terms
-        and (
-            tokens & durable_terms
-            or pairs.intersection({("long", "term"), ("hosszu", "tavu")})
-        )
-    )
 
 
 def is_conversation_local_request(

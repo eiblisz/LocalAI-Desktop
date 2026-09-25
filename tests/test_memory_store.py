@@ -294,7 +294,7 @@ def test_retrieve_memories_excludes_non_active(tmp_path):
     assert store.retrieve_memories("ETHUSDT project") == []
 
 
-def test_retrieve_memories_includes_pinned_without_lexical_overlap(tmp_path):
+def test_retrieve_memories_keeps_pinned_memory_out_without_relevance(tmp_path):
     store = MemoryStore(tmp_path / "memory.sqlite3")
 
     pinned = store.add_memory(
@@ -308,7 +308,7 @@ def test_retrieve_memories_includes_pinned_without_lexical_overlap(tmp_path):
 
     results = store.retrieve_memories("Completely unrelated question")
 
-    assert [item["id"] for item in results] == [pinned["id"]]
+    assert results == []
 
 
 def test_retrieve_memories_empty_query_returns_nothing(tmp_path):

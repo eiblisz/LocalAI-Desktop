@@ -63,6 +63,7 @@ from .chat_orchestration import (
     is_global_memory_request,
     is_other_window_request,
     plan_chat_actions,
+    resolve_memory_context_scope,
 )
 from .chat_extensions_dialog import ChatExtensionsDialog
 from .conversation_memory_recall import (
@@ -91,6 +92,7 @@ from .memory_answers import direct_user_memory_answer
 from .memory_dialog import MemoryDialog
 from .memory_extractor import is_explicit_memory_request
 from .memory_runtime import semantic_memory_context_lines
+from .memory_scope import is_durable_memory_query
 from .memory_store import MemoryStore
 from .window_memory import WindowMemoryService
 from .ollama_client import OllamaClient
@@ -1151,6 +1153,8 @@ class MainWindow(QMainWindow):
 
     def _build_memory_context(self, query, *, limit=8):
         """Build bounded runtime-only long-term memory context for the model."""
+        if not is_durable_memory_query(query):
+            return ""
         memories = self.memory_store.retrieve_memories(query, limit=limit)
         if not memories:
             return ""
@@ -1380,25 +1384,25 @@ class MainWindow(QMainWindow):
                 "window memory and raw messages. If the requested fact was not stated "
                 "here, say so. Do not infer it from other chats or long-term memory."
             )
-        other_window_request = is_other_window_request(prompt)
-        global_memory_request = is_global_memory_request(prompt)
+        memory_scope = resolve_memory_context_scope(
+            prompt,
+            conversation_local=conversation_local,
+        )
         if trace is not None:
             trace.end(
                 "memory_scope_resolution",
-                memory_scope=(
-                    "current_window" if conversation_local else
-                    "other_window" if other_window_request else
-                    "global_memory" if global_memory_request else
-                    "mixed_context"
-                ),
-                cross_window_requested=other_window_request,
-                global_memory_requested=global_memory_request,
+                memory_scope=memory_scope.memory_scope,
+                cross_window_requested=memory_scope.cross_window_requested,
+                global_memory_requested=memory_scope.global_memory_requested,
+                current_window_allowed=memory_scope.include_current_memory,
+                cross_window_allowed=memory_scope.include_cross_window,
+                global_memory_allowed=memory_scope.include_global_memory,
             )
             trace.begin("global_memory_retrieval")
         memory_context = (
-            ""
-            if conversation_local or other_window_request
-            else self._build_memory_context(prompt)
+            self._build_memory_context(prompt)
+            if memory_scope.include_global_memory
+            else ""
         )
         if trace is not None:
             trace.end(
@@ -1415,15 +1419,11 @@ class MainWindow(QMainWindow):
             self.generation_chat_id,
             chat_messages,
             prompt,
-            include_related_windows=(
-                not conversation_local and not global_memory_request
-            ),
-            include_current_memory=(
-                not other_window_request and not global_memory_request
-            ),
+            include_related_windows=memory_scope.include_cross_window,
+            include_current_memory=memory_scope.include_current_memory,
             trace=trace,
         )
-        if other_window_request:
+        if memory_scope.cross_window_requested:
             if window_context.global_windows:
                 system_prompt = (
                     f"{system_prompt}\n\nOTHER CONVERSATION AUTHORITY:\n"
@@ -2079,7 +2079,10 @@ class MainWindow(QMainWindow):
             self.pending_action_batch_size = 0
             self.pending_batch_trace = None
             self.generation_chat_id = ""
-            QTimer.singleShot(0, self._run_pending_scheduled_task)
+            # The batch is fully drained now.  Run the queued scheduler handoff
+            # before returning so a zero-delay event cannot be lost when the
+            # surrounding Qt loop is about to close.
+            self._run_pending_scheduled_task()
 
     def _stop_generation(self):
         if self.worker is not None:
@@ -2261,6 +2264,18 @@ class MainWindow(QMainWindow):
                 or metadata.get("child_requested_fact"),
             ),
             ("Route", diagnostic.get("route") or metadata.get("route")),
+            (
+                "Synthesis",
+                diagnostic.get("synthesis_route") or metadata.get("synthesis_route"),
+            ),
+            (
+                "Response length",
+                diagnostic.get("response_length") or metadata.get("response_length"),
+            ),
+            (
+                "Output budget",
+                diagnostic.get("output_budget") or metadata.get("output_budget"),
+            ),
             ("Memory scope", diagnostic.get("memory_scope") or metadata.get("memory_scope")),
             ("Current-window hit", diagnostic.get("current_window_hit") or metadata.get("current_window_hit")),
             ("Cross-window hit", diagnostic.get("cross_window_hit") or metadata.get("cross_window_hit")),

@@ -15,7 +15,11 @@ from .action_runtime import (
     ROUTE_MARKET_WEB,
     ROUTE_MULTI_ASSET_MARKET,
 )
-from .chat_orchestration import normalize_web_mode, plan_chat_actions
+from .chat_orchestration import (
+    normalize_web_mode,
+    plan_chat_actions,
+    resolve_memory_context_scope,
+)
 from .conversation_memory_recall import (
     is_safe_direct_recall,
     resolve_current_conversation_recall,
@@ -50,6 +54,7 @@ from .document_tools import (
 from .language_policy import response_language_instruction
 from .memory_answers import direct_user_memory_answer
 from .memory_runtime import remember_explicit_request, semantic_memory_context_lines
+from .memory_scope import is_durable_memory_query
 from .request_trace import RequestTrace
 from .task_constraints import build_task_constraints, task_constraints_instruction
 from .user_error_messages import public_error
@@ -665,6 +670,8 @@ class DiscordBotBridge(QObject):
     def _build_memory_context(self, query, limit=8):
         if self.memory_store is None:
             return ""
+        if not is_durable_memory_query(query):
+            return ""
 
         memories = self.memory_store.retrieve_memories(query, limit=limit)
         if not memories:
@@ -869,6 +876,7 @@ class DiscordBotBridge(QObject):
         constraints=None,
         *,
         conversation_local=False,
+        trace=None,
     ):
         constraints = constraints or build_task_constraints(prompt)
         system_prompt = (
@@ -897,7 +905,32 @@ class DiscordBotBridge(QObject):
                 "raw messages. If the requested fact was not stated here, say so. "
                 "Do not infer it from long-term memory."
             )
-        memory_context = "" if conversation_local else self._build_memory_context(prompt)
+        memory_scope = resolve_memory_context_scope(
+            prompt,
+            conversation_local=conversation_local,
+        )
+        if trace is not None:
+            trace.begin("memory_scope_resolution")
+            trace.end(
+                "memory_scope_resolution",
+                memory_scope=memory_scope.memory_scope,
+                cross_window_requested=memory_scope.cross_window_requested,
+                global_memory_requested=memory_scope.global_memory_requested,
+                current_window_allowed=memory_scope.include_current_memory,
+                cross_window_allowed=memory_scope.include_cross_window,
+                global_memory_allowed=memory_scope.include_global_memory,
+            )
+            trace.begin("global_memory_retrieval")
+        memory_context = (
+            self._build_memory_context(prompt)
+            if memory_scope.include_global_memory
+            else ""
+        )
+        if trace is not None:
+            trace.end(
+                "global_memory_retrieval",
+                global_memory_hit=bool(memory_context),
+            )
         if memory_context:
             system_prompt = f"{system_prompt}\n\n{memory_context}"
         return system_prompt
@@ -909,6 +942,7 @@ class DiscordBotBridge(QObject):
         constraints=None,
         *,
         conversation_local=False,
+        trace=None,
     ):
         messages = [
             {
@@ -917,6 +951,7 @@ class DiscordBotBridge(QObject):
                     prompt,
                     constraints,
                     conversation_local=conversation_local,
+                    trace=trace,
                 ),
             }
         ]
@@ -989,6 +1024,7 @@ class DiscordBotBridge(QObject):
             chat,
             prompt,
             constraints=constraints,
+            trace=trace,
         )
         return self._run_chat_web(
             messages,
@@ -1292,6 +1328,7 @@ class DiscordBotBridge(QObject):
             prompt,
             constraints=constraints,
             conversation_local=conversation_local,
+            trace=trace,
         )
 
         if use_web:
