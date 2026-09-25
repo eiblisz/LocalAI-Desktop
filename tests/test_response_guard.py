@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from app.response_guard import (
@@ -10,6 +12,15 @@ from app.ollama_client import ollama_failure_metadata
 from app.task_constraints import build_task_constraints
 
 
+def _passing_fluency_audit(messages):
+    segments = json.loads(messages[1]["content"].split(
+        "USER-VISIBLE RESPONSE SEGMENTS TO AUDIT:\n", 1
+    )[1])
+    return json.dumps({
+        "judgments": [[item["id"], "pass"] for item in segments],
+    })
+
+
 class RepairClient:
     supports_hungarian_fluency_audit = True
 
@@ -20,7 +31,7 @@ class RepairClient:
     def chat_once(self, model, messages, timeout=600.0):
         self.calls.append((model, messages))
         if "Hungarian fluency classifier" in messages[0]["content"]:
-            return '{"status":"pass","findings":[]}'
+            return _passing_fluency_audit(messages)
         return self.repaired
 
 

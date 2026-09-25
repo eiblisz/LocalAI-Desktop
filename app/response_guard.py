@@ -47,6 +47,14 @@ class ResponseValidation:
     evidence: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class FluencyAuditResult:
+    findings: tuple = ()
+    sentences_audited: int = 0
+    sentences_failed: int = 0
+    reason_codes: tuple[str, ...] = ()
+
+
 _HANGUL_RE = re.compile(r"[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]")
 _CJK_RE = re.compile(
     r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]"
@@ -56,10 +64,19 @@ _CJK_SPAN_RE = re.compile(
     r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]+"
 )
 _SENTENCE_BREAK_RE = re.compile(r"[.!?]+(?=\s|$)|\n{2,}")
-_MAX_REPAIR_SPANS = 6
+_MAX_REPAIR_SPANS = 8
 _MAX_REPAIR_SPAN_CHARS = 900
-_MAX_FLUENCY_FINDINGS = 6
+_MAX_FLUENCY_FINDINGS = 8
 _MAX_FLUENCY_SPAN_CHARS = 280
+_MAX_FLUENCY_SPANS_PER_SENTENCE = 3
+_FLUENCY_REASON_CODES = frozenset({
+    "malformed_morphology",
+    "agreement_or_inflection",
+    "broken_phrase",
+    "hybrid_or_pseudoword",
+    "duplicated_morphology",
+    "semantic_language_corruption",
+})
 _AUDIT_PROTECTED_SPAN_RE = re.compile(
     r"https?://\S+|`[^`\n]+`|\"[^\"\n]+\"|„[^”\n]+”|“[^”\n]+”",
     flags=re.UNICODE,
@@ -175,25 +192,57 @@ def _validation_evidence_json(validation):
     return json.dumps(list(validation.evidence), ensure_ascii=False)
 
 
-def _fluency_audit_messages(response_text):
+def _fluency_audit_segments(response_text):
+    """Expose every user-visible sentence as a stable, exact audit unit."""
+    raw = str(response_text or "")
+    segments = []
+    for start, end in _sentence_spans(raw):
+        original = raw[start:end]
+        leading = len(original) - len(original.lstrip())
+        text = original.strip()
+        if not text:
+            continue
+        text_start = start + leading
+        segments.append({
+            "id": len(segments),
+            "start": text_start,
+            "end": text_start + len(text),
+            "text": text,
+        })
+    return tuple(segments)
+
+
+def _fluency_audit_messages(segments):
     return [
         {
             "role": "system",
             "content": (
-                "You are a Hungarian fluency classifier, not a writer. Inspect only the "
-                "user-visible generated response supplied below. Return strict JSON only: "
-                '{"status":"pass","findings":[]} or '
-                '{"status":"repair_required","findings":[{"span":"exact text from the response",'
-                '"reason":"malformed_morphology|hybrid_word|duplicated_morphology|broken_local_phrase"}]}. '
-                "Report only exact, short Hungarian substrings that are clearly malformed, "
-                "grammatically broken, pseudo-Hungarian, or accidentally duplicated. Do not "
-                "rewrite anything. Do not flag legitimate English technical terminology, proper "
-                "names, URLs, numbers, code, or quoted source titles. If uncertain, return pass."
+                "You are a Hungarian fluency classifier, not a writer. Inspect only the supplied "
+                "user-visible response segments. You MUST judge every supplied stable id exactly "
+                "once, including clean sentences. Return strict JSON only in this shape: "
+                '{"judgments":[[0,"pass"],[1,"agreement_or_inflection",["exact bad substring"]]]}. '
+                "A passing sentence is exactly [id,\"pass\"]. A failed sentence is exactly "
+                "[id, reason, [one or more exact short substrings copied byte-for-byte from that "
+                "same segment]]. reason must be one of: malformed_morphology, "
+                "agreement_or_inflection, broken_phrase, hybrid_or_pseudoword, "
+                "duplicated_morphology, semantic_language_corruption. Check every sentence for "
+                "broken Hungarian inflection, agreement, article choice, verb complements, "
+                "pseudo-words, duplicated morphology and locally nonsensical phrasing. A sentence "
+                "that is mostly good can still fail for one short malformed span. Do not rewrite "
+                "anything. Do not flag legitimate English technical terminology, proper names, "
+                "URLs, numbers, code, or quoted source titles. If uncertain about a sentence, "
+                "return its explicit pass judgment."
             ),
         },
         {
             "role": "user",
-            "content": "USER-VISIBLE GENERATED RESPONSE TO AUDIT:\n" + str(response_text or ""),
+            "content": (
+                "USER-VISIBLE RESPONSE SEGMENTS TO AUDIT:\n"
+                + json.dumps(
+                    [{"id": item["id"], "text": item["text"]} for item in segments],
+                    ensure_ascii=False,
+                )
+            ),
         },
     ]
 
@@ -213,7 +262,23 @@ def _chat_once_compat(client, call_kwargs):
                 raise
 
 
-def _parse_fluency_audit(raw_response, response_text):
+def _fluency_span_is_protected(raw_response_text, start, end, span, reason):
+    if any(
+        protected.start() < end and start < protected.end()
+        for protected in _AUDIT_PROTECTED_SPAN_RE.finditer(raw_response_text)
+    ):
+        return True
+    if protected_factual_literals(span) or protected_response_literals(span):
+        return True
+    return bool(
+        _ASCII_TECHNICAL_SPAN_RE.fullmatch(span)
+        and not (
+            reason == "duplicated_morphology" and _DUPLICATED_PREFIX_RE.match(span)
+        )
+    )
+
+
+def _parse_fluency_audit(raw_response, response_text, segments):
     raw = str(raw_response or "").strip()
     if raw.startswith("```") and raw.endswith("```"):
         raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
@@ -228,53 +293,80 @@ def _parse_fluency_audit(raw_response, response_text):
         raise FluencyAuditFailed(
             "fluency_audit_failed: Hungarian fluency audit returned no object"
         )
-    status = str(payload.get("status") or "").strip().lower()
-    findings = payload.get("findings")
-    if status == "pass" and findings in (None, []):
-        return ()
-    if status != "repair_required" or not isinstance(findings, list):
+    judgments = payload.get("judgments")
+    if not isinstance(judgments, list) or len(judgments) != len(segments):
         raise FluencyAuditFailed(
-            "fluency_audit_failed: Hungarian fluency audit returned an invalid status"
+            "fluency_audit_failed: Hungarian fluency audit must judge every response sentence"
         )
-    if not findings or len(findings) > _MAX_FLUENCY_FINDINGS:
-        raise FluencyAuditFailed(
-            "fluency_audit_failed: Hungarian fluency audit findings are out of bounds"
-        )
-
     raw_response_text = str(response_text or "")
+    segments_by_id = {item["id"]: item for item in segments}
+    seen_ids = set()
     parsed = []
-    for item in findings:
-        if not isinstance(item, dict):
+    failed_sentence_ids = set()
+    reason_codes = []
+    for item in judgments:
+        if not isinstance(item, list) or len(item) not in {2, 3}:
             raise FluencyAuditFailed(
-                "fluency_audit_failed: Hungarian fluency audit finding is malformed"
+                "fluency_audit_failed: Hungarian fluency audit judgment is malformed"
             )
-        span = str(item.get("span") or "")
-        reason = str(item.get("reason") or "").strip().lower()
-        if not span or len(span) > _MAX_FLUENCY_SPAN_CHARS or not reason:
+        identifier = item[0]
+        status = str(item[1] or "").strip().lower()
+        if not isinstance(identifier, int) or identifier not in segments_by_id or identifier in seen_ids:
             raise FluencyAuditFailed(
-                "fluency_audit_failed: Hungarian fluency audit finding is incomplete"
+                "fluency_audit_failed: Hungarian fluency audit ids are incomplete or duplicated"
             )
-        starts = [match.start() for match in re.finditer(re.escape(span), raw_response_text)]
-        if len(starts) != 1:
+        seen_ids.add(identifier)
+        if status == "pass":
+            if len(item) != 2:
+                raise FluencyAuditFailed(
+                    "fluency_audit_failed: passing Hungarian fluency judgment has extra content"
+                )
+            continue
+        if status not in _FLUENCY_REASON_CODES or len(item) != 3 or not isinstance(item[2], list):
             raise FluencyAuditFailed(
-                "fluency_audit_failed: Hungarian fluency finding is not one exact response span"
+                "fluency_audit_failed: Hungarian fluency failure judgment is invalid"
             )
-        start = starts[0]
-        end = start + len(span)
-        if any(
-            protected.start() < end and start < protected.end()
-            for protected in _AUDIT_PROTECTED_SPAN_RE.finditer(raw_response_text)
-        ):
-            continue
-        if protected_factual_literals(span) or protected_response_literals(span):
-            continue
-        if _ASCII_TECHNICAL_SPAN_RE.fullmatch(span) and not (
-            reason == "duplicated_morphology" and _DUPLICATED_PREFIX_RE.match(span)
-        ):
-            continue
-        parsed.append({"start": start, "end": end, "text": span, "reason": reason})
+        spans = item[2]
+        if not spans or len(spans) > _MAX_FLUENCY_SPANS_PER_SENTENCE:
+            raise FluencyAuditFailed(
+                "fluency_audit_failed: Hungarian fluency failure has invalid span count"
+            )
+        segment = segments_by_id[identifier]
+        actionable = False
+        for span in spans:
+            if not isinstance(span, str) or not span or len(span) > _MAX_FLUENCY_SPAN_CHARS:
+                raise FluencyAuditFailed(
+                    "fluency_audit_failed: Hungarian fluency span is incomplete"
+                )
+            starts = [match.start() for match in re.finditer(re.escape(span), segment["text"])]
+            if len(starts) != 1:
+                raise FluencyAuditFailed(
+                    "fluency_audit_failed: Hungarian fluency span is not exact within its sentence"
+                )
+            start = segment["start"] + starts[0]
+            end = start + len(span)
+            if _fluency_span_is_protected(raw_response_text, start, end, span, status):
+                continue
+            parsed.append({"start": start, "end": end, "text": span, "reason": status})
+            actionable = True
+        if actionable:
+            failed_sentence_ids.add(identifier)
+            reason_codes.append(status)
 
-    return tuple(parsed)
+    if seen_ids != set(segments_by_id):
+        raise FluencyAuditFailed(
+            "fluency_audit_failed: Hungarian fluency audit omitted a response sentence"
+        )
+    if len(parsed) > _MAX_FLUENCY_FINDINGS:
+        raise FluencyAuditFailed(
+            "fluency_audit_failed: Hungarian fluency findings are out of bounds"
+        )
+    return FluencyAuditResult(
+        findings=tuple(parsed),
+        sentences_audited=len(segments),
+        sentences_failed=len(failed_sentence_ids),
+        reason_codes=tuple(dict.fromkeys(reason_codes)),
+    )
 
 
 def _run_hungarian_fluency_audit(
@@ -289,9 +381,13 @@ def _run_hungarian_fluency_audit(
     phase_callback=None,
 ):
     if _expected_language(user_text, constraints) != "hu":
-        return ()
+        return FluencyAuditResult()
     if not bool(getattr(client, "supports_hungarian_fluency_audit", False)):
-        return ()
+        return FluencyAuditResult()
+
+    segments = _fluency_audit_segments(response_text)
+    if not segments:
+        return FluencyAuditResult()
 
     if trace is not None:
         trace.begin("hungarian_fluency_audit")
@@ -299,17 +395,18 @@ def _run_hungarian_fluency_audit(
         phase_callback("Magyar folyékonyság ellenőrzése")
     call_kwargs = {
         "model": model,
-        "messages": _fluency_audit_messages(response_text),
-        "num_predict": 256,
+        "messages": _fluency_audit_messages(segments),
+        "num_predict": 512,
         "call_phase": "hungarian_fluency_audit",
         "response_format": "json",
     }
     if control is not None:
         call_kwargs["control"] = control
     try:
-        findings = _parse_fluency_audit(
+        audit = _parse_fluency_audit(
             _chat_once_compat(client, call_kwargs),
             response_text,
+            segments,
         )
     except Exception:
         if trace is not None:
@@ -319,13 +416,16 @@ def _run_hungarian_fluency_audit(
     if trace is not None:
         trace.end(
             "hungarian_fluency_audit",
-            hungarian_fluency_audit_result=("repair_required" if findings else "pass"),
+            hungarian_fluency_audit_result=("repair_required" if audit.findings else "pass"),
             fluency_audit_evidence=json.dumps(
-                [item["text"] for item in findings], ensure_ascii=False,
+                [item["text"] for item in audit.findings], ensure_ascii=False,
             ),
-            fluency_audit_finding_count=len(findings),
+            fluency_audit_finding_count=len(audit.findings),
+            fluency_sentences_audited=audit.sentences_audited,
+            fluency_sentences_failed=audit.sentences_failed,
+            fluency_reason_codes=",".join(audit.reason_codes),
         )
-    return findings
+    return audit
 
 
 def _repair_messages(user_text, spans, constraints=None):
@@ -342,8 +442,9 @@ def _repair_messages(user_text, spans, constraints=None):
     system = (
         f"Edit only the supplied contaminated {language_name} text spans. Do not rewrite or summarize "
         "the surrounding answer. Remove accidental foreign-language/script leakage, corrupted "
-        "Unicode, malformed Hungarian morphology, duplicated morphology, broken local phrasing "
-        "and malformed hybrid words while preserving the meaning. Preserve every number, "
+        "Unicode, malformed Hungarian morphology, agreement or inflection errors, duplicated "
+        "morphology, broken local phrasing, semantic language corruption and malformed hybrid "
+        "words while preserving the meaning. Preserve every number, "
         "URL, date, currency value, product/model name, proper name, technical term and factual "
         "claim exactly. Legitimate English technical terms include LLM, token, context window, "
         "training, inference, tool use, GPU and Python. Return strict JSON only in this shape: "
@@ -424,10 +525,25 @@ def _repair_spans(user_text, response_text, constraints=None):
 
 def _fluency_repair_spans(response_text, findings):
     raw = str(response_text or "")
-    repairs = []
-    for item in findings:
+    merged_findings = []
+    for item in sorted(findings, key=lambda value: (value["start"], value["end"])):
         start = int(item["start"])
         end = int(item["end"])
+        if merged_findings and start < merged_findings[-1]["end"]:
+            previous = merged_findings[-1]
+            previous["end"] = max(previous["end"], end)
+            previous["reasons"].append(str(item["reason"]))
+            continue
+        merged_findings.append({
+            "start": start,
+            "end": end,
+            "reasons": [str(item["reason"])],
+        })
+
+    repairs = []
+    for item in merged_findings:
+        start = item["start"]
+        end = item["end"]
         text = raw[start:end]
         if not text or len(text) > _MAX_REPAIR_SPAN_CHARS:
             raise FluencyAuditFailed(
@@ -442,7 +558,7 @@ def _fluency_repair_spans(response_text, findings):
             "suffix": "",
             "left_context": raw[max(0, start - 240):start],
             "right_context": raw[end:min(len(raw), end + 240)],
-            "reason": item["reason"],
+            "reason": ",".join(dict.fromkeys(item["reasons"])),
         })
     return repairs
 
@@ -589,7 +705,7 @@ def guard_response(
         )
 
     try:
-        fluency_findings = _run_hungarian_fluency_audit(
+        fluency_audit = _run_hungarian_fluency_audit(
             client,
             model,
             user_text,
@@ -605,7 +721,7 @@ def guard_response(
             stage="hungarian_fluency_audit",
             classification="fluency_audit_failed",
         )
-    if validation.valid and not fluency_findings:
+    if validation.valid and not fluency_audit.findings:
         return draft
 
     try:
@@ -616,7 +732,7 @@ def guard_response(
         )
         spans = _merge_repair_spans(
             deterministic_spans,
-            _fluency_repair_spans(draft, fluency_findings),
+            _fluency_repair_spans(draft, fluency_audit.findings),
         )
     except (LanguageRepairFailed, FluencyAuditFailed) as exc:
         raise _tag_repair_failure(

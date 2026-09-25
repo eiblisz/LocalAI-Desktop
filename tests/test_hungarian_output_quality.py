@@ -9,10 +9,22 @@ from app.language_policy import (
     repair_preserves_response_shape,
 )
 from app.request_trace import RequestTrace
-from app.response_guard import LanguageRepairFailed, guard_response, validate_response
+from app.response_guard import FluencyAuditFailed, LanguageRepairFailed, guard_response, validate_response
 from app.task_constraints import build_task_constraints
 from app.workers import AdaptiveChatWorker
 from app.ollama_client import ollama_failure_metadata
+
+
+def _audit_segments(messages):
+    return json.loads(messages[1]["content"].split(
+        "USER-VISIBLE RESPONSE SEGMENTS TO AUDIT:\n", 1
+    )[1])
+
+
+def _passing_fluency_audit(messages):
+    return json.dumps({
+        "judgments": [[item["id"], "pass"] for item in _audit_segments(messages)],
+    })
 
 
 class EditorialRepairClient:
@@ -25,7 +37,7 @@ class EditorialRepairClient:
     def chat_once(self, model, messages, **kwargs):
         self.calls.append((model, messages, kwargs))
         if "Hungarian fluency classifier" in messages[0]["content"]:
-            return json.dumps({"status": "pass", "findings": []})
+            return _passing_fluency_audit(messages)
         return self.repaired
 
 
@@ -39,7 +51,7 @@ class SingleGenerationClient:
     def chat_once(self, model, messages, **kwargs):
         self.calls.append((model, messages, kwargs))
         if "Hungarian fluency classifier" in messages[0]["content"]:
-            return json.dumps({"status": "pass", "findings": []})
+            return _passing_fluency_audit(messages)
         return self.response
 
 
@@ -102,9 +114,9 @@ def test_contextual_english_prose_is_still_flagged(answer):
 
 @pytest.mark.parametrize("suspicious, replacement, reason", [
     ("működéskére", "működésre", "malformed_morphology"),
-    ("adatfolyamzáshoz", "adatfolyamhoz", "hybrid_word"),
+    ("adatfolyamzáshoz", "adatfolyamhoz", "hybrid_or_pseudoword"),
     ("leglegfontosabb", "legfontosabb", "duplicated_morphology"),
-    ("segítve nekik, hogy", "segít nekik abban, hogy", "broken_local_phrase"),
+    ("segítve nekik, hogy", "segít nekik abban, hogy", "broken_phrase"),
 ])
 def test_fluency_audit_repairs_only_the_exact_suspicious_span(
     suspicious,
@@ -130,9 +142,16 @@ def test_fluency_audit_repairs_only_the_exact_suspicious_span(
             system = messages[0]["content"]
             if "Hungarian fluency classifier" in system:
                 self.audit_messages = messages
+                segments = _audit_segments(messages)
                 return json.dumps({
-                    "status": "repair_required",
-                    "findings": [{"span": suspicious, "reason": reason}],
+                    "judgments": [
+                        (
+                            [item["id"], reason, [suspicious]]
+                            if suspicious in item["text"]
+                            else [item["id"], "pass"]
+                        )
+                        for item in segments
+                    ],
                 })
             self.repair_messages = messages
             payload = json.loads(messages[1]["content"].split(
@@ -161,6 +180,9 @@ def test_fluency_audit_repairs_only_the_exact_suspicious_span(
     snapshot = trace.snapshot()
     assert snapshot["metadata"]["hungarian_fluency_audit_result"] == "repair_required"
     assert json.loads(snapshot["metadata"]["fluency_audit_evidence"]) == [suspicious]
+    assert snapshot["metadata"]["fluency_sentences_audited"] == 3
+    assert snapshot["metadata"]["fluency_sentences_failed"] == 1
+    assert snapshot["metadata"]["fluency_reason_codes"] == reason
     assert snapshot["metadata"]["language_repair_span_count"] == 1
     assert "hungarian_fluency_audit" in snapshot["phases_ms"]
 
@@ -190,9 +212,16 @@ def test_fluency_audit_discards_a_false_positive_technical_span(term):
         def chat_once(self, model, messages, **kwargs):
             self.calls += 1
             if "Hungarian fluency classifier" in messages[0]["content"]:
+                segments = _audit_segments(messages)
                 return json.dumps({
-                    "status": "repair_required",
-                    "findings": [{"span": term, "reason": "hybrid_word"}],
+                    "judgments": [
+                        (
+                            [item["id"], "hybrid_or_pseudoword", [term]]
+                            if term in item["text"]
+                            else [item["id"], "pass"]
+                        )
+                        for item in segments
+                    ],
                 })
             raise AssertionError("a protected technical span must not be repaired")
 
@@ -204,6 +233,142 @@ def test_fluency_audit_discards_a_false_positive_technical_span(term):
     snapshot = trace.snapshot()
     assert snapshot["metadata"]["hungarian_fluency_audit_result"] == "pass"
     assert json.loads(snapshot["metadata"]["fluency_audit_evidence"]) == []
+    assert snapshot["metadata"]["fluency_sentences_audited"] == 1
+    assert snapshot["metadata"]["fluency_sentences_failed"] == 0
+
+
+def test_sentence_audit_covers_multiple_separated_hungarian_fluency_failures():
+    prompt = "Válaszolj magyarul."
+    repairs = {
+        "tanulásképpen": ("tanulásként", "malformed_morphology"),
+        "a modellek működik": ("a modellek működnek", "agreement_or_inflection"),
+        "adatfolyamizálás": ("adatfeldolgozás", "hybrid_or_pseudoword"),
+        "leglegjobb": ("legjobb", "duplicated_morphology"),
+        "képes egyszerre emlékezni": (
+            "egyszerre képes tárolni", "semantic_language_corruption",
+        ),
+        "a adatvédelem": ("az adatvédelem", "agreement_or_inflection"),
+    }
+    paragraphs = [
+        "A tanulásképpen megfogalmazott lépés hibás.",
+        "Ebben a mondatban a modellek működik rossz egyeztetéssel.",
+        "Az adatfolyamizálás szó itt mesterségesen képzett alak.",
+        "Ez a leglegjobb példának szánt mondat.",
+        "A rendszer képes egyszerre emlékezni állítás helytelenül hangzik.",
+        "Itt a adatvédelem előtt hibás a névelő.",
+        "A machine learning fogalma ebben a mondatban helyes.",
+        "A GPU teljesítménye önmagában nem dönt minden feladatról.",
+        "A Python eszközök segíthetik a fejlesztést.",
+        "A záró bekezdés nyelvileg rendben van.",
+    ]
+    draft = "\n\n".join(paragraphs)
+
+    class MultiSentenceAuditClient:
+        supports_hungarian_fluency_audit = True
+
+        def __init__(self):
+            self.audit_segments = None
+            self.repair_payload = None
+
+        def chat_once(self, model, messages, **kwargs):
+            if "Hungarian fluency classifier" in messages[0]["content"]:
+                self.audit_segments = _audit_segments(messages)
+                judgments = []
+                for item in self.audit_segments:
+                    match = next(
+                        (
+                            (span, replacement, reason)
+                            for span, (replacement, reason) in repairs.items()
+                            if span in item["text"]
+                        ),
+                        None,
+                    )
+                    judgments.append(
+                        [item["id"], "pass"]
+                        if match is None
+                        else [item["id"], match[2], [match[0]]]
+                    )
+                return json.dumps({"judgments": judgments})
+            self.repair_payload = json.loads(messages[1]["content"].split(
+                "BOUNDED SPANS TO REPAIR:\n", 1
+            )[1])
+            return json.dumps({"repairs": [
+                {
+                    "id": item["id"],
+                    "text": repairs[item["text"]][0],
+                }
+                for item in self.repair_payload
+            ]})
+
+    client = MultiSentenceAuditClient()
+    trace = RequestTrace("desktop")
+    result = guard_response(client, "gemma4:26b", prompt, draft, trace=trace)
+
+    expected = draft
+    for original, (replacement, _) in repairs.items():
+        expected = expected.replace(original, replacement)
+    assert result == expected
+    assert [item["id"] for item in client.audit_segments] == list(range(10))
+    assert [item["text"] for item in client.repair_payload] == list(repairs)
+    snapshot = trace.snapshot()
+    assert snapshot["metadata"]["fluency_sentences_audited"] == 10
+    assert snapshot["metadata"]["fluency_sentences_failed"] == len(repairs)
+    assert snapshot["metadata"]["fluency_reason_codes"] == (
+        "malformed_morphology,agreement_or_inflection,hybrid_or_pseudoword,"
+        "duplicated_morphology,semantic_language_corruption"
+    )
+    assert snapshot["metadata"]["language_repair_span_count"] == len(repairs)
+
+
+def test_sentence_audit_combines_overlapping_exact_spans_before_repair():
+    prompt = "Válaszolj magyarul."
+    draft = "Ebben a mondatban a adatvédelem fontos szerepet kap."
+
+    class OverlappingSpanClient:
+        supports_hungarian_fluency_audit = True
+
+        def chat_once(self, model, messages, **kwargs):
+            if "Hungarian fluency classifier" in messages[0]["content"]:
+                segment = _audit_segments(messages)[0]
+                return json.dumps({"judgments": [[
+                    segment["id"],
+                    "agreement_or_inflection",
+                    ["a adatvédelem", "adatvédelem fontos"],
+                ]]})
+            payload = json.loads(messages[1]["content"].split(
+                "BOUNDED SPANS TO REPAIR:\n", 1
+            )[1])
+            assert len(payload) == 1
+            assert payload[0]["text"] == "a adatvédelem fontos"
+            return json.dumps({"repairs": [{
+                "id": payload[0]["id"],
+                "text": "az adatvédelem fontos",
+            }]})
+
+    trace = RequestTrace("desktop")
+    assert guard_response(
+        OverlappingSpanClient(), "gemma4:26b", prompt, draft, trace=trace,
+    ) == "Ebben a mondatban az adatvédelem fontos szerepet kap."
+    assert trace.snapshot()["metadata"]["language_repair_span_count"] == 1
+
+
+def test_sentence_audit_rejects_a_response_that_omits_a_sentence_judgment():
+    prompt = "Válaszolj magyarul."
+
+    class IncompleteAuditClient:
+        supports_hungarian_fluency_audit = True
+
+        def chat_once(self, model, messages, **kwargs):
+            assert len(_audit_segments(messages)) == 2
+            return json.dumps({"judgments": [[0, "pass"]]})
+
+    with pytest.raises(FluencyAuditFailed, match="must judge every response sentence"):
+        guard_response(
+            IncompleteAuditClient(),
+            "gemma4:26b",
+            prompt,
+            "Az első mondat rendben van. A második is rendben van.",
+        )
 
 
 def test_clean_long_hungarian_answer_passes_without_editorial_repair():
@@ -246,6 +411,7 @@ def test_clean_long_hungarian_ai_answer_with_technical_terms_needs_no_repair():
     )
     draft = "\n\n".join(paragraph * 4 for _ in range(10))
     client = EditorialRepairClient("this must not be used")
+    trace = RequestTrace("desktop")
 
     assert guard_response(
         client,
@@ -254,9 +420,13 @@ def test_clean_long_hungarian_ai_answer_with_technical_terms_needs_no_repair():
         draft,
         constraints=constraints,
         output_budget=2048,
+        trace=trace,
     ) == draft
     assert len(client.calls) == 1
     assert "Hungarian fluency classifier" in client.calls[0][1][0]["content"]
+    snapshot = trace.snapshot()
+    assert snapshot["metadata"]["fluency_sentences_failed"] == 0
+    assert snapshot["metadata"].get("language_repair_span_count", 0) == 0
 
 
 def test_desktop_clean_long_answer_uses_primary_generation_and_audit_without_repair():
@@ -320,7 +490,7 @@ def test_contaminated_long_hungarian_answer_gets_one_bounded_editorial_repair():
         def chat_once(self, model, messages, **kwargs):
             self.calls.append((model, messages, kwargs))
             if "Hungarian fluency classifier" in messages[0]["content"]:
-                return json.dumps({"status": "pass", "findings": []})
+                return _passing_fluency_audit(messages)
             payload = json.loads(messages[1]["content"].split(
                 "BOUNDED SPANS TO REPAIR:\n", 1
             )[1])
@@ -386,7 +556,7 @@ def test_multiple_separated_contaminated_spans_preserve_untouched_text():
         def chat_once(self, model, messages, **kwargs):
             self.calls.append((model, messages, kwargs))
             if "Hungarian fluency classifier" in messages[0]["content"]:
-                return json.dumps({"status": "pass", "findings": []})
+                return _passing_fluency_audit(messages)
             payload = json.loads(messages[1]["content"].split(
                 "BOUNDED SPANS TO REPAIR:\n", 1
             )[1])
