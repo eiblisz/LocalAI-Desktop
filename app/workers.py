@@ -52,13 +52,11 @@ from .multi_asset_market_data import run_multi_asset_market_request
 from .language_policy import (
     detect_user_language,
     effective_response_language,
-    repair_preserves_response_shape,
     response_language_instruction,
     response_language_matches,
-    response_language_repair_instruction,
 )
 from .ollama_client import OllamaClient, ollama_failure_metadata
-from .response_guard import guard_response, validate_response
+from .response_guard import ResponseValidationError, guard_response
 from .request_semantics import (
     TASK_DIRECT_FACT,
     TASK_ENTITY_OVERVIEW,
@@ -744,87 +742,32 @@ class ChatWebWorker(QObject):
 
     def _repair_response_language(self, answer):
         language_source = self._response_language_source()
-        if self.trace is not None:
-            self.trace.begin("language_validation")
-        validation = validate_response(language_source, answer)
-        if self.trace is not None:
-            self.trace.end("language_validation")
-        if validation.valid:
-            return answer
-
-        expected = effective_response_language(language_source)
-        if expected not in {"hu", "de", "en"}:
-            return answer
-
-        if self.trace is not None:
-            self.trace.begin("language_repair")
-        self.phase.emit("Nyelvi javítás")
-
-        self.execution_control.claim_repair()
-        repaired = self._chat_once(
-            model=self.model,
-            num_predict=self.output_budget,
-            call_phase="language_repair",
-            messages=[
-                {
-                    "role": "system",
-                    "content": response_language_repair_instruction(
-                        language_source
+        try:
+            return guard_response(
+                self.client,
+                self.model,
+                language_source,
+                answer,
+                control=self.execution_control,
+                output_budget=self.output_budget,
+                trace=self.trace,
+                phase_callback=self.phase.emit,
+            )
+        except ResponseValidationError as exc:
+            if self.trace is not None:
+                self.trace.add_metadata(
+                    language_repair_failure_classification=str(
+                        getattr(exc, "localai_failure_classification", "")
                     ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        "DRAFT TO REPAIR:\n"
-                        + answer
-                        + (
-                            "\n\nVERIFIED EVIDENCE REFERENCE "
-                            "(do not add content absent from the draft):\n"
-                            + self._factual_authority_text
-                            if self._factual_authority_text
-                            else ""
-                        )
-                    ),
-                },
-            ],
-        ).strip()
-
-        if self.trace is not None:
-            self.trace.end("language_repair")
-
-        repaired_validation = validate_response(
-            language_source,
-            repaired,
-        )
-        if (
-            repaired
-            and repaired_validation.valid
-            and repair_preserves_response_shape(answer, repaired)
-        ):
-            return repaired
-
-        if expected == "hu":
-            fallback = deterministic_hungarian_fact_fallback(
-                self._factual_authority_text,
-                self.request_profile.requested_fact,
-            )
-            if fallback:
-                return fallback
-
-        if expected == "hu":
-            return (
-                "A választ most nem sikerült megbízhatóan összeállítani a "
-                "rendelkezésre álló forrásokból. Kérlek, próbáld újra."
-            )
-        if expected == "de":
-            return (
-                "Die Antwort konnte aus den verfügbaren Quellen nicht zuverlässig "
-                "erstellt werden. Bitte versuche es erneut."
-            )
-        return (
-            "A reliable answer could not be produced from the available sources. "
-            "Please try again."
-        )
+                )
+            if effective_response_language(language_source) == "hu":
+                fallback = deterministic_hungarian_fact_fallback(
+                    self._factual_authority_text,
+                    self.request_profile.requested_fact,
+                )
+                if fallback:
+                    return fallback
+            raise
 
     def _query_is_literal_followup_command(self, query):
         normalized = self._fold_text(query)

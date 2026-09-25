@@ -6,6 +6,7 @@ from app.response_guard import (
     unexpected_script_issues,
     validate_response,
 )
+from app.ollama_client import ollama_failure_metadata
 from app.task_constraints import build_task_constraints
 
 
@@ -72,7 +73,7 @@ def test_guard_repairs_once_and_preserves_required_factual_literals_in_instructi
     prompt = "Válaszolj magyarul: a modell ára 42 EUR, forrás https://example.test."
     constraints = build_task_constraints(prompt)
     client = RepairClient(
-        "A modell ára 42 EUR, forrás: https://example.test."
+        "A modell ára 42 EUR."
     )
 
     result = guard_response(
@@ -83,28 +84,65 @@ def test_guard_repairs_once_and_preserves_required_factual_literals_in_instructi
         constraints=constraints,
     )
 
-    assert result == "A modell ára 42 EUR, forrás: https://example.test."
+    assert result == "A modell ára 42 EUR. Forrás: https://example.test."
     assert len(client.calls) == 1
 
 
-def test_guard_rejects_repair_that_changes_grounded_literals():
+def test_guard_rejects_span_repair_that_changes_grounded_literals():
     prompt = "Válaszolj magyarul."
     constraints = build_task_constraints(prompt)
-    client = RepairClient("Az ár 43 EUR. Forrás: https://other.test.")
+    client = RepairClient("Az ár 43 EUR.")
 
-    with pytest.raises(ResponseValidationError, match="factual_literal_changed"):
+    with pytest.raises(ResponseValidationError, match="repair_integrity_failed") as exc:
         guard_response(
             client,
             "qwen-test",
             prompt,
-            "The price is 42 EUR. Source: https://example.test.",
+            "The price is 42 EUR.",
+            constraints=constraints,
+        )
+
+    metadata = ollama_failure_metadata(exc.value)
+    assert metadata["ollama_failure_classification"] == "integrity_failed"
+    assert metadata["ollama_call_phase"] == "repair_integrity_validation"
+
+    assert len(client.calls) == 1
+    system = client.calls[0][1][0]["content"]
+    assert "Preserve every number" in system
+    assert "strict JSON" in system
+
+
+def test_guard_rejects_span_repair_that_changes_a_proper_name():
+    prompt = "V\u00e1laszolj magyarul."
+    constraints = build_task_constraints(prompt)
+    client = RepairClient("Kirk Hammett ismert zen\u00e9sz.")
+
+    with pytest.raises(ResponseValidationError, match="repair_integrity_failed"):
+        guard_response(
+            client,
+            "qwen-test",
+            prompt,
+            "James Hetfield loosely ismert zen\u00e9sz.",
             constraints=constraints,
         )
 
     assert len(client.calls) == 1
-    system = client.calls[0][1][0]["content"]
-    assert "Preserve every URL, number" in system
-    assert "Do not add new facts" in system
+
+
+def test_clean_response_keeps_outer_whitespace_unchanged():
+    prompt = "V\u00e1laszolj magyarul."
+    constraints = build_task_constraints(prompt)
+    draft = "\n  Ez egy magyar v\u00e1lasz.  \n"
+    client = RepairClient("this must not be used")
+
+    assert guard_response(
+        client,
+        "qwen-test",
+        prompt,
+        draft,
+        constraints=constraints,
+    ) == draft
+    assert client.calls == []
 
 
 def test_guard_allows_locale_only_number_formatting_changes():

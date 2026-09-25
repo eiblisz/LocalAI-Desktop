@@ -147,6 +147,11 @@ _CAPITALIZED_LITERAL_RE = re.compile(
     r"[A-ZÁÉÍÓÖŐÚÜŰ][\w-]*[A-ZÁÉÍÓÖŐÚÜŰ][\w-]*)\b",
     flags=re.UNICODE,
 )
+_PROPER_NAME_PHRASE_RE = re.compile(
+    r"\b(?:[A-ZÁÉÍÓÖŐÚÜŰ][a-záéíóöőúüű]+(?:[-'][A-ZÁÉÍÓÖŐÚÜŰa-záéíóöőúüű]+)?)"
+    r"(?:\s+[A-ZÁÉÍÓÖŐÚÜŰ][a-záéíóöőúüű]+(?:[-'][A-ZÁÉÍÓÖŐÚÜŰa-záéíóöőúüű]+)?){1,3}\b",
+    flags=re.UNICODE,
+)
 
 PREFERRED_RESPONSE_LANGUAGE = "hu"
 
@@ -401,10 +406,12 @@ def protected_response_literals(text):
             literals.append("technical:" + term.casefold())
     for value in _CAPITALIZED_LITERAL_RE.findall(response_validation_text(raw)):
         literals.append("name:" + value.rstrip("._-/:"))
-    return Counter(set(literals))
+    for value in _PROPER_NAME_PHRASE_RE.findall(response_validation_text(raw)):
+        literals.append("name:" + value.casefold())
+    return Counter(literals)
 
 
-def repair_preserves_response_shape(original, repaired):
+def repair_preserves_response_shape(original, repaired, *, preserve_proper_names=True):
     """Keep a quality repair editorial: preserve facts, structure and length."""
     source = str(original or "").strip()
     candidate = str(repaired or "").strip()
@@ -413,10 +420,11 @@ def repair_preserves_response_shape(original, repaired):
     if not repair_preserves_factual_literals(source, candidate):
         return False
 
-    required_literals = protected_response_literals(source)
-    actual_literals = protected_response_literals(candidate)
-    if any(actual_literals[value] < count for value, count in required_literals.items()):
-        return False
+    if preserve_proper_names:
+        required_literals = protected_response_literals(source)
+        actual_literals = protected_response_literals(candidate)
+        if any(actual_literals[value] < count for value, count in required_literals.items()):
+            return False
 
     source_paragraphs = [item for item in re.split(r"\n\s*\n", source) if item.strip()]
     candidate_paragraphs = [item for item in re.split(r"\n\s*\n", candidate) if item.strip()]

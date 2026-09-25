@@ -48,6 +48,24 @@ def public_error(message, *, language="hu"):
                 "The response reached its safe output limit, so I did not show a truncated answer. Please try a shorter request."
             ),
         )
+    if "language_repair_failed" in lowered:
+        return PublicError(
+            "language_repair_failed",
+            (
+                "A válasz nyelvi hibáját most nem sikerült biztonságosan javítani. Próbáld meg újra."
+                if hungarian else
+                "I could not safely repair a language issue in the response. Please try again."
+            ),
+        )
+    if "repair_integrity_failed" in lowered:
+        return PublicError(
+            "repair_integrity_failed",
+            (
+                "A válasz javítása megváltoztatta volna a védett tartalmat, ezért elutasítottam. Próbáld meg újra."
+                if hungarian else
+                "The repair would have changed protected response content, so it was rejected. Please try again."
+            ),
+        )
     return PublicError(
         "execution_failed",
         (

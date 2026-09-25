@@ -1,11 +1,17 @@
+import json
+import inspect
+
+import pytest
+
 from app.language_policy import (
     hungarian_output_quality_issues,
     repair_preserves_response_shape,
 )
 from app.request_trace import RequestTrace
-from app.response_guard import guard_response, validate_response
+from app.response_guard import LanguageRepairFailed, guard_response, validate_response
 from app.task_constraints import build_task_constraints
 from app.workers import AdaptiveChatWorker
+from app.ollama_client import ollama_failure_metadata
 
 
 class EditorialRepairClient:
@@ -73,7 +79,7 @@ def test_clean_long_hungarian_answer_passes_without_editorial_repair():
     )
 
     assert validation.valid is True
-    assert result == draft.strip()
+    assert result == draft
     assert len(client.calls) == 0
 
 
@@ -128,8 +134,27 @@ def test_contaminated_long_hungarian_answer_gets_one_bounded_editorial_repair():
     draft = "\n\n".join(paragraphs).replace(
         "adatmintákból", "loosely adatminta alapján", 1
     )
+    class SpanRepairClient:
+        def __init__(self):
+            self.calls = []
+
+        def chat_once(self, model, messages, **kwargs):
+            self.calls.append((model, messages, kwargs))
+            payload = json.loads(messages[1]["content"].split(
+                "BOUNDED SPANS TO REPAIR:\n", 1
+            )[1])
+            return json.dumps({
+                "repairs": [{
+                    "id": item["id"],
+                    "text": item["text"].replace(
+                        "loosely adatminta alapján", "adatmintákból"
+                    ),
+                } for item in payload],
+            })
+
     repaired = draft.replace("loosely adatminta alapján", "adatmintákból")
-    client = EditorialRepairClient(repaired)
+    client = SpanRepairClient()
+    trace = RequestTrace("desktop")
 
     result = guard_response(
         client,
@@ -138,11 +163,104 @@ def test_contaminated_long_hungarian_answer_gets_one_bounded_editorial_repair():
         draft,
         constraints=constraints,
         output_budget=2048,
+        trace=trace,
     )
 
-    assert result == repaired.strip()
+    assert result == repaired
     assert len(client.calls) == 1
     assert repair_preserves_response_shape(draft, result)
+    payload = json.loads(client.calls[0][1][1]["content"].split(
+        "BOUNDED SPANS TO REPAIR:\n", 1
+    )[1])
+    assert len(payload) == 1
+    assert "loosely" in payload[0]["text"]
+    snapshot = trace.snapshot()
+    assert snapshot["metadata"]["language_repair_span_count"] == 1
+    assert snapshot["metadata"]["language_repair_result"] == "completed"
+    assert snapshot["metadata"]["repair_integrity_result"] == "pass"
+    assert {"language_validation", "language_repair", "repair_integrity_validation"} <= set(
+        snapshot["phases_ms"]
+    )
+
+
+def test_multiple_separated_contaminated_spans_preserve_untouched_text():
+    prompt = "Válaszolj magyarul."
+    constraints = build_task_constraints(prompt)
+    untouched = "A harmadik bekezdés változatlan marad, benne az LLM és a GPU kifejezésekkel."
+    draft = (
+        "Az OpenAI modell ára 42 EUR, forrás: https://example.test. 잘못 mondat.\n\n"
+        "A második bekezdés loosely kevert nyelvű maradt.\n\n"
+        + untouched
+    )
+
+    class BatchSpanClient:
+        def __init__(self):
+            self.calls = []
+
+        def chat_once(self, model, messages, **kwargs):
+            self.calls.append((model, messages, kwargs))
+            payload = json.loads(messages[1]["content"].split(
+                "BOUNDED SPANS TO REPAIR:\n", 1
+            )[1])
+            return json.dumps({"repairs": [
+                {
+                    "id": item["id"],
+                    "text": item["text"]
+                    .replace("잘못", "hibás")
+                    .replace("loosely", "véletlenül"),
+                }
+                for item in payload
+            ]})
+
+    client = BatchSpanClient()
+    result = guard_response(
+        client, "gemma4:26b", prompt, draft, constraints=constraints,
+    )
+
+    assert len(client.calls) == 1
+    payload = json.loads(client.calls[0][1][1]["content"].split(
+        "BOUNDED SPANS TO REPAIR:\n", 1
+    )[1])
+    assert len(payload) == 2
+    assert untouched in result
+    assert "OpenAI" in result
+    assert "42 EUR" in result
+    assert "https://example.test" in result
+    assert "LLM" in result and "GPU" in result
+
+
+def test_bounded_repair_that_keeps_contamination_is_language_repair_failure():
+    prompt = "Válaszolj magyarul."
+    constraints = build_task_constraints(prompt)
+    client = EditorialRepairClient("Ez a mondat továbbra is 잘못 szöveget tartalmaz.")
+    trace = RequestTrace("desktop")
+
+    with pytest.raises(LanguageRepairFailed, match="language_repair_failed") as exc:
+        guard_response(
+            client,
+            "gemma4:26b",
+            prompt,
+            "Ez a mondat 잘못 szöveget tartalmaz.",
+            constraints=constraints,
+            trace=trace,
+        )
+
+    metadata = ollama_failure_metadata(exc.value)
+    assert metadata["ollama_failure_classification"] == "language_repair_failed"
+    assert metadata["ollama_call_phase"] == "repair_integrity_validation"
+    snapshot = trace.snapshot()
+    assert snapshot["metadata"]["language_repair_result"] == "completed"
+    assert snapshot["metadata"]["repair_integrity_result"] == "failed"
+
+
+def test_discord_and_desktop_use_the_shared_span_repair_guard():
+    from app.discord_bot_bridge import DiscordBotBridge
+
+    desktop_source = inspect.getsource(AdaptiveChatWorker.run)
+    discord_source = inspect.getsource(DiscordBotBridge._answer_prompt)
+
+    assert "guard_response(" in desktop_source
+    assert "guard_response(" in discord_source
 
 
 def test_editorial_repair_rejects_shortened_long_answer():
