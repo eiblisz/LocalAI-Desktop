@@ -420,28 +420,36 @@ def test_controlled_chat_once_uses_streaming_and_honors_budget(monkeypatch):
 
 
 
-def test_controlled_structured_chat_once_uses_non_streaming_json(monkeypatch):
+def test_controlled_structured_chat_once_accepts_complete_json_without_done_marker(monkeypatch):
+    import json
+
     from app.runtime_control import ExecutionBudget, ExecutionControl
 
     captured = {}
 
-    class StructuredResponse:
+    class StructuredStreamResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def close(self):
+            return None
+
         def raise_for_status(self):
             return None
 
-        def json(self):
-            return {
-                "message": {
-                    "content": '{"judgments":[[0,"pass"]]}'
-                },
-                "done": True,
-                "done_reason": "stop",
-            }
+        def iter_lines(self):
+            yield json.dumps({
+                "message": {"content": '{"judgments":[[0,"pass"]]}'} ,
+                "done": False,
+            }).encode("utf-8")
 
     def fake_post(url, **kwargs):
         captured["url"] = url
         captured.update(kwargs)
-        return StructuredResponse()
+        return StructuredStreamResponse()
 
     monkeypatch.setattr("app.ollama_client.requests.post", fake_post)
     control = ExecutionControl(
@@ -458,10 +466,10 @@ def test_controlled_structured_chat_once_uses_non_streaming_json(monkeypatch):
     )
 
     assert result == '{"judgments":[[0,"pass"]]}'
-    assert captured["json"]["stream"] is False
+    assert captured["json"]["stream"] is True
     assert captured["json"]["format"] == "json"
     assert captured["json"]["options"]["num_predict"] == 512
-    assert "stream" not in captured
+    assert captured["stream"] is True
     assert control.budget.model_calls == 1
 
 
