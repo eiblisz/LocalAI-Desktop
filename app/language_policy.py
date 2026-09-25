@@ -364,14 +364,13 @@ def repair_preserves_factual_literals(original, repaired):
     return all(actual[value] >= count for value, count in required.items())
 
 
-def hungarian_output_quality_issues(text, *, editorial_reviewed=False):
+def hungarian_output_quality_issues(text):
     """Return generic editorial-quality issues for Hungarian prose.
 
     This deliberately avoids a list of individual misspellings.  The
     deterministic checks catch broken Unicode and unmistakable foreign-word
-    morphology; long prose is sent through one bounded editorial review so a
-    local model can catch the subtler malformed hybrids that rules cannot
-    safely enumerate.
+    morphology.  It intentionally does not treat length as a defect: healthy
+    long Hungarian answers must not create another model call.
     """
     prose = response_validation_text(text)
     issues = []
@@ -390,15 +389,6 @@ def hungarian_output_quality_issues(text, *, editorial_reviewed=False):
     if foreign_words:
         issues.append("foreign_language_fragment")
 
-    # A long answer has enough prose for a useful quality pass.  This catches
-    # malformed hybrid Hungarian without pretending that a fixed typo list can
-    # model Hungarian morphology.  Short factual replies remain fast unless a
-    # concrete issue above is present.
-    if (
-        not editorial_reviewed
-        and (len(prose) >= 900 or len(re.findall(r"\n\s*\n", prose)) >= 3)
-    ):
-        issues.append("long_form_editorial_review")
     return tuple(dict.fromkeys(issues))
 
 

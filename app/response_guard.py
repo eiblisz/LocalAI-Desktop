@@ -77,8 +77,6 @@ def validate_response(
     user_text,
     response_text,
     constraints=None,
-    *,
-    editorial_reviewed=False,
 ):
     expected = _expected_language(user_text, constraints)
     issues = list(unexpected_script_issues(user_text, response_text, constraints))
@@ -90,10 +88,7 @@ def validate_response(
         issues.append("language_mismatch")
     if expected == "hu":
         issues.extend(
-            hungarian_output_quality_issues(
-                response_text,
-                editorial_reviewed=editorial_reviewed,
-            )
+            hungarian_output_quality_issues(response_text)
         )
 
     return ResponseValidation(
@@ -157,6 +152,8 @@ def guard_response(
     constraints=None,
     control=None,
     output_budget=None,
+    trace=None,
+    phase_callback=None,
 ):
     """
     Validate one final model response and perform at most one bounded repair.
@@ -167,11 +164,15 @@ def guard_response(
     if not draft:
         return draft
 
-    validation = validate_response(
-        user_text,
-        draft,
-        constraints=constraints,
-    )
+    if trace is not None:
+        trace.begin("language_validation")
+    validation = validate_response(user_text, draft, constraints=constraints)
+    if trace is not None:
+        trace.end(
+            "language_validation",
+            language_validation_result=("pass" if validation.valid else "repair_required"),
+            language_validation_issues=",".join(validation.issues),
+        )
     if validation.valid:
         return draft
 
@@ -181,31 +182,51 @@ def guard_response(
         validation,
         constraints=constraints,
     )
+    if control is not None:
+        control.claim_repair()
     call_kwargs = {"model": model, "messages": repair_messages}
     if control is not None:
         call_kwargs["control"] = control
     if output_budget is not None:
         call_kwargs["num_predict"] = int(output_budget)
-    while True:
-        try:
-            repaired = client.chat_once(**call_kwargs).strip()
-            break
-        except TypeError as exc:
-            # Lightweight test and extension clients may implement the older
-            # client signature. The real Ollama client receives the shared budget.
-            if "control" in str(exc) and "control" in call_kwargs:
-                call_kwargs.pop("control")
-                continue
-            if "num_predict" in str(exc) and "num_predict" in call_kwargs:
-                call_kwargs.pop("num_predict")
-                continue
-            raise
+    call_kwargs["call_phase"] = "language_repair"
+    if trace is not None:
+        trace.begin("language_repair")
+        trace.add_metadata(language_repair_attempted=True)
+    if callable(phase_callback):
+        phase_callback("Nyelvi javítás")
+    try:
+        while True:
+            try:
+                repaired = client.chat_once(**call_kwargs).strip()
+                break
+            except TypeError as exc:
+                # Lightweight test and extension clients may implement the older
+                # client signature. The real Ollama client receives the shared budget.
+                if "control" in str(exc) and "control" in call_kwargs:
+                    call_kwargs.pop("control")
+                    continue
+                if "num_predict" in str(exc) and "num_predict" in call_kwargs:
+                    call_kwargs.pop("num_predict")
+                    continue
+                if "call_phase" in str(exc) and "call_phase" in call_kwargs:
+                    call_kwargs.pop("call_phase")
+                    continue
+                raise
+    except Exception:
+        if trace is not None:
+            trace.end("language_repair", language_repair_result="failed")
+        raise
+    else:
+        if trace is not None:
+            trace.end("language_repair", language_repair_result="completed")
 
+    if trace is not None:
+        trace.begin("repair_integrity_validation")
     repaired_validation = validate_response(
         user_text,
         repaired,
         constraints=constraints,
-        editorial_reviewed=True,
     )
     integrity_issue = ""
     if not repair_preserves_factual_literals(draft, repaired):
@@ -219,6 +240,12 @@ def guard_response(
             issues=tuple(dict.fromkeys(
                 repaired_validation.issues + (integrity_issue,)
             )),
+        )
+    if trace is not None:
+        trace.end(
+            "repair_integrity_validation",
+            repair_integrity_result=("pass" if repaired and repaired_validation.valid else "failed"),
+            repair_integrity_issues=",".join(repaired_validation.issues),
         )
     if repaired and repaired_validation.valid:
         return repaired

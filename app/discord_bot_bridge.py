@@ -32,7 +32,7 @@ from .artifact_service import (
 )
 from .config import DEFAULT_SYSTEM_PROMPT
 from .generation_policy import build_generation_policy
-from .ollama_client import OllamaClient, ollama_failure_metadata
+from .ollama_client import OllamaClient
 from .extension_authority import (
     ExtensionAuthority,
     ExtensionExecutionContext,
@@ -66,7 +66,7 @@ from .web_intent import (
     plan_user_action,
 )
 from .response_guard import guard_response
-from .workers import run_chat_web_request, run_market_web_request
+from .workers import _record_ollama_failure, run_chat_web_request, run_market_web_request
 
 
 DISCORD_API_BASE = "https://discord.com/api/v10"
@@ -378,8 +378,8 @@ class DiscordBotBridge(QObject):
                     trace.add_metadata(
                         failure_code=public.code,
                         diagnostic_failure=compact,
-                        **ollama_failure_metadata(exc),
                     )
+                    _record_ollama_failure(trace, exc)
                     trace.emit_if_enabled()
                     try:
                         await message.reply(
@@ -514,8 +514,8 @@ class DiscordBotBridge(QObject):
                     child_status="failed",
                     failure_code=public.code,
                     diagnostic_failure=compact,
-                    **ollama_failure_metadata(child_exc),
                 )
+                _record_ollama_failure(child_trace, child_exc)
                 last_chat_id = (
                     self._persist_child_failure(
                         content,
@@ -1388,11 +1388,13 @@ class DiscordBotBridge(QObject):
         else:
             if trace is not None:
                 trace.begin("model_inference")
+                trace.begin("primary_generation")
             if isinstance(self.ollama_client, OllamaClient):
                 answer = self.ollama_client.chat_once(
                     model=self.settings.model,
                     messages=messages,
                     num_predict=output_budget,
+                    call_phase="primary_generation",
                 ).strip()
             else:
                 answer = self.ollama_client.chat_once(
@@ -1401,6 +1403,7 @@ class DiscordBotBridge(QObject):
                 ).strip()
             if trace is not None:
                 trace.end("model_inference")
+                trace.end("primary_generation", primary_generation_result="completed")
             if allow_web_fallback and answer_requires_web_fallback(prompt, answer):
                 used_web_response = True
                 answer = self._run_chat_web(
@@ -1418,8 +1421,6 @@ class DiscordBotBridge(QObject):
         # Keep local Discord replies on the same bounded language/quality path
         # as Desktop replies. Web replies already pass through ChatWebWorker.
         if not used_web_response:
-            if trace is not None:
-                trace.begin("language_validation")
             answer = guard_response(
                 self.ollama_client,
                 self.settings.model,
@@ -1427,9 +1428,8 @@ class DiscordBotBridge(QObject):
                 answer,
                 constraints=constraints,
                 output_budget=output_budget,
+                trace=trace,
             )
-            if trace is not None:
-                trace.end("language_validation")
 
         chat["messages"].append({"role": "assistant", "content": answer})
         self.chat_store.save(chat)

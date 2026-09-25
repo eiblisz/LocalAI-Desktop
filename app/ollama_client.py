@@ -28,7 +28,14 @@ class IncompleteGenerationError(RuntimeError):
     pass
 
 
-def _tag_ollama_failure(exc, *, stage, classification, request_sequence=None):
+def _tag_ollama_failure(
+    exc,
+    *,
+    stage,
+    classification,
+    request_sequence=None,
+    call_phase=None,
+):
     """Attach safe, machine-readable context without replacing the root error."""
     try:
         exc.localai_failure_stage = str(stage)
@@ -36,6 +43,8 @@ def _tag_ollama_failure(exc, *, stage, classification, request_sequence=None):
         if request_sequence is not None:
             exc.localai_ollama_request_sequence = int(request_sequence)
             exc.localai_ollama_initial_request = int(request_sequence) == 1
+        if call_phase:
+            exc.localai_ollama_call_phase = str(call_phase)
         response = getattr(exc, "response", None)
         status = getattr(response, "status_code", None)
         if status is not None:
@@ -71,8 +80,8 @@ def ollama_failure_metadata(exc):
             stage = "model_preparation"
             classification = "model_resource_safety"
         else:
-            stage = "model_inference"
-            classification = "unclassified_model_error"
+            stage = "unknown"
+            classification = "unexpected_execution_error"
 
     metadata = {
         "ollama_failure_stage": stage,
@@ -82,6 +91,7 @@ def ollama_failure_metadata(exc):
         ("localai_ollama_request_sequence", "ollama_request_sequence"),
         ("localai_ollama_initial_request", "ollama_initial_request"),
         ("localai_ollama_http_status", "ollama_http_status"),
+        ("localai_ollama_call_phase", "ollama_call_phase"),
     ):
         value = getattr(exc, attribute, None)
         if value is not None:
@@ -411,7 +421,9 @@ class OllamaClient:
         response_format=None,
         control=None,
         num_predict=None,
+        call_phase=None,
     ) -> str:
+        call_phase = str(call_phase or "model_inference")
         request_sequence = self._next_request_sequence()
         if control is not None:
             control.claim_model_call()
@@ -426,6 +438,7 @@ class OllamaClient:
                     stage="model_preparation",
                     classification="model_prepare_failed",
                     request_sequence=request_sequence,
+                    call_phase=call_phase,
                 )
 
         request_id = uuid.uuid4().hex
@@ -499,6 +512,7 @@ class OllamaClient:
                         stage="stream_completion",
                         classification="stream_terminated_without_completion",
                         request_sequence=request_sequence,
+                        call_phase=call_phase,
                     )
             if str(item.get("done_reason") or "").strip().lower() == "length":
                 raise _tag_ollama_failure(
@@ -509,6 +523,7 @@ class OllamaClient:
                     stage="generation_length",
                     classification="output_token_limit",
                     request_sequence=request_sequence,
+                    call_phase=call_phase,
                 )
         except Exception as exc:
             if not getattr(exc, "localai_failure_stage", ""):
@@ -518,6 +533,7 @@ class OllamaClient:
                     stage=stage,
                     classification=classification,
                     request_sequence=request_sequence,
+                    call_phase=call_phase,
                 )
             self._set_request_state(
                 model,
@@ -545,7 +561,9 @@ class OllamaClient:
         timeout: float = 600.0,
         control=None,
         num_predict=None,
+        call_phase=None,
     ) -> None:
+        call_phase = str(call_phase or "model_inference")
         request_sequence = self._next_request_sequence()
         if control is not None:
             control.claim_model_call()
@@ -560,6 +578,7 @@ class OllamaClient:
                     stage="model_preparation",
                     classification="model_prepare_failed",
                     request_sequence=request_sequence,
+                    call_phase=call_phase,
                 )
 
         request_id = uuid.uuid4().hex
@@ -635,6 +654,7 @@ class OllamaClient:
                         stage="stream_completion",
                         classification="stream_terminated_without_completion",
                         request_sequence=request_sequence,
+                        call_phase=call_phase,
                     )
                 if not stopped and done_reason == "length":
                     raise _tag_ollama_failure(
@@ -645,6 +665,7 @@ class OllamaClient:
                         stage="generation_length",
                         classification="output_token_limit",
                         request_sequence=request_sequence,
+                        call_phase=call_phase,
                     )
         except Exception as exc:
             if not getattr(exc, "localai_failure_stage", ""):
@@ -654,6 +675,7 @@ class OllamaClient:
                     stage=stage,
                     classification=classification,
                     request_sequence=request_sequence,
+                    call_phase=call_phase,
                 )
             self._set_request_state(
                 model,

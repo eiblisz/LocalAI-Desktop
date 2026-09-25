@@ -711,6 +711,7 @@ def test_worker_request_trace_keeps_classified_ollama_failure(monkeypatch):
     assert metadata["ollama_failure_stage"] == "ollama_transport"
     assert metadata["ollama_failure_classification"] == "transport_connection"
     assert metadata["ollama_initial_request"] is True
+    assert metadata["ollama_call_phase"] == "primary_generation"
 
 
 def test_chat_stream_rejects_response_without_terminal_completion(monkeypatch):

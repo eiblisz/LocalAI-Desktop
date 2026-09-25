@@ -118,7 +118,13 @@ def _record_ollama_timing(trace, metadata, wall_ms):
 def _record_ollama_failure(trace, exc):
     """Preserve a classified root cause before the UI presents a safe error."""
     if trace is not None:
-        trace.add_metadata(**ollama_failure_metadata(exc))
+        metadata = ollama_failure_metadata(exc)
+        trace.add_metadata(**metadata)
+        call_phase = metadata.get("ollama_call_phase")
+        if call_phase == "primary_generation":
+            trace.end("primary_generation", primary_generation_result="failed")
+        elif call_phase == "language_repair":
+            trace.end("language_repair", language_repair_result="failed")
 
 
 class ChatWorker(QObject):
@@ -487,13 +493,20 @@ class ChatWebWorker(QObject):
                 **kwargs,
             )
         self.execution_control.claim_model_call()
-        try:
-            return self.client.chat_once(**kwargs)
-        except TypeError as exc:
-            if "num_predict" not in str(exc) or "num_predict" not in kwargs:
-                raise
-            kwargs.pop("num_predict")
-            return self.client.chat_once(**kwargs)
+        while True:
+            try:
+                return self.client.chat_once(**kwargs)
+            except TypeError as exc:
+                unsupported = next(
+                    (
+                        name for name in ("num_predict", "call_phase")
+                        if name in str(exc) and name in kwargs
+                    ),
+                    "",
+                )
+                if not unsupported:
+                    raise
+                kwargs.pop(unsupported)
 
     def _chat_stream(self, **kwargs):
         if isinstance(self.client, OllamaClient):
@@ -502,13 +515,20 @@ class ChatWebWorker(QObject):
                 **kwargs,
             )
         self.execution_control.claim_model_call()
-        try:
-            return self.client.chat_stream(**kwargs)
-        except TypeError as exc:
-            if "num_predict" not in str(exc) or "num_predict" not in kwargs:
-                raise
-            kwargs.pop("num_predict")
-            return self.client.chat_stream(**kwargs)
+        while True:
+            try:
+                return self.client.chat_stream(**kwargs)
+            except TypeError as exc:
+                unsupported = next(
+                    (
+                        name for name in ("num_predict", "call_phase")
+                        if name in str(exc) and name in kwargs
+                    ),
+                    "",
+                )
+                if not unsupported:
+                    raise
+                kwargs.pop(unsupported)
 
     def _search_payload(self, query, *, max_results, fetch_pages):
         self.execution_control.claim_search()
@@ -744,6 +764,7 @@ class ChatWebWorker(QObject):
         repaired = self._chat_once(
             model=self.model,
             num_predict=self.output_budget,
+            call_phase="language_repair",
             messages=[
                 {
                     "role": "system",
@@ -774,7 +795,6 @@ class ChatWebWorker(QObject):
         repaired_validation = validate_response(
             language_source,
             repaired,
-            editorial_reviewed=True,
         )
         if (
             repaired
@@ -2239,6 +2259,7 @@ class AdaptiveChatWorker(QObject):
 
             if self.trace is not None:
                 self.trace.begin("model_inference")
+                self.trace.begin("primary_generation")
             self.phase.emit(f"{self.model} válaszol")
             model_started = perf_counter()
 
@@ -2251,6 +2272,7 @@ class AdaptiveChatWorker(QObject):
                     should_stop=self._stop_event.is_set,
                     control=self.execution_control,
                     num_predict=self.output_budget,
+                    call_phase="primary_generation",
                 )
                 draft = "".join(draft_parts).strip()
                 self.generation_metadata = dict(metadata or {})
@@ -2264,6 +2286,7 @@ class AdaptiveChatWorker(QObject):
 
             if self.trace is not None:
                 self.trace.end("model_inference")
+                self.trace.end("primary_generation", primary_generation_result="completed")
                 _record_ollama_timing(
                     self.trace,
                     self.generation_metadata,
@@ -2329,8 +2352,6 @@ class AdaptiveChatWorker(QObject):
 
             if self.constraints is not None:
                 self.phase.emit("Ellenőrzés")
-                if self.trace is not None:
-                    self.trace.begin("language_validation")
                 final = guard_response(
                     self.client,
                     self.model,
@@ -2339,9 +2360,9 @@ class AdaptiveChatWorker(QObject):
                     constraints=self.constraints,
                     control=self.execution_control,
                     output_budget=self.output_budget,
+                    trace=self.trace,
+                    phase_callback=self.phase.emit,
                 )
-                if self.trace is not None:
-                    self.trace.end("language_validation")
                 final = guard_context_response(
                     self.client,
                     self.model,
