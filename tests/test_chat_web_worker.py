@@ -2227,6 +2227,123 @@ def test_direct_factual_request_uses_one_grounded_model_call_not_forced_second_p
     assert snapshot["metadata"]["factual_authority_chars"] <= 3000
 
 
+def test_direct_factual_insufficient_relation_evidence_forces_guarded_path(
+    monkeypatch,
+):
+    from app.request_trace import RequestTrace
+
+    prompt = "Mikor írta Wrong Author a Silver Storyt?"
+    search_calls = []
+    forced = []
+
+    class InsufficientRelationClient:
+        def __init__(self):
+            self.once_calls = []
+            self.stream_calls = []
+
+        def chat_once(self, model, messages, timeout=600.0, **kwargs):
+            self.once_calls.append((model, messages))
+            raise AssertionError("relation repair is intercepted by the guard stub")
+
+        def chat_stream(
+            self,
+            model,
+            messages,
+            on_token,
+            should_stop,
+            timeout=600.0,
+            **kwargs,
+        ):
+            self.stream_calls.append((model, messages))
+            if not should_stop():
+                on_token("Wrong Author 1922-ben írta a Silver Storyt.")
+
+    def fake_search(query, max_results=6, fetch_pages=True):
+        search_calls.append((query, fetch_pages))
+        return {
+            "provider": "Brave Search API",
+            "query": query,
+            "retrieved_at": "2026-09-26T16:00:00",
+            "provider_chain_errors": [],
+            "results": [{
+                "title": "Silver Story",
+                "url": f"https://example.com/{len(search_calls)}",
+                "snippet": (
+                    "Wrong Author read Correct Author's Silver Story in 1922."
+                ),
+            }],
+        }
+
+    def capture_guard(client, model, user_prompt, answer, authority, **kwargs):
+        forced.append(kwargs.get("force_verify"))
+        return "Wrong Author nem a Silver Story szerzője; a forrás Correct Authort nevezi meg."
+
+    monkeypatch.setattr(workers, "search_web", fake_search)
+    monkeypatch.setattr(
+        workers,
+        "fetch_result_pages",
+        lambda payload, page_fetch_budget=1, timeout=8.0: payload,
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: [
+            item["url"] for item in payload.get("results") or []
+        ],
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_entries",
+        lambda payload, limit=6: [
+            {"title": item["title"], "url": item["url"]}
+            for item in (payload.get("results") or [])[:limit]
+        ],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: "\n".join(
+            item.get("snippet", "") for item in payload.get("results") or []
+        ),
+    )
+    monkeypatch.setattr(workers, "guard_grounded_answer", capture_guard)
+    monkeypatch.setattr(
+        workers,
+        "guard_current_turn_binding",
+        lambda client, model, prompt, answer, authority, **kwargs: answer,
+    )
+
+    client = InsufficientRelationClient()
+    trace = RequestTrace("test")
+    tokens = []
+    errors = []
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        prompt,
+        trace=trace,
+    )
+    worker.token.connect(tokens.append)
+    worker.failed.connect(errors.append)
+    worker.run()
+
+    assert errors == []
+    assert forced == [True]
+    assert len(client.stream_calls) == 1
+    assert client.once_calls == []
+    assert search_calls == [
+        ("Silver Storyt composition writing date year", 0),
+        ("Silver Storyt original composition year", 0),
+    ]
+    assert tokens == [
+        "Wrong Author nem a Silver Story szerzője; a forrás Correct Authort nevezi meg."
+    ]
+    snapshot = trace.snapshot()
+    assert snapshot["metadata"]["generation_strategy"] == "grounded_stream"
+    assert snapshot["metadata"]["evidence_sufficiency"] == "insufficient_after_targeted_search"
+
+
 def test_short_named_identity_question_uses_direct_grounded_lookup_without_query_model(
     monkeypatch,
 ):
