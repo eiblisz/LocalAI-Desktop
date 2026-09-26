@@ -509,16 +509,21 @@ def _parse_fluency_audit(raw_response, response_text, segments):
         segment = segments_by_id[identifier]
         actionable = False
         protected_only = True
+        span_unresolved = False
         for span in spans:
             if not isinstance(span, str) or not span or len(span) > _MAX_FLUENCY_SPAN_CHARS:
-                raise FluencyAuditFailed(
-                    "fluency_audit_failed: Hungarian fluency span is incomplete"
-                )
+                span_unresolved = True
+                protected_only = False
+                continue
             starts = [match.start() for match in re.finditer(re.escape(span), segment["text"])]
             if len(starts) != 1:
-                raise FluencyAuditFailed(
-                    "fluency_audit_failed: Hungarian fluency span is not exact within its sentence"
-                )
+                # One approximate or ambiguous model span must not discard valid
+                # findings from other sentences. Keep this sentence marked
+                # unresolved while allowing the rest of the bounded audit to
+                # repair safely actionable exact spans.
+                span_unresolved = True
+                protected_only = False
+                continue
             start = segment["start"] + starts[0]
             end = start + len(span)
             if _fluency_span_is_protected(raw_response_text, start, end, span, status):
@@ -530,7 +535,9 @@ def _parse_fluency_audit(raw_response, response_text, segments):
         if actionable:
             failed_sentence_ids.add(identifier)
             reason_codes.append(status)
-        elif not protected_only:
+            if span_unresolved:
+                unresolved_sentence_ids.add(identifier)
+        elif span_unresolved or not protected_only:
             failed_sentence_ids.add(identifier)
             unresolved_sentence_ids.add(identifier)
             reason_codes.append(status)
