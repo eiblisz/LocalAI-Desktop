@@ -64,7 +64,8 @@ def _explicit_constraints(text):
 
 
 def _format_constraints(text):
-    folded = str(text or "").casefold()
+    raw = str(text or "")
+    folded = raw.casefold()
     result = []
 
     markers = (
@@ -85,7 +86,24 @@ def _format_constraints(text):
         if marker in folded and canonical not in result:
             result.append(canonical)
 
-    return tuple(result[:8])
+    paragraph_range = re.search(
+        r"(?i)\b(\d{1,2})\s*[-–—]\s*(\d{1,2})\s*"
+        r"(?:bekezdés(?:es)?|bekezdes(?:es)?|paragraphs?|absätze?|absatze?)\b",
+        raw,
+    )
+    if paragraph_range:
+        low, high = sorted((int(paragraph_range.group(1)), int(paragraph_range.group(2))))
+        result.append(f"{low}-{high} paragraphs")
+    else:
+        paragraph_count = re.search(
+            r"(?i)\b(?:legalább\s+|legalabb\s+|at least\s+|mindestens\s+)?"
+            r"(\d{1,2})\s*(?:bekezdés(?:es)?|bekezdes(?:es)?|paragraphs?|absätze?|absatze?)\b",
+            raw,
+        )
+        if paragraph_count:
+            result.append(f"{int(paragraph_count.group(1))} paragraphs")
+
+    return tuple(dict.fromkeys(result))[:8]
 
 
 def build_task_constraints(
@@ -180,6 +198,9 @@ def task_constraints_instruction(constraints, *, current_subtask=""):
     lines.extend([
         f"- Requested response length: {constraints.response_length}.",
         f"- Output budget: {constraints.output_budget}.",
+        "- If the user requests a paragraph count or range, obey it as a hard structural constraint; headings and list items do not count as extra paragraphs unless explicitly requested.",
+        "- Do not append a Sources/Források/References section unless verified source evidence is present in the task context or the user explicitly asks for source attribution.",
+        "- In normal prose, do not emit HTML space entities such as &#x20; or &#32;.",
     ])
 
     if constraints.user_explicit_constraints:
