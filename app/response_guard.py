@@ -315,9 +315,11 @@ def _fluency_audit_messages(segments):
                 "Hungarian word forms and semantically broken short phrases must fail even when the "
                 "rest of the sentence is understandable. A sentence that is mostly good can still "
                 "fail for one short malformed span. Do not rewrite anything and do not flag mere "
-                "style preferences. Do not flag legitimate English technical terminology, proper "
-                "names, URLs, numbers, code, or quoted source titles. Mark pass only when you cannot "
-                "identify a concrete exact malformed span."
+                "style preferences. Treat an unprotected token that is not plausible standard "
+                "Hungarian as hybrid_or_pseudoword, including accidental Latin-script fragments "
+                "from another natural language. Do not flag legitimate English technical terminology, "
+                "proper names, URLs, numbers, code, or quoted source titles. Mark pass only when you "
+                "cannot identify a concrete exact malformed span."
             ),
         },
         {
@@ -644,7 +646,9 @@ def _repair_messages(user_text, spans, constraints=None):
         "claim exactly. Legitimate English technical terms include LLM, token, context window, "
         "training, inference, tool use, GPU and Python. Each replacement must contain only the "
         "corrected version of the exact supplied span; do not include surrounding context, a full "
-        "sentence, explanations or line breaks. Return strict JSON only in this shape: "
+        "sentence, explanations or line breaks. Every returned replacement must actually correct "
+        "the flagged defect; never return the same contaminated span unchanged or merely alter "
+        "punctuation around it. Return strict JSON only in this shape: "
         '{"repairs":[{"id":0,"text":"repaired span"}]}. Return every id exactly once and no other text.'
     )
     if parent_intent:
@@ -880,6 +884,13 @@ def _splice_span_repairs(original, spans, replacements, *, user_text):
             raise LanguageRepairFailed(
                 "language_repair_failed: bounded repair returned an empty span"
             )
+        if span.get("reason"):
+            original_compact = re.sub(r"\s+", " ", str(span["text"] or "")).strip().casefold()
+            replacement_compact = re.sub(r"\s+", " ", replacement).strip().casefold()
+            if original_compact and original_compact in replacement_compact:
+                raise LanguageRepairFailed(
+                    "language_repair_failed: bounded fluency repair left flagged span unchanged"
+                )
         original_length = len(span["text"])
         if "\n" not in span["text"] and ("\n" in replacement or "\r" in replacement):
             raise RepairIntegrityFailed(
