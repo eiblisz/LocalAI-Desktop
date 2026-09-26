@@ -206,6 +206,77 @@ def _temporal_relation_supported(text, relation):
     return True if not expected else any(marker in folded for marker in expected)
 
 
+_DATE_RE = re.compile(
+    r"(?<!\d)(?:1[0-9]{3}|20[0-9]{2})(?!\d)"
+    r"|\b\d{4}-\d{2}-\d{2}\b"
+    r"|\b\d{1,2}[./]\d{1,2}[./](?:19|20)\d{2}\b"
+)
+
+_CREATION_DATE_MARKERS = (
+    "irta", "megirta", "keletkez", "keszult", "wrote", "written",
+    "authored", "composed", "created", "schrieb", "verfasste",
+)
+
+_PUBLICATION_DATE_MARKERS = (
+    "jelent meg", "megjelent", "kiadas", "kiadva", "publikal",
+    "published", "publication", "edition", "released",
+    "erschien", "veroffentlicht", "ausgabe",
+)
+
+
+def _nearest_marker_distance(text, pivot_start, pivot_end, markers):
+    best = None
+    for marker in markers:
+        start = 0
+        while True:
+            index = text.find(marker, start)
+            if index < 0:
+                break
+            marker_end = index + len(marker)
+            if marker_end <= pivot_start:
+                distance = pivot_start - marker_end
+            elif index >= pivot_end:
+                distance = index - pivot_end
+            else:
+                distance = 0
+            if best is None or distance < best:
+                best = distance
+            start = index + 1
+    return best
+
+
+def _creation_date_supported(text):
+    """Require a date to bind more closely to creation than publication.
+
+    Search snippets often place an edition/publication year in the same result
+    as an authorship sentence.  A result such as "first published in 1847 ...
+    written for the competition" must not make 1847 authoritative as the
+    composition year.  This host-side proximity check is entity-agnostic and
+    evaluates each date independently.
+    """
+    folded = _fold(text)
+    for match in _DATE_RE.finditer(folded):
+        creation_distance = _nearest_marker_distance(
+            folded,
+            match.start(),
+            match.end(),
+            _CREATION_DATE_MARKERS,
+        )
+        if creation_distance is None:
+            continue
+        publication_distance = _nearest_marker_distance(
+            folded,
+            match.start(),
+            match.end(),
+            _PUBLICATION_DATE_MARKERS,
+        )
+        if publication_distance is not None and publication_distance < creation_distance:
+            continue
+        if creation_distance <= 80:
+            return True
+    return False
+
+
 def requested_fact_supported(payload, requested_fact="general", request_text=""):
     """Whether provider snippets/page text contain a usable fact-shaped signal."""
     text = _evidence_text(payload)
@@ -242,10 +313,13 @@ def requested_fact_supported(payload, requested_fact="general", request_text="")
             str(item.get("page_text") or ""),
             str(item.get("pre_extracted_context") or ""),
         ))
-        if re.search(pattern, item_text) and _temporal_relation_supported(
-            item_text,
-            relation,
-        ):
+        if not re.search(pattern, item_text):
+            continue
+        if relation == "creation":
+            if _creation_date_supported(item_text):
+                return True
+            continue
+        if _temporal_relation_supported(item_text, relation):
             return True
     return False
 
