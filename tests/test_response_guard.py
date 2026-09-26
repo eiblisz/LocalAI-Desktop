@@ -5,6 +5,7 @@ import pytest
 from app.response_guard import (
     ResponseValidationError,
     guard_response,
+    normalize_user_visible_output,
     unexpected_script_issues,
     validate_response,
 )
@@ -195,3 +196,50 @@ def test_guard_fails_closed_after_one_bad_repair():
         )
 
     assert len(client.calls) == 2
+
+
+def test_normal_output_hygiene_removes_html_space_entities_from_prose():
+    constraints = build_task_constraints("Írj magyar magyarázatot az internetről.")
+    value = normalize_user_visible_output(
+        "Első mondat.&amp;#x20;\n\nMásodik mondat.&#32;",
+        constraints,
+    )
+
+    assert "&#x20;" not in value
+    assert "&amp;#x20;" not in value
+    assert "&#32;" not in value
+    assert "Első mondat." in value
+    assert "Második mondat." in value
+
+
+def test_output_hygiene_preserves_entities_when_html_is_requested():
+    constraints = build_task_constraints("Adj HTML példát.")
+    value = normalize_user_visible_output("<p>A&#x20;B</p>", constraints)
+
+    assert value == "<p>A&#x20;B</p>"
+
+
+def test_output_hygiene_enforces_requested_paragraph_maximum_without_model_call():
+    constraints = build_task_constraints(
+        "Írj egy részletes, 6–8 bekezdéses magyar esszét az internetről."
+    )
+    draft = "\n\n".join(f"{index}. bekezdés tartalma." for index in range(1, 10))
+
+    value = normalize_user_visible_output(draft, constraints)
+
+    blocks = [item for item in value.split("\n\n") if item.strip()]
+    assert len(blocks) == 8
+    assert "8. bekezdés tartalma." in blocks[-1]
+    assert "9. bekezdés tartalma." in blocks[-1]
+
+
+def test_output_hygiene_handles_nested_amp_escaped_space_entity():
+    constraints = build_task_constraints("Írj magyar magyarázatot.")
+    value = normalize_user_visible_output(
+        "Első.&amp;amp;#x20; Második.",
+        constraints,
+    )
+
+    assert "x20" not in value
+    assert "Első." in value
+    assert "Második." in value

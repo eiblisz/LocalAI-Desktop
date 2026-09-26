@@ -931,6 +931,53 @@ def _splice_span_repairs(original, spans, replacements, *, user_text):
     return "".join(pieces)
 
 
+def normalize_user_visible_output(text, constraints=None):
+    """Remove nonsemantic prose artifacts and enforce safe structural bounds."""
+    value = str(text or "")
+    format_items = tuple(
+        str(item or "").strip()
+        for item in getattr(constraints, "format_constraints", ())
+        if str(item or "").strip()
+    )
+    formats = {item.casefold() for item in format_items}
+
+    if "html" not in formats:
+        # Some models double-escape HTML whitespace entities. Match one or
+        # more nested "amp;" layers without decoding arbitrary HTML markup.
+        value = re.sub(
+            r"&(?:amp;)*#(?:x0*20|0*32);",
+            " ",
+            value,
+            flags=re.IGNORECASE,
+        )
+
+    paragraph_range = None
+    for item in format_items:
+        match = re.fullmatch(r"(\d{1,2})-(\d{1,2}) paragraphs", item.casefold())
+        if match:
+            low, high = sorted((int(match.group(1)), int(match.group(2))))
+            paragraph_range = (low, high)
+            break
+
+    # When the user explicitly asks for an essay paragraph range, exceeding
+    # the maximum is a formatting error that can be corrected without another
+    # model call or any factual rewrite: merge trailing prose blocks.
+    structural_formats = {"html", "json", "markdown", "table", "bulleted list"}
+    if paragraph_range and not (formats & structural_formats):
+        _low, high = paragraph_range
+        blocks = [
+            block.strip()
+            for block in re.split(r"\n\s*\n+", value.strip())
+            if block.strip()
+        ]
+        while len(blocks) > high and len(blocks) >= 2:
+            blocks[-2:] = [blocks[-2].rstrip() + " " + blocks[-1].lstrip()]
+        if blocks:
+            value = "\n\n".join(blocks)
+
+    return value
+
+
 def guard_response(
     client,
     model,
@@ -989,7 +1036,7 @@ def guard_response(
             )
         fluency_audit = FluencyAuditResult()
     if validation.valid and not fluency_audit.findings:
-        return draft
+        return normalize_user_visible_output(draft, constraints)
 
     try:
         deterministic_spans = (
@@ -1124,7 +1171,7 @@ def guard_response(
             classification="integrity_failed",
         )
     if repaired and repaired_validation.valid:
-        return repaired
+        return normalize_user_visible_output(repaired, constraints)
 
     raise _tag_repair_failure(
         LanguageRepairFailed(
