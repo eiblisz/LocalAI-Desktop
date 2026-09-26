@@ -83,6 +83,32 @@ def test_memory_architecture_feature_explanation_does_not_claim_current_context_
     assert scope.reason == "fresh_general"
 
 
+def test_long_general_prompt_with_ordinary_deictic_pronoun_stays_fresh_general():
+    scope = resolve_memory_context_scope(
+        (
+            "Írj egy részletes, 6–8 bekezdéses magyar esszét arról, hogyan működik "
+            "az internet. Térj ki a DNS-re, TCP/IP-re, HTTP-re, HTTPS-re és arra is, "
+            "mi történik technikailag attól a pillanattól, hogy beírok egy webcímet."
+        ),
+        conversation_local=False,
+    )
+
+    assert scope.memory_scope == "fresh_general"
+    assert scope.include_current_memory is False
+    assert scope.include_cross_window is False
+    assert scope.include_global_memory is False
+
+
+def test_short_deictic_followup_still_uses_current_context():
+    scope = resolve_memory_context_scope(
+        "Mit gondolsz erről?",
+        conversation_local=False,
+    )
+
+    assert scope.memory_scope == "current_context"
+    assert scope.include_current_memory is True
+
+
 def test_current_window_recall_scope_remains_available():
     scope = resolve_memory_context_scope(
         "What did I say in this conversation?",
