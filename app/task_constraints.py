@@ -188,6 +188,16 @@ def task_constraints_instruction(constraints, *, current_subtask=""):
         lines.append(
             "- Format constraints: " + ", ".join(constraints.format_constraints)
         )
+        paragraph_constraints = [
+            item for item in constraints.format_constraints
+            if str(item).endswith(" paragraphs")
+        ]
+        if paragraph_constraints:
+            lines.extend([
+                "- STRICT PARAGRAPH CONTRACT: " + ", ".join(paragraph_constraints) + ".",
+                "- The final answer must stay within that paragraph count/range. Merge related material rather than exceeding the maximum.",
+                "- Do not create extra numbered sections, headings, or a separate summary block unless the user explicitly requested them.",
+            ])
     profile = getattr(constraints, "request_profile", None)
     if profile is not None:
         lines.extend([
