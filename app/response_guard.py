@@ -1041,12 +1041,6 @@ def guard_response(
     integrity_issue = ""
     if not repair_preserves_factual_literals(draft, repaired):
         integrity_issue = "factual_literal_changed"
-    elif not repair_preserves_response_shape(
-        draft,
-        repaired,
-        preserve_proper_names=response_language_matches(user_text, draft),
-    ):
-        integrity_issue = "response_shape_or_literal_changed"
     if integrity_issue:
         repaired_validation = ResponseValidation(
             valid=False,
