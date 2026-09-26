@@ -931,6 +931,18 @@ def _splice_span_repairs(original, spans, replacements, *, user_text):
     return "".join(pieces)
 
 
+def normalize_user_visible_output(text, constraints=None):
+    """Remove model rendering artifacts that have no semantic value in prose."""
+    value = str(text or "")
+    formats = {
+        str(item or "").strip().casefold()
+        for item in getattr(constraints, "format_constraints", ())
+    }
+    if "html" not in formats:
+        value = value.replace("&#x20;", " ").replace("&#X20;", " ").replace("&#32;", " ")
+    return value
+
+
 def guard_response(
     client,
     model,
@@ -989,7 +1001,7 @@ def guard_response(
             )
         fluency_audit = FluencyAuditResult()
     if validation.valid and not fluency_audit.findings:
-        return draft
+        return normalize_user_visible_output(draft, constraints)
 
     try:
         deterministic_spans = (
@@ -1124,7 +1136,7 @@ def guard_response(
             classification="integrity_failed",
         )
     if repaired and repaired_validation.valid:
-        return repaired
+        return normalize_user_visible_output(repaired, constraints)
 
     raise _tag_repair_failure(
         LanguageRepairFailed(
