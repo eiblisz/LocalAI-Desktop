@@ -140,7 +140,7 @@ def test_prepare_model_unloads_only_proven_desktop_owned_idle_model(
 
     monkeypatch.setattr(
         "app.ollama_client.loaded_ollama_models",
-        lambda _client, timeout: ["gemma4:26b", "qwen3-coder:30b-a3b-q8_0"],
+        lambda _client, timeout: ["gemma4:26b"],
     )
     monkeypatch.setattr(
         client,
@@ -286,8 +286,8 @@ def test_prepare_model_blocks_when_external_consumer_is_visible(
 def test_auto_prepare_model_is_opt_in_for_chat_once(monkeypatch):
     captured = {"prepared": []}
 
-    def fake_prepare(self, model, timeout=6.0):
-        captured["prepared"].append(model)
+    def fake_prepare(self, model, timeout=6.0, *, allow_model_release=True):
+        captured["prepared"].append((model, allow_model_release))
         return []
 
     def fake_post(_url, **_kwargs):
@@ -306,7 +306,7 @@ def test_auto_prepare_model_is_opt_in_for_chat_once(monkeypatch):
         model="qwen-test",
         messages=[{"role": "user", "content": "test"}],
     )
-    assert captured["prepared"] == ["qwen-test"]
+    assert captured["prepared"] == [("qwen-test", False)]
 
 
 
@@ -323,7 +323,7 @@ def test_automatic_model_prepare_has_no_process_kill_or_server_restart_path():
 
 
 
-def test_prepare_model_blocks_manual_other_model_before_api_ps(monkeypatch, tmp_path):
+def test_prepare_model_blocks_manual_other_model_before_destructive_switch(monkeypatch, tmp_path):
     client, _store = _desktop_client(tmp_path)
     touched = {"ps": False}
 
@@ -337,13 +337,13 @@ def test_prepare_model_blocks_manual_other_model_before_api_ps(monkeypatch, tmp_
         }],
     )
 
-    def should_not_read_ps(_client, timeout):
+    def resident_other_model(_client, timeout):
         touched["ps"] = True
-        raise AssertionError("/api/ps must not be trusted before visible external client safety")
+        return ["qwen3-coder:30b-a3b-q8_0"]
 
     monkeypatch.setattr(
         "app.ollama_client.loaded_ollama_models",
-        should_not_read_ps,
+        resident_other_model,
     )
 
     with pytest.raises(OllamaResourceBusyError) as exc:
@@ -351,7 +351,7 @@ def test_prepare_model_blocks_manual_other_model_before_api_ps(monkeypatch, tmp_
 
     assert "MANUAL" in str(exc.value)
     assert "qwen3-coder:30b-a3b-q8_0" in str(exc.value)
-    assert touched["ps"] is False
+    assert touched["ps"] is True
 
 
 def test_prepare_model_allows_visible_manual_client_only_for_same_target(
@@ -375,6 +375,125 @@ def test_prepare_model_allows_visible_manual_client_only_for_same_target(
     )
 
     assert client.prepare_model("qwen3-coder:30b-a3b-q8_0") == []
+
+
+def test_prepare_model_allows_resident_target_without_external_consumer_probe(
+    monkeypatch,
+    tmp_path,
+):
+    client, _store = _desktop_client(tmp_path)
+    target = "eurollm:9b-q4"
+    probe_calls = []
+    unloaded = []
+
+    monkeypatch.setattr(
+        "app.ollama_client.loaded_ollama_models",
+        lambda _client, timeout: [target, "gemma4:26b"],
+    )
+    monkeypatch.setattr(
+        client,
+        "_external_consumers",
+        lambda: probe_calls.append(True) or [{
+            "pid": 901,
+            "owner": "OTHER",
+            "model": "",
+        }],
+    )
+    monkeypatch.setattr(
+        "app.ollama_client.unload_ollama_model",
+        lambda *_args, **_kwargs: unloaded.append(True),
+    )
+
+    assert client.prepare_model(target) == []
+    assert probe_calls == []
+    assert unloaded == []
+
+
+def test_resident_eurollm_direct_fact_reaches_api_chat_despite_unknown_probe(
+    monkeypatch,
+):
+    target = "eurollm:9b-q4"
+    captured = {}
+    client = OllamaClient(auto_prepare_model=True)
+
+    monkeypatch.setattr(
+        "app.ollama_client.loaded_ollama_models",
+        lambda _client, timeout: [target],
+    )
+    monkeypatch.setattr(
+        client,
+        "_external_consumers",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("resident target must not probe external consumers")
+        ),
+    )
+
+    def fake_post(url, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return _Response()
+
+    monkeypatch.setattr("app.ollama_client.requests.post", fake_post)
+
+    answer = client.chat_once(
+        model=target,
+        call_phase="model_inference",
+        messages=[
+            {"role": "system", "content": "Answer from evidence only."},
+            {
+                "role": "user",
+                "content": (
+                    "CURRENT USER REQUEST: Mikor írta Petőfi Sándor a Toldit?\n"
+                    "AUTHORIZED EVIDENCE: A Toldi Arany János műve."
+                ),
+            },
+        ],
+    )
+
+    assert answer == "ok"
+    assert captured["url"].endswith("/api/chat")
+    assert captured["json"]["model"] == target
+    assert "think" not in captured["json"]
+
+
+def test_automatic_prepare_never_unloads_a_different_resident_model(
+    monkeypatch,
+):
+    target = "eurollm:9b-q4"
+    captured = {}
+    client = OllamaClient(auto_prepare_model=True)
+
+    monkeypatch.setattr(
+        "app.ollama_client.loaded_ollama_models",
+        lambda _client, timeout: ["gemma4:26b"],
+    )
+    monkeypatch.setattr(
+        client,
+        "_external_consumers",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("automatic inference must not begin a destructive switch")
+        ),
+    )
+    monkeypatch.setattr(
+        "app.ollama_client.unload_ollama_model",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("automatic inference must not unload another model")
+        ),
+    )
+
+    def fake_post(url, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return _Response()
+
+    monkeypatch.setattr("app.ollama_client.requests.post", fake_post)
+
+    assert client.chat_once(
+        model=target,
+        messages=[{"role": "user", "content": "ordinary factual request"}],
+    ) == "ok"
+    assert captured["url"].endswith("/api/chat")
+    assert captured["json"]["model"] == target
 
 
 
@@ -686,7 +805,7 @@ def test_chat_stream_rejects_length_truncated_response(monkeypatch):
 def test_initial_model_preparation_failure_keeps_root_cause_classified(monkeypatch):
     client = OllamaClient(auto_prepare_model=True)
 
-    def fail_prepare(_model, timeout=6.0):
+    def fail_prepare(_model, timeout=6.0, *, allow_model_release=True):
         raise OllamaResourceBusyError("runtime inspection unavailable")
 
     monkeypatch.setattr(client, "prepare_model", fail_prepare)
@@ -703,6 +822,7 @@ def test_initial_model_preparation_failure_keeps_root_cause_classified(monkeypat
     assert metadata["ollama_failure_classification"] == "model_prepare_failed"
     assert metadata["ollama_request_sequence"] == 1
     assert metadata["ollama_initial_request"] is True
+    assert metadata["ollama_preparation_reason"] == "runtime inspection unavailable"
 
 
 def test_ollama_http_error_detail_is_bounded_and_exposed():

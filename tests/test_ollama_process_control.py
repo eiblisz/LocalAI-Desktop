@@ -156,6 +156,21 @@ def test_direct_http_consumer_is_other_and_current_pid_can_be_excluded(monkeypat
     assert excluded == []
 
 
+def test_external_consumer_probe_excludes_its_own_powershell_process(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(control.os, "name", "nt", raising=False)
+
+    def fake_run(command, **kwargs):
+        captured["script"] = command[-1]
+        return SimpleNamespace(returncode=0, stdout="[]", stderr="")
+
+    monkeypatch.setattr(control.subprocess, "run", fake_run)
+
+    assert control.list_external_ollama_consumers() == []
+    assert "[int]$_ -ne [int]$PID" in captured["script"]
+    assert "[int]$_.ProcessId -ne [int]$PID" in captured["script"]
+
+
 
 def test_manual_ollama_run_parser_handles_quoted_executable_and_model():
     command = '"C:\\Program Files\\Ollama\\ollama.exe" run "qwen3-coder:30b-a3b-q8_0"'

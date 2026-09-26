@@ -61,6 +61,7 @@ def _tag_ollama_failure(
     classification,
     request_sequence=None,
     call_phase=None,
+    preparation_reason=None,
 ):
     """Attach safe, machine-readable context without replacing the root error."""
     try:
@@ -71,6 +72,9 @@ def _tag_ollama_failure(
             exc.localai_ollama_initial_request = int(request_sequence) == 1
         if call_phase:
             exc.localai_ollama_call_phase = str(call_phase)
+        if preparation_reason:
+            detail = " ".join(str(preparation_reason).split())
+            exc.localai_ollama_preparation_reason = detail[:500]
         response = getattr(exc, "response", None)
         status = getattr(response, "status_code", None)
         if status is not None:
@@ -122,6 +126,7 @@ def ollama_failure_metadata(exc):
         ("localai_ollama_http_status", "ollama_http_status"),
         ("localai_ollama_http_detail", "ollama_http_detail"),
         ("localai_ollama_call_phase", "ollama_call_phase"),
+        ("localai_ollama_preparation_reason", "ollama_preparation_reason"),
     ):
         value = getattr(exc, attribute, None)
         if value is not None:
@@ -262,21 +267,25 @@ class OllamaClient:
             detail=detail,
         )
 
-    def prepare_model(self, model: str, timeout: float = 6.0) -> list[str]:
+    def prepare_model(
+        self,
+        model: str,
+        timeout: float = 6.0,
+        *,
+        allow_model_release: bool = True,
+    ) -> list[str]:
         """
         Gracefully unload only a provably self-owned idle stale model.
 
-        Unknown or foreign ownership is fail-closed. This method never kills a
+        A resident target and an empty resident set require no destructive
+        switch, so ordinary inference may continue without consulting external
+        consumer ownership. Unknown or foreign ownership is fail-closed only
+        before unloading a different resident model. This method never kills a
         runner or restarts the shared Ollama server.
         """
         target = str(model or "").strip()
         if not target:
             raise ValueError("A target Ollama model is required.")
-
-        # Check external consumers before trusting /api/ps. A manual
-        # "ollama run" session may be visible as a client even while its model
-        # is not momentarily reported as resident.
-        self._assert_external_switch_safe(target)
 
         try:
             loaded = loaded_ollama_models(
@@ -289,9 +298,26 @@ class OllamaClient:
                 "for shared-resource safety."
             ) from exc
 
+        # The selected model is already resident. Calling /api/chat uses that
+        # model directly and does not unload, switch, kill, or restart shared
+        # state. In particular, stale leases or an unrelated visible consumer
+        # must not turn this no-op into a preparation failure.
+        if target in loaded:
+            return []
+
         stale = [name for name in loaded if name and name != target]
         if not stale:
             return []
+
+        # Sending an ordinary Desktop/Discord request must never become an
+        # implicit model-unload operation. Ollama can load the requested target
+        # itself; explicit VRAM release retains the stricter ownership path.
+        if not allow_model_release:
+            return []
+
+        # Only a real resident-model replacement can be destructive. Check
+        # visible consumers immediately before any ownership-based unload.
+        self._assert_external_switch_safe(target)
 
         runners = self._runner_processes()
         if runners == []:
@@ -464,7 +490,7 @@ class OllamaClient:
 
         if self.auto_prepare_model:
             try:
-                self.prepare_model(model)
+                self.prepare_model(model, allow_model_release=False)
             except Exception as exc:
                 raise _tag_ollama_failure(
                     exc,
@@ -472,6 +498,7 @@ class OllamaClient:
                     classification="model_prepare_failed",
                     request_sequence=request_sequence,
                     call_phase=call_phase,
+                    preparation_reason=exc,
                 )
 
         request_id = uuid.uuid4().hex
@@ -619,7 +646,7 @@ class OllamaClient:
 
         if self.auto_prepare_model:
             try:
-                self.prepare_model(model)
+                self.prepare_model(model, allow_model_release=False)
             except Exception as exc:
                 raise _tag_ollama_failure(
                     exc,
@@ -627,6 +654,7 @@ class OllamaClient:
                     classification="model_prepare_failed",
                     request_sequence=request_sequence,
                     call_phase=call_phase,
+                    preparation_reason=exc,
                 )
 
         request_id = uuid.uuid4().hex

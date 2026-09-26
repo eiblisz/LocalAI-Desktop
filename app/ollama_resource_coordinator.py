@@ -4,7 +4,7 @@ import uuid
 
 import psutil
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from .config import RUNTIME_DIR
@@ -73,6 +73,36 @@ class ResourceLeaseStore:
     @staticmethod
     def _now():
         return datetime.now().isoformat(timespec="seconds")
+
+    @staticmethod
+    def _owner_process_status(item):
+        """Return whether a lease still belongs to its original owner process.
+
+        ``pid_exists`` alone is not enough on Windows: an old Desktop lease can
+        survive until its PID is reused by a later, unrelated process. A process
+        created after the lease cannot be its original owner, so it is safely
+        reconciled to stale without touching any Ollama process.
+        """
+        pid = item.get("owner_pid")
+        if not isinstance(pid, int) or pid <= 0:
+            return True, ""
+        if not psutil.pid_exists(pid):
+            return False, "owner process no longer exists"
+        started = str(item.get("start_time") or "").strip()
+        if not started:
+            return True, ""
+        try:
+            lease_started = datetime.fromisoformat(started)
+            process_started = datetime.fromtimestamp(
+                psutil.Process(pid).create_time()
+            )
+        except (OSError, ValueError, psutil.Error):
+            # The process is still present but its start time cannot be read;
+            # retain fail-closed ownership rather than guessing.
+            return True, ""
+        if process_started > lease_started + timedelta(seconds=2):
+            return False, "owner PID was reused by a newer process"
+        return True, ""
 
     @contextmanager
     def _exclusive_lock(self):
@@ -154,16 +184,11 @@ class ResourceLeaseStore:
             changed = False
             now = self._now()
             for item in items:
-                pid = item.get("owner_pid")
-                if (
-                    isinstance(pid, int)
-                    and pid > 0
-                    and item.get("state") != STATE_STALE
-                    and not psutil.pid_exists(pid)
-                ):
+                alive, detail = self._owner_process_status(item)
+                if item.get("state") != STATE_STALE and not alive:
                     item["state"] = STATE_STALE
                     item["last_heartbeat"] = now
-                    item["detail"] = "owner process no longer exists"
+                    item["detail"] = detail
                     changed = True
             if changed:
                 self._save_all(items)
