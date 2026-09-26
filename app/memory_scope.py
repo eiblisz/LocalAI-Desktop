@@ -130,12 +130,26 @@ _RECALL_STEMS = (
     "provided", "gave", "gesagt", "genannt",
 )
 
-_CONTEXT_REFERENCE_TOKENS = {
-    "ez", "ezt", "ennek", "ebben", "erre", "arra", "azt", "azok",
-    "elozo", "korabbi", "folytasd", "folytatas", "tovabb",
-    "this", "that", "these", "those", "it", "they", "previous",
-    "above", "continue", "continuation", "also",
+_STRONG_CONTEXT_REFERENCE_TOKENS = {
+    "elozo", "korabbi", "folytasd", "folytatas", "tovabb", "fenti",
+    "previous", "above", "continue", "continuation", "earlier",
 }
+_WEAK_CONTEXT_REFERENCE_TOKENS = {
+    "ez", "ezt", "ennek", "ebben", "erre", "arra", "azt", "azok",
+    "this", "that", "these", "those", "it", "they", "also",
+}
+_CONTEXT_REFERENT_TOKENS = {
+    "beszelgetes", "chat", "szal", "kontextus", "valasz", "uzenet",
+    "kerdes", "mondat", "bekezdes", "szoveg", "tema", "terv", "kod",
+    "kep", "fajl", "dokumentum", "conversation", "thread", "context",
+    "answer", "response", "message", "question", "sentence", "paragraph",
+    "text", "topic", "plan", "code", "image", "file", "document",
+}
+_CONTEXT_ACTION_STEMS = (
+    "javit", "fordit", "folytat", "ertekel", "elemez", "magyaraz",
+    "bovit", "rovidit", "fogalmaz", "rewrite", "translate", "continue",
+    "evaluate", "analy", "explain", "expand", "shorten",
+)
 
 def _has_recall_cue(tokens, *, user_text=""):
     if user_text and is_memory_architecture_topic_request(user_text):
@@ -164,11 +178,29 @@ def is_durable_memory_query(user_text):
 def _has_current_context_reference(user_text):
     if is_memory_architecture_topic_request(user_text):
         return False
-    tokens = _semantic_tokens(user_text)
-    return bool(
-        tokens & _CONTEXT_REFERENCE_TOKENS
-        or _has_recall_cue(tokens, user_text=user_text)
-    )
+    sequence = canonical_match_text(user_text).split()
+    tokens = set(sequence)
+    if _has_recall_cue(tokens, user_text=user_text):
+        return True
+    if tokens & _STRONG_CONTEXT_REFERENCE_TOKENS:
+        return True
+
+    weak_reference = bool(tokens & _WEAK_CONTEXT_REFERENCE_TOKENS)
+    if not weak_reference:
+        return False
+    if tokens & _CONTEXT_REFERENT_TOKENS:
+        return True
+    if any(
+        token.startswith(stem)
+        for token in tokens
+        for stem in _CONTEXT_ACTION_STEMS
+    ):
+        return True
+
+    # A short deictic follow-up such as "Mit gondolsz erről?" can rely on the
+    # previous turn.  In a longer standalone request, ordinary Hungarian
+    # pronouns such as "arra" or "ezt" must not pull unrelated chat history.
+    return len(sequence) <= 10
 
 
 @dataclass(frozen=True)
