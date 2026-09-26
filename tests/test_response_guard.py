@@ -217,3 +217,29 @@ def test_output_hygiene_preserves_entities_when_html_is_requested():
     value = normalize_user_visible_output("<p>A&#x20;B</p>", constraints)
 
     assert value == "<p>A&#x20;B</p>"
+
+
+def test_output_hygiene_enforces_requested_paragraph_maximum_without_model_call():
+    constraints = build_task_constraints(
+        "Írj egy részletes, 6–8 bekezdéses magyar esszét az internetről."
+    )
+    draft = "\n\n".join(f"{index}. bekezdés tartalma." for index in range(1, 10))
+
+    value = normalize_user_visible_output(draft, constraints)
+
+    blocks = [item for item in value.split("\n\n") if item.strip()]
+    assert len(blocks) == 8
+    assert "8. bekezdés tartalma." in blocks[-1]
+    assert "9. bekezdés tartalma." in blocks[-1]
+
+
+def test_output_hygiene_handles_nested_amp_escaped_space_entity():
+    constraints = build_task_constraints("Írj magyar magyarázatot.")
+    value = normalize_user_visible_output(
+        "Első.&amp;amp;#x20; Második.",
+        constraints,
+    )
+
+    assert "x20" not in value
+    assert "Első." in value
+    assert "Második." in value
