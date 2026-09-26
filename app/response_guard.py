@@ -310,10 +310,14 @@ def _fluency_audit_messages(segments):
                 "spans are one or more exact short substrings copied byte-for-byte from that same "
                 "segment. Check every sentence for broken Hungarian inflection, "
                 "agreement, article choice, verb complements, pseudo-words, duplicated morphology "
-                "and locally nonsensical phrasing. A sentence that is mostly good can still fail "
-                "for one short malformed span. Do not rewrite anything. Do not flag legitimate "
-                "English technical terminology, proper names, URLs, numbers, code, or quoted "
-                "source titles. If uncertain about a sentence, mark it pass."
+                "and locally nonsensical phrasing. Inspect every non-protected word and local "
+                "phrase, not only the overall sentence meaning: malformed pseudo-words, impossible "
+                "Hungarian word forms and semantically broken short phrases must fail even when the "
+                "rest of the sentence is understandable. A sentence that is mostly good can still "
+                "fail for one short malformed span. Do not rewrite anything and do not flag mere "
+                "style preferences. Do not flag legitimate English technical terminology, proper "
+                "names, URLs, numbers, code, or quoted source titles. Mark pass only when you cannot "
+                "identify a concrete exact malformed span."
             ),
         },
         {
