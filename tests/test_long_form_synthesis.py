@@ -173,7 +173,9 @@ def test_hybrid_worker_keeps_stable_explanation_when_web_coverage_is_partial(
             should_stop,
             timeout=600.0,
         ):
-            assert "HYBRID SYNTHESIS" in messages[1]["content"]
+            assert [message["role"] for message in messages].count("system") == 1
+            assert "HYBRID SYNTHESIS" in messages[0]["content"]
+            assert "Base system" in messages[0]["content"]
             if not should_stop():
                 on_token(
                     "A neurális háló rétegekben alakítja át a bemenetet, "
