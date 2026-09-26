@@ -83,6 +83,24 @@ def test_current_window_recall_stays_local_with_web_on():
     assert contracts[0].conversation_local is True
 
 
+def test_memory_architecture_feature_explanation_is_not_conversation_recall():
+    prompt = (
+        "Írj részletes összefoglalót a LocalAI Desktop jelenlegi memóriaarchitektúrájáról; "
+        "térj ki a current chat contextre, Window Memoryra, Global Memoryra, "
+        "cross-window retrievalre és a Remember ikonra."
+    )
+    contracts = plan_chat_actions(
+        ActionRuntime(),
+        prompt,
+        web_mode="ON",
+    )
+
+    assert contracts[0].route == ROUTE_CHAT
+    assert contracts[0].use_web is False
+    assert contracts[0].conversation_local is False
+    assert contracts[0].internal_project_authority is True
+
+
 def test_genuine_fresh_external_question_still_uses_web_with_web_on():
     contracts = plan_chat_actions(
         ActionRuntime(),
