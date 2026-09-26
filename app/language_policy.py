@@ -141,7 +141,10 @@ _HUNGARIAN_ALLOWED_TECHNICAL_TERMS = {
     "Large Language Models",
 }
 _CORRUPTED_UNICODE_RE = re.compile(r"[\ufffd\u0000-\u0008\u000b\u000c\u000e-\u001f]")
-_ASCII_WORD_RE = re.compile(r"[A-Za-z]+(?:[-'][A-Za-z]+)?")
+_ASCII_WORD_RE = re.compile(
+    r"(?<!\w)[A-Za-z]+(?:[-'][A-Za-z]+)?(?!\w)",
+    flags=re.UNICODE,
+)
 _ENGLISH_ADVERB_PARTICIPLE_RE = re.compile(
     r"\b[a-z]{5,}ly\s+[a-z]{4,}(?:ed|ing)\b",
     flags=re.IGNORECASE,
