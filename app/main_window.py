@@ -2277,6 +2277,7 @@ class MainWindow(QMainWindow):
             ("Ollama request sequence", metadata.get("ollama_request_sequence")),
             ("Ollama initial request", metadata.get("ollama_initial_request")),
             ("Ollama HTTP status", metadata.get("ollama_http_status")),
+            ("Ollama HTTP detail", metadata.get("ollama_http_detail")),
             ("Ollama call phase", metadata.get("ollama_call_phase")),
             ("Language validation result", metadata.get("language_validation_result")),
             ("Language validation issues", metadata.get("language_validation_issues")),
