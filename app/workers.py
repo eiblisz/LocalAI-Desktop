@@ -1818,9 +1818,18 @@ class ChatWebWorker(QObject):
                 ),
             }
 
+            if base_history:
+                grounded_system = {
+                    "role": "system",
+                    "content": (
+                        str(base_history[0].get("content") or "").rstrip()
+                        + "\n\n"
+                        + str(grounded_system.get("content") or "").lstrip()
+                    ),
+                }
+
             stream_messages = (
-                base_history
-                + [grounded_system]
+                [grounded_system]
                 + conversation_history
                 + [grounded_user]
             )
