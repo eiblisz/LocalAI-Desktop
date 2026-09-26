@@ -605,7 +605,9 @@ def _repair_messages(user_text, spans, constraints=None):
         "words while preserving the meaning. Preserve every number, "
         "URL, date, currency value, product/model name, proper name, technical term and factual "
         "claim exactly. Legitimate English technical terms include LLM, token, context window, "
-        "training, inference, tool use, GPU and Python. Return strict JSON only in this shape: "
+        "training, inference, tool use, GPU and Python. Each replacement must contain only the "
+        "corrected version of the exact supplied span; do not include surrounding context, a full "
+        "sentence, explanations or line breaks. Return strict JSON only in this shape: "
         '{"repairs":[{"id":0,"text":"repaired span"}]}. Return every id exactly once and no other text.'
     )
     if parent_intent:
