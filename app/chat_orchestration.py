@@ -1,5 +1,6 @@
 from .memory_scope import (
     is_global_memory_request,
+    is_memory_architecture_topic_request,
     is_other_window_request,
     resolve_memory_context_scope,
 )
@@ -33,6 +34,8 @@ def is_conversation_local_request(
     normalized_words = set(normalized_sequence)
     tokens = _semantic_tokens(user_text)
     if not tokens:
+        return False
+    if is_memory_architecture_topic_request(user_text):
         return False
 
     memory_terms = {
