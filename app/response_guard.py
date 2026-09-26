@@ -932,18 +932,49 @@ def _splice_span_repairs(original, spans, replacements, *, user_text):
 
 
 def normalize_user_visible_output(text, constraints=None):
-    """Remove model rendering artifacts that have no semantic value in prose."""
+    """Remove nonsemantic prose artifacts and enforce safe structural bounds."""
     value = str(text or "")
-    formats = {
-        str(item or "").strip().casefold()
+    format_items = tuple(
+        str(item or "").strip()
         for item in getattr(constraints, "format_constraints", ())
-    }
+        if str(item or "").strip()
+    )
+    formats = {item.casefold() for item in format_items}
+
     if "html" not in formats:
-        for artifact in (
-            "&#x20;", "&#X20;", "&#32;",
-            "&amp;#x20;", "&amp;#X20;", "&amp;#32;",
-        ):
-            value = value.replace(artifact, " ")
+        # Some models double-escape HTML whitespace entities. Match one or
+        # more nested "amp;" layers without decoding arbitrary HTML markup.
+        value = re.sub(
+            r"&(?:amp;)*#(?:x0*20|0*32);",
+            " ",
+            value,
+            flags=re.IGNORECASE,
+        )
+
+    paragraph_range = None
+    for item in format_items:
+        match = re.fullmatch(r"(\d{1,2})-(\d{1,2}) paragraphs", item.casefold())
+        if match:
+            low, high = sorted((int(match.group(1)), int(match.group(2))))
+            paragraph_range = (low, high)
+            break
+
+    # When the user explicitly asks for an essay paragraph range, exceeding
+    # the maximum is a formatting error that can be corrected without another
+    # model call or any factual rewrite: merge trailing prose blocks.
+    structural_formats = {"html", "json", "markdown", "table", "bulleted list"}
+    if paragraph_range and not (formats & structural_formats):
+        _low, high = paragraph_range
+        blocks = [
+            block.strip()
+            for block in re.split(r"\n\s*\n+", value.strip())
+            if block.strip()
+        ]
+        while len(blocks) > high and len(blocks) >= 2:
+            blocks[-2:] = [blocks[-2].rstrip() + " " + blocks[-1].lstrip()]
+        if blocks:
+            value = "\n\n".join(blocks)
+
     return value
 
 
