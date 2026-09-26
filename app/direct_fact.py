@@ -246,34 +246,42 @@ def _nearest_marker_distance(text, pivot_start, pivot_end, markers):
 
 
 def _creation_date_supported(text):
-    """Require a date to bind more closely to creation than publication.
+    """Require a date to bind to creation rather than publication.
 
-    Search snippets often place an edition/publication year in the same result
-    as an authorship sentence.  A result such as "first published in 1847 ...
-    written for the competition" must not make 1847 authoritative as the
-    composition year.  This host-side proximity check is entity-agnostic and
-    evaluates each date independently.
+    Search snippets often place a publication year beside an authorship note.
+    Evaluate each punctuation-bounded clause independently first; this prevents
+    "published in 1847, written for the competition" from promoting 1847 to a
+    composition year while still accepting "wrote it in 1912".
     """
     folded = _fold(text)
-    for match in _DATE_RE.finditer(folded):
-        creation_distance = _nearest_marker_distance(
-            folded,
-            match.start(),
-            match.end(),
-            _CREATION_DATE_MARKERS,
-        )
-        if creation_distance is None:
-            continue
-        publication_distance = _nearest_marker_distance(
-            folded,
-            match.start(),
-            match.end(),
-            _PUBLICATION_DATE_MARKERS,
-        )
-        if publication_distance is not None and publication_distance < creation_distance:
-            continue
-        if creation_distance <= 80:
-            return True
+    clauses = [
+        clause.strip()
+        for clause in re.split(r"[.!?;,]+", folded)
+        if clause.strip()
+    ]
+    for clause in clauses:
+        for match in _DATE_RE.finditer(clause):
+            creation_distance = _nearest_marker_distance(
+                clause,
+                match.start(),
+                match.end(),
+                _CREATION_DATE_MARKERS,
+            )
+            publication_distance = _nearest_marker_distance(
+                clause,
+                match.start(),
+                match.end(),
+                _PUBLICATION_DATE_MARKERS,
+            )
+            if creation_distance is None:
+                continue
+            if (
+                publication_distance is not None
+                and publication_distance < creation_distance
+            ):
+                continue
+            if creation_distance <= 80:
+                return True
     return False
 
 
