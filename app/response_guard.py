@@ -760,9 +760,20 @@ def _merge_repair_spans(*span_groups):
     )]
 
 
+def _max_repair_replacement_chars(span_text):
+    length = max(1, len(str(span_text or "")))
+    if length >= 40:
+        return min(_MAX_REPAIR_SPAN_CHARS, max(64, int(length * 3.0)))
+    return min(_MAX_REPAIR_SPAN_CHARS, max(48, length * 4))
+
+
 def _repair_response_schema(spans):
     """Constrain bounded repairs to the smallest structured response Ollama can emit."""
     count = len(spans)
+    max_replacement_chars = max(
+        (_max_repair_replacement_chars(item.get("text", "")) for item in spans),
+        default=64,
+    )
     return {
         "type": "object",
         "additionalProperties": False,
@@ -778,7 +789,7 @@ def _repair_response_schema(spans):
                     "required": ["id", "text"],
                     "properties": {
                         "id": {"type": "integer", "minimum": 0, "maximum": max(0, count - 1)},
-                        "text": {"type": "string", "minLength": 1, "maxLength": _MAX_REPAIR_SPAN_CHARS},
+                        "text": {"type": "string", "minLength": 1, "maxLength": max_replacement_chars},
                     },
                 },
             },
