@@ -415,6 +415,86 @@ def test_fluency_audit_discards_a_false_positive_technical_span(term):
     assert snapshot["metadata"]["fluency_sentences_failed"] == 0
 
 
+def test_cyrillic_hybrid_span_repairs_without_whole_response_false_positive():
+    prompt = "Válaszolj magyarul."
+    draft = (
+        "A LocalAI Desktop Window Memory és Global Memory rétegei együtt működnek. "
+        "A retrieval folyamat течениеben a rendszer megőrzi a releváns kontextust. "
+        "A Remember ikon és a Python integráció változatlan marad."
+    )
+
+    class CyrillicHybridClient:
+        supports_hungarian_fluency_audit = True
+
+        def chat_once(self, model, messages, **kwargs):
+            if "Hungarian fluency classifier" in messages[0]["content"]:
+                segments = _audit_segments(messages)
+                return json.dumps({
+                    "judgments": [
+                        (
+                            [item["id"], "semantic_language_corruption", ["течениеben"]]
+                            if "течениеben" in item["text"]
+                            else [item["id"], "pass"]
+                        )
+                        for item in segments
+                    ],
+                })
+            payload = json.loads(messages[1]["content"].split(
+                "BOUNDED SPANS TO REPAIR:\n", 1
+            )[1])
+            assert [item["text"] for item in payload] == ["течениеben"]
+            return json.dumps({"repairs": [{
+                "id": payload[0]["id"],
+                "text": "során",
+            }]})
+
+    trace = RequestTrace("desktop")
+    result = guard_response(
+        CyrillicHybridClient(),
+        "gemma4:26b",
+        prompt,
+        draft,
+        trace=trace,
+    )
+
+    assert result == draft.replace("течениеben", "során")
+    snapshot = trace.snapshot()
+    assert snapshot["metadata"]["repair_integrity_result"] == "pass"
+    assert snapshot["metadata"]["language_repair_span_count"] == 1
+
+
+def test_short_span_repair_cannot_expand_into_surrounding_sentence():
+    prompt = "Válaszolj magyarul."
+    draft = "A rendszer hibásalak használatával működik."
+
+    class OverexpandedRepairClient:
+        supports_hungarian_fluency_audit = True
+
+        def chat_once(self, model, messages, **kwargs):
+            if "Hungarian fluency classifier" in messages[0]["content"]:
+                segment = _audit_segments(messages)[0]
+                return json.dumps({"judgments": [[
+                    segment["id"],
+                    "hybrid_or_pseudoword",
+                    ["hibásalak"],
+                ]]})
+            payload = json.loads(messages[1]["content"].split(
+                "BOUNDED SPANS TO REPAIR:\n", 1
+            )[1])
+            return json.dumps({"repairs": [{
+                "id": payload[0]["id"],
+                "text": "Ez egy teljes, hosszú magyarázó mondat, amely nem bounded span javítás.",
+            }]})
+
+    with pytest.raises(RepairIntegrityFailed, match="span length limits"):
+        guard_response(
+            OverexpandedRepairClient(),
+            "gemma4:26b",
+            prompt,
+            draft,
+        )
+
+
 def test_sentence_audit_covers_multiple_separated_hungarian_fluency_failures():
     prompt = "Válaszolj magyarul."
     repairs = {
