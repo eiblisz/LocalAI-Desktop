@@ -87,3 +87,16 @@ def test_task_constraints_carry_request_semantics_profile():
     assert "Request kind: entity_overview" in instruction
     assert "Response depth: overview" in instruction
     assert "Research breadth: balanced" in instruction
+
+
+def test_paragraph_range_becomes_hard_format_constraint():
+    constraints = build_task_constraints(
+        "Írj egy részletes, 6–8 bekezdéses magyar esszét az internetről."
+    )
+
+    assert "6-8 paragraphs" in constraints.format_constraints
+
+    instruction = task_constraints_instruction(constraints)
+    assert "hard structural constraint" in instruction
+    assert "Sources/Források/References" in instruction
+    assert "&#x20;" in instruction
