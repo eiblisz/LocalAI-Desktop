@@ -150,6 +150,26 @@ def test_legitimate_technical_terms_are_not_treated_as_foreign_fragments():
     assert "foreign_language_fragment" not in hungarian_output_quality_issues(answer)
 
 
+def test_flagged_fluency_span_must_change_during_repair():
+    prompt = "Válaszolj magyarul."
+    bad = "hibas kifejezes"
+    draft = "Ez a mondat " + bad + " szöveget tartalmaz."
+
+    class Client:
+        supports_hungarian_fluency_audit = True
+
+        def chat_once(self, model, messages, **kwargs):
+            if "Hungarian fluency classifier" in messages[0]["content"]:
+                segment = _audit_segments(messages)[0]
+                return json.dumps({"judgments": [[
+                    segment["id"], "semantic_language_corruption", [bad],
+                ]]})
+            return json.dumps({"repairs": [{"id": 0, "text": bad}]})
+
+    with pytest.raises(LanguageRepairFailed, match="left flagged span unchanged"):
+        guard_response(Client(), "gemma4:26b", prompt, draft)
+
+
 @pytest.mark.parametrize("term", [
     "A g\u00e9pi tanul\u00e1s (machine learning) mint\u00e1kat elemez.",
     "A deep learning t\u00f6bb r\u00e9tegben dolgozhat.",
