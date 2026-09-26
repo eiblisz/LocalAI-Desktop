@@ -162,6 +162,21 @@ def test_normal_chat_has_web_on_auto_off_modes():
     assert 'getattr(contract, "conversation_local", False)' in run
 
 
+def test_desktop_preserves_shared_routing_reasons_and_blocks_internal_fallback():
+    from app.main_window import MainWindow
+
+    run_source = inspect.getsource(MainWindow._run_next_action_contract)
+    diagnostics_source = inspect.getsource(MainWindow._diagnostic_html)
+
+    assert 'getattr(contract, "routing_reason", "")' in run_source
+    assert 'getattr(contract, "web_reason", "")' in run_source
+    assert 'getattr(contract, "internal_project_authority", False)' in run_source
+    assert 'getattr(contract, "memory_write_intent", False)' in run_source
+    assert "and not bool(" in run_source
+    assert "Internal/project authority" in diagnostics_source
+    assert "Memory reason" in diagnostics_source
+
+
 def test_web_auto_detects_explicit_search_intent():
     from app.main_window import MainWindow
 
@@ -377,8 +392,8 @@ def test_send_injects_memory_into_system_prompt_not_saved_chat():
     send_source = inspect.getsource(MainWindow._send)
     messages_source = inspect.getsource(MainWindow._action_messages_for_model)
 
-    assert "if conversation_local or other_window_request" in messages_source
-    assert "else self._build_memory_context(prompt)" in messages_source
+    assert "resolve_memory_context_scope(" in messages_source
+    assert "if memory_scope.include_global_memory" in messages_source
     assert "CURRENT CONVERSATION AUTHORITY:" in messages_source
     assert 'system_prompt = f"{system_prompt}\\n\\n{memory_context}"' in messages_source
     assert 'messages = [{"role": "system", "content": system_prompt}]' in messages_source
@@ -452,7 +467,10 @@ def test_memory_context_renders_personal_facts_as_plain_semantics():
             ]
 
     host = SimpleNamespace(memory_store=Store())
-    context = MainWindow._build_memory_context(host, "Ki Iblisz es ki Lilla?")
+    context = MainWindow._build_memory_context(
+        host,
+        "What is in global memory about Iblisz and Lilla?",
+    )
 
     assert "the user's name is Iblisz" in context
     assert "Lilla is the user's daughter" in context
@@ -478,6 +496,16 @@ def test_memory_context_enforces_user_second_person_perspective():
     assert "Lilla is your daughter" in source
     assert "My name is Iblisz" in source
     assert "Lilla is my daughter" in source
+
+
+def test_diagnostics_show_synthesis_separately_from_internal_action_route():
+    from app.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._diagnostic_html)
+
+    assert '("Route", diagnostic.get("route")' in source
+    assert '"Synthesis"' in source
+    assert '"synthesis_route"' in source
 
 def test_direct_personal_memory_answers_bypass_model_generation():
     from app.main_window import MainWindow

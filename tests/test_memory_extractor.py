@@ -35,6 +35,21 @@ def test_explicit_memory_request_detection():
     )
 
 
+def test_memory_feature_mentions_are_not_memory_write_commands():
+    assert not is_explicit_memory_request(
+        "Írj részletes összefoglalót a Window Memoryról, Global Memoryról és a Remember ikonról."
+    )
+    assert not is_explicit_memory_request(
+        "Explain how the Remember button and memory architecture work."
+    )
+    assert is_explicit_memory_request(
+        "Kérlek, jegyezd meg, hogy a kedvenc shell-em PowerShell."
+    )
+    assert is_explicit_memory_request(
+        "Please remember that I prefer short answers."
+    )
+
+
 def test_extractor_returns_atomic_validated_memories():
     client = FakeClient({
         "memories": [

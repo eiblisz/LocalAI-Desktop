@@ -2,6 +2,7 @@ import re
 from dataclasses import dataclass
 
 from .artifact_service import ArtifactPlanItem, infer_artifact_requests
+from .internal_authority import internal_project_authority_reason
 from .memory_extractor import is_explicit_memory_request
 from .request_semantics import is_entity_identity_question
 from .text_normalization import canonical_match_text
@@ -121,8 +122,8 @@ def is_factual_risk_request(text):
     return bool(named_tokens or quoted_title or year_literal)
 
 
-def looks_like_web_request(text):
-    normalized = " ".join(str(text or "").lower().split())
+def _legacy_looks_like_web_request(text):
+    normalized = _fold(text)
     markers = [
         "keress rá",
         "keress ra",
@@ -153,8 +154,6 @@ def looks_like_web_request(text):
         "browse the web",
         "latest news",
         "current price",
-        "eur",
-        "€",
         "ár alatt",
         "ar alatt",
         "mennyiért",
@@ -171,23 +170,72 @@ def looks_like_web_request(text):
         "vasarlas",
         "buy",
         "price",
-        "under €",
         "under eur",
         "in stock",
         "available now",
     ]
+    def contains_marker(marker):
+        phrase = _fold(marker)
+        if not phrase:
+            return False
+        return bool(re.search(
+            rf"(?<!\w){re.escape(phrase)}(?!\w)",
+            normalized,
+            flags=re.IGNORECASE,
+        ))
+
+    currency_cue = bool(
+        re.search(r"(?<!\w)eur(?!\w)|€", str(text or ""), re.IGNORECASE)
+    )
     return (
-        _contains_any(normalized, markers)
+        any(contains_marker(marker) for marker in markers)
+        or currency_cue
         or bool(re.search(r"\bkeress\w*\b", normalized, flags=re.IGNORECASE))
         or is_freshness_sensitive_request(text)
         or is_factual_risk_request(text)
     )
 
 
+def _has_explicit_web_request(text):
+    normalized = _fold(text)
+    explicit_markers = (
+        "keress", "keresd meg", "nezd meg online", "nezz utana",
+        "interneten", "weben", "online", "look up", "search for",
+        "search the web", "find online", "browse the web",
+    )
+    return any(marker in normalized for marker in explicit_markers)
+
+
+def web_request_reason(text):
+    """Expose the deterministic authority decision behind automatic web use."""
+    if _has_explicit_web_request(text):
+        return "explicit_web"
+    if internal_project_authority_reason(text):
+        return "internal_project_authority"
+    if is_freshness_sensitive_request(text):
+        return "freshness"
+    if is_factual_risk_request(text):
+        return "factual_risk"
+    if _legacy_looks_like_web_request(text):
+        return "external_request"
+    return "stable_local"
+
+
+def looks_like_web_request(text):
+    return web_request_reason(text) in {
+        "explicit_web",
+        "freshness",
+        "factual_risk",
+        "external_request",
+    }
+
+
 def is_freshness_sensitive_request(text):
     """Return True for questions whose factual answer commonly expires."""
     normalized = _fold(text)
     if not normalized:
+        return False
+    if internal_project_authority_reason(text):
         return False
 
     explanatory_markers = (
@@ -213,6 +261,7 @@ def is_freshness_sensitive_request(text):
         "aktuális",
         "aktualis",
         "mostani",
+        "friss",
         "legfrissebb",
         "legújabb",
         "legujabb",
@@ -251,6 +300,7 @@ def is_freshness_sensitive_request(text):
 
     markers = (
         "legfrissebb",
+        "friss",
         "friss hírek",
         "friss hirek",
         "aktuális",
@@ -469,15 +519,26 @@ def plan_user_action(text, *, force_web=False, disable_web=False):
         )
 
     artifacts = tuple(infer_artifact_requests(clean))
-    needs_web = (
-        False
-        if bool(disable_web)
-        else (
-            bool(force_web)
-            or looks_like_web_request(clean)
-            or is_freshness_sensitive_request(clean)
-        )
-    )
+    # Keep the reason attached to the interface-neutral plan.  Desktop and
+    # Discord consume the same plan, so this is also the single source for
+    # user-visible diagnostics.  An explicitly selected web mode remains an
+    # override; otherwise an internal host/project request stays local even
+    # when its wording contains a general recency term such as "current".
+    inferred_web_reason = web_request_reason(clean)
+    if bool(disable_web):
+        web_reason = inferred_web_reason
+        needs_web = False
+    elif bool(force_web):
+        web_reason = "explicit_web"
+        needs_web = True
+    else:
+        web_reason = inferred_web_reason
+        needs_web = web_reason in {
+            "explicit_web",
+            "freshness",
+            "factual_risk",
+            "external_request",
+        }
 
     steps = []
     if needs_web:
@@ -487,18 +548,16 @@ def plan_user_action(text, *, force_web=False, disable_web=False):
         steps.append(ActionStep(ACTION_ARTIFACT, artifacts))
         return ActionPlan(
             tuple(steps),
-            "artifact request with web grounding"
-            if needs_web
-            else "artifact request",
+            f"artifact:{web_reason}",
         )
 
     if needs_web:
         return ActionPlan(
             tuple(steps),
-            "explicit or freshness-sensitive web request",
+            web_reason,
         )
 
-    return ActionPlan((ActionStep(ACTION_CHAT),), "stable local chat")
+    return ActionPlan((ActionStep(ACTION_CHAT),), web_reason)
 
 
 _NUMBERED_TASK_START = re.compile(

@@ -1,3 +1,5 @@
+import json
+
 from app import workers
 
 
@@ -873,9 +875,15 @@ def test_web_worker_repairs_clearly_german_answer_for_hungarian_request():
             self.repair_calls = []
 
         def chat_once(self, model, messages, timeout=600.0):
-            if messages and "Rewrite the supplied answer in Hungarian" in messages[0]["content"]:
+            if messages and "Edit only the supplied contaminated Hungarian text spans" in messages[0]["content"]:
                 self.repair_calls.append((model, messages))
-                return "Ellenőrzött találat magyarul, változatlan tényekkel."
+                payload = json.loads(messages[1]["content"].split(
+                    "BOUNDED SPANS TO REPAIR:\n", 1
+                )[1])
+                return json.dumps({"repairs": [{
+                    "id": item["id"],
+                    "text": "Ellenőrzött találat magyarul, változatlan tényekkel.",
+                } for item in payload]})
             return super().chat_once(model, messages, timeout=timeout)
 
     client = LanguageRepairClient()
@@ -901,9 +909,15 @@ def test_web_worker_fails_closed_when_language_repair_stays_wrong():
             self.repair_calls = 0
 
         def chat_once(self, model, messages, timeout=600.0):
-            if messages and "Rewrite the supplied answer in Hungarian" in messages[0]["content"]:
+            if messages and "Edit only the supplied contaminated Hungarian text spans" in messages[0]["content"]:
                 self.repair_calls += 1
-                return "Die Antwort bleibt leider auf Deutsch und enthaelt viele Preise."
+                payload = json.loads(messages[1]["content"].split(
+                    "BOUNDED SPANS TO REPAIR:\n", 1
+                )[1])
+                return json.dumps({"repairs": [{
+                    "id": item["id"],
+                    "text": "Die Antwort bleibt leider auf Deutsch und enthaelt viele Preise.",
+                } for item in payload]})
             return super().chat_once(model, messages, timeout=timeout)
 
     client = BadRepairClient()
@@ -914,12 +928,14 @@ def test_web_worker_fails_closed_when_language_repair_stays_wrong():
         "Keress nekem SSD-t",
     )
 
-    repaired = worker._repair_response_language(
-        "Die Suche zeigt viele Angebote und Preise. Hier sind die besten Produkte."
-    )
+    import pytest
+    from app.response_guard import LanguageRepairFailed
 
-    assert "nem sikerült megbízhatóan összeállítani" in repaired
-    assert "Language Guard" not in repaired
+    with pytest.raises(LanguageRepairFailed, match="language_repair_failed"):
+        worker._repair_response_language(
+            "Die Suche zeigt viele Angebote und Preise. Hier sind die besten Produkte."
+        )
+
     assert client.repair_calls == 1
     assert worker.execution_control.budget.repairs == 1
 
@@ -934,7 +950,7 @@ def test_web_language_repair_keeps_grounded_evidence_and_sources(monkeypatch):
 
         def chat_once(self, model, messages, timeout=600.0):
             system = messages[0]["content"]
-            if "Rewrite the supplied answer in Hungarian" in system:
+            if "Edit only the supplied contaminated Hungarian text spans" in system:
                 self.repair_messages = messages
                 return (
                     "Magyarország GDP-je 2026-ban 3,1%-kal nőtt. "
@@ -1006,14 +1022,14 @@ def test_web_language_repair_keeps_grounded_evidence_and_sources(monkeypatch):
     assert url in answer
     assert worker.source_metadata == [{"title": "World Bank Data", "url": url}]
     assert client.repair_messages is not None
-    assert "VERIFIED EVIDENCE REFERENCE" in client.repair_messages[1]["content"]
+    assert "BOUNDED SPANS TO REPAIR" in client.repair_messages[1]["content"]
     assert worker.execution_control.budget.search_calls == 1
 
 
 def test_web_language_repair_removes_accidental_hangul():
     class ContaminationRepairClient(DummyWebClient):
         def chat_once(self, model, messages, timeout=600.0):
-            if messages and "Rewrite the supplied answer in Hungarian" in messages[0]["content"]:
+            if messages and "Edit only the supplied contaminated Hungarian text spans" in messages[0]["content"]:
                 return "Ez egy teljesen magyar válasz."
             return super().chat_once(model, messages, timeout=timeout)
 
@@ -1497,9 +1513,9 @@ def test_family_current_version_answer_is_compacted_with_structured_sources(monk
             if not should_stop():
                 on_token(
                     "A legfrissebb Qwen modellcsalád a Qwen3.8. "
-                    "Key Highlights: Qwen3.8-Flash, Qwen3.8-27B és Qwen3.8-Flash-Next. "
+                    "Fő pontok: Qwen3.8-Flash, Qwen3.8-27B és Qwen3.8-Flash-Next. "
                     "Részletes idővonal: 2026 augusztus, 2026 szeptember. "
-                    "API improvements, Hugging Face organization, broader ecosystem, "
+                    "Programozási felület fejlesztései és szélesebb ökoszisztéma, "
                     "további hosszú kutatási összefoglaló és háttérinformációk. "
                     "Ez a rész szándékosan hosszú, hogy a tömörítő útvonal lefusson. "
                     * 8
@@ -2463,7 +2479,8 @@ def test_hungarian_language_repair_uses_native_instruction():
 
     assert repaired == "A Pokolgép 1980-ban alakult Budapesten."
     assert client.messages is not None
-    assert "kizárólag magyar" in client.messages[0]["content"].casefold()
+    assert "contaminated hungarian text spans" in client.messages[0]["content"].casefold()
+    assert "strict json" in client.messages[0]["content"].casefold()
 
 
 

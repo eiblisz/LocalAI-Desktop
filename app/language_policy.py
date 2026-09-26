@@ -123,6 +123,55 @@ _FACTUAL_LITERAL_RE = re.compile(
     flags=re.IGNORECASE,
 )
 
+# These are interface-level terms rather than a typo list.  They are allowed
+# to remain English in otherwise Hungarian prose and must survive an editorial
+# repair unchanged.
+_HUNGARIAN_ALLOWED_TECHNICAL_TERMS = {
+    "LLM",
+    "GPU",
+    "Python",
+    "token",
+    "context window",
+    "training",
+    "inference",
+    "tool use",
+    "machine learning",
+    "deep learning",
+    "embedding",
+    "Large Language Models",
+}
+_CORRUPTED_UNICODE_RE = re.compile(r"[\ufffd\u0000-\u0008\u000b\u000c\u000e-\u001f]")
+_ASCII_WORD_RE = re.compile(
+    r"(?<!\w)[A-Za-z]+(?:[-'][A-Za-z]+)?(?!\w)",
+    flags=re.UNICODE,
+)
+_ENGLISH_ADVERB_PARTICIPLE_RE = re.compile(
+    r"\b[a-z]{5,}ly\s+[a-z]{4,}(?:ed|ing)\b",
+    flags=re.IGNORECASE,
+)
+_ENGLISH_FUNCTION_WORDS = {
+    "the", "and", "or", "with", "from", "is", "are", "was", "were",
+    "be", "been", "in", "of", "to", "by", "on", "as", "this", "that",
+    "it", "one", "because", "while", "where", "when", "which", "who",
+    "called",
+}
+_ENGLISH_STRONG_GRAMMAR_WORDS = {
+    "the", "this", "that", "because", "while", "where", "when", "which",
+    "who", "called",
+}
+_QUALITY_SENTENCE_RE = re.compile(r"[^.!?\n]+(?:[.!?]+|$)", flags=re.UNICODE)
+_MAX_QUALITY_EVIDENCE = 8
+_CAPITALIZED_LITERAL_RE = re.compile(
+    r"\b(?:[A-ZÁÉÍÓÖŐÚÜŰ]{2,}[A-ZÁÉÍÓÖŐÚÜŰ0-9:_./-]*|"
+    r"[A-ZÁÉÍÓÖŐÚÜŰ][\w-]*[A-ZÁÉÍÓÖŐÚÜŰ][\w-]*)\b",
+    flags=re.UNICODE,
+)
+_PROPER_NAME_PHRASE_RE = re.compile(
+    r"\b(?:[A-ZÁÉÍÓÖŐÚÜŰ][a-záéíóöőúüű]+(?:[-'][A-ZÁÉÍÓÖŐÚÜŰa-záéíóöőúüű]+)?)"
+    r"(?:\s+[A-ZÁÉÍÓÖŐÚÜŰ][a-záéíóöőúüű]+(?:[-'][A-ZÁÉÍÓÖŐÚÜŰa-záéíóöőúüű]+)?){1,3}\b",
+    flags=re.UNICODE,
+)
+
 PREFERRED_RESPONSE_LANGUAGE = "hu"
 
 _EXPLICIT_LANGUAGE_MARKERS = {
@@ -231,6 +280,9 @@ def response_language_repair_instruction(text):
     if language == "hu":
         return (
             "Rewrite the supplied answer in Hungarian. "
+            "Correct accidental foreign-language fragments, corrupted Unicode and malformed hybrid words. "
+            "Preserve the original paragraph structure and approximately the same length. "
+            "Keep legitimate English technical terms such as LLM, token, context window, training, inference, tool use, GPU and Python. "
             "Írd át az alábbi választ kizárólag magyar nyelvre. "
             "A tényeket, számokat, URL-eket, termékneveket és tulajdonneveket "
             "pontosan őrizd meg. A személynevek írásmódját és szórendjét ne változtasd meg. "
@@ -334,6 +386,122 @@ def repair_preserves_factual_literals(original, repaired):
     required = protected_factual_literals(original)
     actual = protected_factual_literals(repaired)
     return all(actual[value] >= count for value, count in required.items())
+
+
+def _bounded_quality_evidence(value, limit=220):
+    compact = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(compact) <= limit:
+        return compact
+    return compact[:limit - 3].rstrip() + "..."
+
+
+def _foreign_language_fragments(prose):
+    """Return high-confidence, bounded English prose fragments only.
+
+    English-looking suffixes are deliberately insufficient on their own:
+    technical Hungarian prose commonly contains words such as ``embedding``
+    and ``learning``.  A fragment needs grammatical/contextual English
+    evidence, not just an ASCII morphology match.
+    """
+    findings = []
+    for sentence_match in _QUALITY_SENTENCE_RE.finditer(str(prose or "")):
+        sentence = sentence_match.group(0)
+        compact = _bounded_quality_evidence(sentence)
+        if not compact:
+            continue
+
+        for match in _ENGLISH_ADVERB_PARTICIPLE_RE.finditer(sentence):
+            findings.append(_bounded_quality_evidence(match.group(0)))
+
+        tokens = [match.group(0).casefold() for match in _ASCII_WORD_RE.finditer(sentence)]
+        function_positions = [
+            index for index, token in enumerate(tokens)
+            if token in _ENGLISH_FUNCTION_WORDS
+        ]
+        function_words = {tokens[index] for index in function_positions}
+
+        for index, token in enumerate(tokens[:-1]):
+            if token == "called":
+                findings.append("called " + tokens[index + 1])
+
+        has_sentence_grammar = (
+            len(function_positions) >= 3
+            or (
+                len(function_positions) >= 2
+                and bool(function_words & _ENGLISH_STRONG_GRAMMAR_WORDS)
+            )
+        )
+        if has_sentence_grammar:
+            findings.append(compact)
+
+    return tuple(dict.fromkeys(findings))[:_MAX_QUALITY_EVIDENCE]
+
+
+def hungarian_output_quality_evidence(text):
+    """Return issue-to-bounded-response-span evidence for Hungarian quality checks."""
+    prose = response_validation_text(text)
+    evidence = {}
+    corrupted = _CORRUPTED_UNICODE_RE.search(prose)
+    if corrupted:
+        evidence["corrupted_unicode"] = (
+            _bounded_quality_evidence(prose[max(0, corrupted.start() - 40):corrupted.end() + 40]),
+        )
+    foreign_fragments = _foreign_language_fragments(prose)
+    if foreign_fragments:
+        evidence["foreign_language_fragment"] = foreign_fragments
+    return evidence
+
+
+def hungarian_output_quality_issues(text):
+    """Return generic editorial-quality issues for Hungarian prose.
+
+    This deliberately avoids a list of individual misspellings.  The
+    deterministic checks catch broken Unicode and high-confidence foreign-prose
+    context. It intentionally does not treat length as a defect: healthy
+    long Hungarian answers must not create another model call.
+    """
+    return tuple(hungarian_output_quality_evidence(text))
+
+
+def protected_response_literals(text):
+    """Extract technical/proper-name literals that editorial repair may not drop."""
+    raw = str(text or "")
+    literals = []
+    for term in _HUNGARIAN_ALLOWED_TECHNICAL_TERMS:
+        if term.casefold() in raw.casefold():
+            literals.append("technical:" + term.casefold())
+    for value in _CAPITALIZED_LITERAL_RE.findall(response_validation_text(raw)):
+        literals.append("name:" + value.rstrip("._-/:"))
+    for value in _PROPER_NAME_PHRASE_RE.findall(response_validation_text(raw)):
+        literals.append("name:" + value.casefold())
+    return Counter(literals)
+
+
+def repair_preserves_response_shape(original, repaired, *, preserve_proper_names=True):
+    """Keep a quality repair editorial: preserve facts, structure and length."""
+    source = str(original or "").strip()
+    candidate = str(repaired or "").strip()
+    if not source or not candidate:
+        return False
+    if not repair_preserves_factual_literals(source, candidate):
+        return False
+
+    if preserve_proper_names:
+        required_literals = protected_response_literals(source)
+        actual_literals = protected_response_literals(candidate)
+        if any(actual_literals[value] < count for value, count in required_literals.items()):
+            return False
+
+    source_paragraphs = [item for item in re.split(r"\n\s*\n", source) if item.strip()]
+    candidate_paragraphs = [item for item in re.split(r"\n\s*\n", candidate) if item.strip()]
+    if len(source_paragraphs) >= 2 and len(candidate_paragraphs) != len(source_paragraphs):
+        return False
+
+    source_length = len(re.sub(r"\s+", "", source))
+    candidate_length = len(re.sub(r"\s+", "", candidate))
+    if source_length >= 600 and not (source_length * 0.85 <= candidate_length <= source_length * 1.15):
+        return False
+    return True
 
 
 def response_language_matches(user_text, response_text):

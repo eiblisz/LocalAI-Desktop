@@ -15,7 +15,11 @@ from .action_runtime import (
     ROUTE_MARKET_WEB,
     ROUTE_MULTI_ASSET_MARKET,
 )
-from .chat_orchestration import normalize_web_mode, plan_chat_actions
+from .chat_orchestration import (
+    normalize_web_mode,
+    plan_chat_actions,
+    resolve_memory_context_scope,
+)
 from .conversation_memory_recall import (
     is_safe_direct_recall,
     resolve_current_conversation_recall,
@@ -27,6 +31,8 @@ from .artifact_service import (
     infer_artifact_requests,
 )
 from .config import DEFAULT_SYSTEM_PROMPT
+from .generation_policy import build_generation_policy
+from .ollama_client import OllamaClient
 from .extension_authority import (
     ExtensionAuthority,
     ExtensionExecutionContext,
@@ -48,6 +54,7 @@ from .document_tools import (
 from .language_policy import response_language_instruction
 from .memory_answers import direct_user_memory_answer
 from .memory_runtime import remember_explicit_request, semantic_memory_context_lines
+from .memory_scope import is_durable_memory_query
 from .request_trace import RequestTrace
 from .task_constraints import build_task_constraints, task_constraints_instruction
 from .user_error_messages import public_error
@@ -58,7 +65,8 @@ from .web_intent import (
     answer_requires_web_fallback,
     plan_user_action,
 )
-from .workers import run_chat_web_request, run_market_web_request
+from .response_guard import guard_response
+from .workers import _record_ollama_failure, run_chat_web_request, run_market_web_request
 
 
 DISCORD_API_BASE = "https://discord.com/api/v10"
@@ -371,6 +379,7 @@ class DiscordBotBridge(QObject):
                         failure_code=public.code,
                         diagnostic_failure=compact,
                     )
+                    _record_ollama_failure(trace, exc)
                     trace.emit_if_enabled()
                     try:
                         await message.reply(
@@ -443,6 +452,7 @@ class DiscordBotBridge(QObject):
                 batch_size=len(contracts),
             )
             profile = contract.constraints.request_profile
+            synthesis_policy = getattr(contract, "synthesis_policy", None)
             child_trace.add_metadata(
                 child_status="running",
                 child_profile=profile.kind,
@@ -450,9 +460,27 @@ class DiscordBotBridge(QObject):
                 child_relation=profile.relation,
                 explicit_batch_child=contract.explicit_batch_child,
                 route=contract.route,
+                routing_reason=getattr(contract, "routing_reason", ""),
+                web_reason=getattr(contract, "web_reason", ""),
+                internal_project_authority=bool(
+                    getattr(contract, "internal_project_authority", False)
+                ),
+                memory_write_intent=bool(
+                    getattr(contract, "memory_write_intent", False)
+                ),
                 conversation_local=bool(
                     getattr(contract, "conversation_local", False)
                 ),
+                synthesis_route=str(
+                    getattr(synthesis_policy, "synthesis_route", "LOCAL")
+                ),
+                response_length=str(
+                    getattr(contract.constraints, "response_length", "normal")
+                ),
+                output_budget=int(
+                    getattr(contract.constraints, "output_budget", 1024)
+                ),
+                web_required=bool(getattr(contract, "use_web", False)),
             )
             try:
                 async with message.channel.typing():
@@ -467,6 +495,19 @@ class DiscordBotBridge(QObject):
                         constraints=contract.constraints,
                         conversation_local=bool(
                             getattr(contract, "conversation_local", False)
+                        ),
+                        internal_project_authority=bool(
+                            getattr(contract, "internal_project_authority", False)
+                        ),
+                        synthesis_route=getattr(
+                            synthesis_policy,
+                            "synthesis_route",
+                            None,
+                        ),
+                        output_budget=getattr(
+                            contract.constraints,
+                            "output_budget",
+                            None,
                         ),
                     )
                 child_trace.add_metadata(child_status="passed")
@@ -485,6 +526,7 @@ class DiscordBotBridge(QObject):
                     failure_code=public.code,
                     diagnostic_failure=compact,
                 )
+                _record_ollama_failure(child_trace, child_exc)
                 last_chat_id = (
                     self._persist_child_failure(
                         content,
@@ -610,6 +652,7 @@ class DiscordBotBridge(QObject):
             trace.end(
                 "memory_scope_resolution",
                 memory_scope="current_window",
+                memory_reason="current_window_direct_recall",
                 cross_window_requested=False,
                 global_memory_requested=False,
             )
@@ -641,6 +684,8 @@ class DiscordBotBridge(QObject):
 
     def _build_memory_context(self, query, limit=8):
         if self.memory_store is None:
+            return ""
+        if not is_durable_memory_query(query):
             return ""
 
         memories = self.memory_store.retrieve_memories(query, limit=limit)
@@ -846,6 +891,7 @@ class DiscordBotBridge(QObject):
         constraints=None,
         *,
         conversation_local=False,
+        trace=None,
     ):
         constraints = constraints or build_task_constraints(prompt)
         system_prompt = (
@@ -874,7 +920,33 @@ class DiscordBotBridge(QObject):
                 "raw messages. If the requested fact was not stated here, say so. "
                 "Do not infer it from long-term memory."
             )
-        memory_context = "" if conversation_local else self._build_memory_context(prompt)
+        memory_scope = resolve_memory_context_scope(
+            prompt,
+            conversation_local=conversation_local,
+        )
+        if trace is not None:
+            trace.begin("memory_scope_resolution")
+            trace.end(
+                "memory_scope_resolution",
+                memory_scope=memory_scope.memory_scope,
+                memory_reason=memory_scope.reason,
+                cross_window_requested=memory_scope.cross_window_requested,
+                global_memory_requested=memory_scope.global_memory_requested,
+                current_window_allowed=memory_scope.include_current_memory,
+                cross_window_allowed=memory_scope.include_cross_window,
+                global_memory_allowed=memory_scope.include_global_memory,
+            )
+            trace.begin("global_memory_retrieval")
+        memory_context = (
+            self._build_memory_context(prompt)
+            if memory_scope.include_global_memory
+            else ""
+        )
+        if trace is not None:
+            trace.end(
+                "global_memory_retrieval",
+                global_memory_hit=bool(memory_context),
+            )
         if memory_context:
             system_prompt = f"{system_prompt}\n\n{memory_context}"
         return system_prompt
@@ -886,6 +958,7 @@ class DiscordBotBridge(QObject):
         constraints=None,
         *,
         conversation_local=False,
+        trace=None,
     ):
         messages = [
             {
@@ -894,6 +967,7 @@ class DiscordBotBridge(QObject):
                     prompt,
                     constraints,
                     conversation_local=conversation_local,
+                    trace=trace,
                 ),
             }
         ]
@@ -913,12 +987,18 @@ class DiscordBotBridge(QObject):
         *,
         trace=None,
         explicit_batch_child=False,
+        output_budget=None,
+        synthesis_route=None,
     ):
         kwargs = {}
         if trace is not None:
             kwargs["trace"] = trace
         if explicit_batch_child:
             kwargs["explicit_batch_child"] = True
+        if output_budget is not None and isinstance(self.ollama_client, OllamaClient):
+            kwargs["output_budget"] = int(output_budget)
+        if synthesis_route is not None and isinstance(self.ollama_client, OllamaClient):
+            kwargs["synthesis_route"] = str(synthesis_route)
         return run_chat_web_request(
             self.ollama_client,
             self.settings.model,
@@ -960,6 +1040,7 @@ class DiscordBotBridge(QObject):
             chat,
             prompt,
             constraints=constraints,
+            trace=trace,
         )
         return self._run_chat_web(
             messages,
@@ -1055,6 +1136,9 @@ class DiscordBotBridge(QObject):
         explicit_batch_child=False,
         constraints=None,
         conversation_local=False,
+        internal_project_authority=False,
+        synthesis_route=None,
+        output_budget=None,
     ):
         if action_plan.has(ACTION_MEMORY_WRITE):
             answer, chat_id = self._remember_remote(prompt)
@@ -1087,6 +1171,7 @@ class DiscordBotBridge(QObject):
             allow_web_fallback=(
                 self._current_web_mode() != "OFF"
                 and not conversation_local
+                and not internal_project_authority
             ),
             trace=trace,
             original_prompt=original_prompt,
@@ -1094,6 +1179,9 @@ class DiscordBotBridge(QObject):
             explicit_batch_child=explicit_batch_child,
             constraints=constraints,
             conversation_local=conversation_local,
+            internal_project_authority=internal_project_authority,
+            synthesis_route=synthesis_route,
+            output_budget=output_budget,
         )
         return {"chat_id": chat_id, "messages": [answer], "artifacts": []}
 
@@ -1108,6 +1196,9 @@ class DiscordBotBridge(QObject):
         explicit_batch_child=False,
         constraints=None,
         conversation_local=False,
+        internal_project_authority=False,
+        synthesis_route=None,
+        output_budget=None,
     ):
         if use_web is None:
             crypto_available, multi_asset_available = (
@@ -1137,8 +1228,36 @@ class DiscordBotBridge(QObject):
                     }
                 )
             )
+            internal_project_authority = bool(
+                planned and planned[0].internal_project_authority
+            )
         if allow_web_fallback is None:
-            allow_web_fallback = self._current_web_mode() != "OFF"
+            allow_web_fallback = (
+                self._current_web_mode() != "OFF"
+                and not internal_project_authority
+            )
+
+        constraints = constraints or build_task_constraints(prompt)
+        generation_policy = build_generation_policy(
+            prompt,
+            profile=constraints.request_profile,
+            use_web=bool(use_web),
+            conversation_local=conversation_local,
+        )
+        synthesis_route = str(
+            synthesis_route or generation_policy.synthesis_route
+        ).upper()
+        output_budget = max(
+            1,
+            int(output_budget or generation_policy.output_budget),
+        )
+        if trace is not None:
+            trace.add_metadata(
+                synthesis_route=synthesis_route,
+                response_length=generation_policy.response_length,
+                output_budget=output_budget,
+                web_required=bool(use_web),
+            )
 
         chat = self._load_remote_chat()
         chat["model"] = self.settings.model
@@ -1235,8 +1354,10 @@ class DiscordBotBridge(QObject):
             prompt,
             constraints=constraints,
             conversation_local=conversation_local,
+            trace=trace,
         )
 
+        used_web_response = bool(use_web)
         if use_web:
             if is_crypto_quote_request(prompt):
                 crypto_extension = self._crypto_market_extension()
@@ -1284,26 +1405,54 @@ class DiscordBotBridge(QObject):
                     prompt,
                     trace=trace,
                     explicit_batch_child=explicit_batch_child,
+                    output_budget=output_budget,
+                    synthesis_route=synthesis_route,
                 )
         else:
             if trace is not None:
                 trace.begin("model_inference")
-            answer = self.ollama_client.chat_once(
-                model=self.settings.model,
-                messages=messages,
-            ).strip()
+                trace.begin("primary_generation")
+            if isinstance(self.ollama_client, OllamaClient):
+                answer = self.ollama_client.chat_once(
+                    model=self.settings.model,
+                    messages=messages,
+                    num_predict=output_budget,
+                    call_phase="primary_generation",
+                ).strip()
+            else:
+                answer = self.ollama_client.chat_once(
+                    model=self.settings.model,
+                    messages=messages,
+                ).strip()
             if trace is not None:
                 trace.end("model_inference")
+                trace.end("primary_generation", primary_generation_result="completed")
             if allow_web_fallback and answer_requires_web_fallback(prompt, answer):
+                used_web_response = True
                 answer = self._run_chat_web(
                     messages,
                     prompt,
                     trace=trace,
                     explicit_batch_child=explicit_batch_child,
+                    output_budget=output_budget,
+                    synthesis_route="WEB",
                 )
 
         if not answer:
             answer = "A helyi modell ures valaszt adott."
+
+        # Keep local Discord replies on the same bounded language/quality path
+        # as Desktop replies. Web replies already pass through ChatWebWorker.
+        if not used_web_response:
+            answer = guard_response(
+                self.ollama_client,
+                self.settings.model,
+                prompt,
+                answer,
+                constraints=constraints,
+                output_budget=output_budget,
+                trace=trace,
+            )
 
         chat["messages"].append({"role": "assistant", "content": answer})
         self.chat_store.save(chat)

@@ -73,6 +73,19 @@ def test_discord_bot_settings_require_exact_allowlist_ids_and_model():
         DiscordBotSettings.from_extension(broken)
 
 
+def test_discord_uses_shared_authority_reason_and_blocks_internal_web_fallback():
+    batch_source = inspect.getsource(DiscordBotBridge._run_action_batch)
+    execute_source = inspect.getsource(DiscordBotBridge._execute_planned_action)
+    answer_source = inspect.getsource(DiscordBotBridge._answer_prompt)
+
+    assert 'getattr(contract, "routing_reason", "")' in batch_source
+    assert 'getattr(contract, "internal_project_authority", False)' in batch_source
+    assert "internal_project_authority=False" in execute_source
+    assert "and not internal_project_authority" in execute_source
+    assert "internal_project_authority=False" in answer_source
+    assert "and not internal_project_authority" in answer_source
+
+
 def test_split_discord_text_never_exceeds_limit():
     text = ("abc " * 1500).strip()
     chunks = split_discord_text(text, limit=500)
@@ -384,7 +397,9 @@ def test_remote_prompt_injects_relevant_persistent_memory_for_model(tmp_path: Pa
         memory_store=memory_store,
     )
 
-    answer, _chat_id = bridge._answer_prompt("Mit tudsz a LocalAI Desktop Prometheusz nevéről?")
+    answer, _chat_id = bridge._answer_prompt(
+        "Mit tudsz a LocalAI Desktop projektem Prometheusz nevéről?"
+    )
 
     assert answer == "Rendben."
     system = ollama.messages[0]["content"]
@@ -392,6 +407,46 @@ def test_remote_prompt_injects_relevant_persistent_memory_for_model(tmp_path: Pa
     assert "Durable memory value: Prometheusz" in system
     assert 'relation="preferred remote name"' in system
     assert "never quote as answer" in system
+
+
+def test_remote_fresh_general_prompt_omits_unrelated_persistent_memory(tmp_path: Path):
+    memory_store = MemoryStore(tmp_path / "memory.sqlite3")
+    memory_store.remember_explicit(
+        category="PROJECT",
+        scope="USER",
+        subject="Private AI project",
+        key="private_preference",
+        value="Use a blue interface.",
+        source_chat_id="seed",
+        source_excerpt="Private preference.",
+        importance="PINNED",
+    )
+    bridge = DiscordBotBridge(
+        ollama_client=SimpleNamespace(),
+        chat_store=ChatStore(tmp_path / "chats"),
+        settings=DiscordBotSettings(
+            extension_id="ext-fresh-general",
+            name="Prometheusz",
+            guild_id=111111111111111111,
+            channel_id=222222222222222222,
+            allowed_user_id=333333333333333333,
+            model="gemma4:26b",
+        ),
+        token="T" * 40,
+        memory_store=memory_store,
+    )
+
+    system = bridge._remote_system_prompt(
+        (
+            "Írj egy részletes, legalább 10 bekezdéses magyar összefoglalót "
+            "arról, hogyan működik a mesterséges intelligencia "
+            "általánosságban, különös tekintettel a lokális modellek "
+            "előnyei-hátrányai."
+        )
+    )
+
+    assert "LONG-TERM MEMORY CONTEXT:" not in system
+    assert "Use a blue interface." not in system
 
 
 def test_remote_current_conversation_query_excludes_long_term_memory(tmp_path: Path):

@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from .crypto_market_data import is_crypto_quote_request
 from .multi_asset_market_data import is_multi_asset_quote_request
 from .task_constraints import build_task_constraints
+from .generation_policy import build_generation_policy
 from .web_intent import (
     ACTION_ARTIFACT,
     ACTION_MEMORY_WRITE,
@@ -54,10 +55,33 @@ class ActionContract:
     constraints: object
     explicit_batch_child: bool = False
     conversation_local: bool = False
+    synthesis_policy: object = None
 
     @property
     def artifact_plans(self):
         return self.plan.artifact_plans
+
+    @property
+    def routing_reason(self):
+        """The deterministic, model-independent reason for this route."""
+        return str(self.plan.reason or "")
+
+    @property
+    def web_reason(self):
+        if self.use_web:
+            return self.routing_reason.removeprefix("artifact:")
+        return ""
+
+    @property
+    def internal_project_authority(self):
+        return (
+            self.routing_reason.removeprefix("artifact:")
+            == "internal_project_authority"
+        )
+
+    @property
+    def memory_write_intent(self):
+        return self.route == ROUTE_MEMORY_WRITE
 
 
 @dataclass(frozen=True)
@@ -231,6 +255,17 @@ class ActionRuntime:
                 crypto_market_available=crypto_market_available,
                 multi_asset_market_available=multi_asset_market_available,
             )
+            constraints = build_task_constraints(
+                item.prompt,
+                parent_text=user_text,
+                explicit_batch_child=explicit_batch,
+            )
+            synthesis_policy = build_generation_policy(
+                item.prompt,
+                profile=constraints.request_profile,
+                use_web=decision.use_web,
+                conversation_local=item_conversation_local,
+            )
             contracts.append(
                 ActionContract(
                     index=index,
@@ -243,13 +278,10 @@ class ActionRuntime:
                         decision.route,
                         use_web=decision.use_web,
                     ),
-                    constraints=build_task_constraints(
-                        item.prompt,
-                        parent_text=user_text,
-                        explicit_batch_child=explicit_batch,
-                    ),
+                    constraints=constraints,
                     explicit_batch_child=explicit_batch,
                     conversation_local=item_conversation_local,
+                    synthesis_policy=synthesis_policy,
                 )
             )
 

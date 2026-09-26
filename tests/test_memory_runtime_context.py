@@ -29,7 +29,7 @@ def test_runtime_memory_context_includes_relevant_canonical_memory(tmp_path):
         importance="REMEMBER",
     )
 
-    context = _build_context(store, "Tell me about the BTCUSDT project")
+    context = _build_context(store, "Tell me about my BTCUSDT project")
 
     assert "LONG-TERM MEMORY CONTEXT:" in context
     assert "BTCUSDT 15m realistic" in context
@@ -73,7 +73,7 @@ def test_runtime_memory_context_excludes_session_only_memory(tmp_path):
     assert context == ""
 
 
-def test_runtime_memory_context_includes_pinned_global_memory(tmp_path):
+def test_runtime_memory_context_excludes_unrelated_pinned_global_memory(tmp_path):
     store = MemoryStore(tmp_path / "memory.sqlite3")
 
     store.add_memory(
@@ -87,4 +87,4 @@ def test_runtime_memory_context_includes_pinned_global_memory(tmp_path):
 
     context = _build_context(store, "Tell me something unrelated")
 
-    assert "Prefer single-line PowerShell commands" in context
+    assert context == ""

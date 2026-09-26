@@ -39,6 +39,42 @@ def public_error(message, *, language="hu"):
                 "I could not find enough reliable public sources for this answer. Please try again later or use more specific keywords."
             ),
         )
+    if "output-token limit" in lowered or "output token limit" in lowered:
+        return PublicError(
+            "generation_length_limit",
+            (
+                "A válasz elérte a biztonságos kimeneti korlátot, ezért nem jelenítek meg csonka szöveget. Próbáld meg rövidebb kéréssel."
+                if hungarian else
+                "The response reached its safe output limit, so I did not show a truncated answer. Please try a shorter request."
+            ),
+        )
+    if "language_repair_failed" in lowered:
+        return PublicError(
+            "language_repair_failed",
+            (
+                "A válasz nyelvi hibáját most nem sikerült biztonságosan javítani. Próbáld meg újra."
+                if hungarian else
+                "I could not safely repair a language issue in the response. Please try again."
+            ),
+        )
+    if "fluency_audit_failed" in lowered:
+        return PublicError(
+            "fluency_audit_failed",
+            (
+                "A válasz magyar nyelvi ellenőrzése most nem adott biztonságos eredményt. Próbáld meg újra."
+                if hungarian else
+                "The Hungarian fluency check did not return a safe result. Please try again."
+            ),
+        )
+    if "repair_integrity_failed" in lowered:
+        return PublicError(
+            "repair_integrity_failed",
+            (
+                "A válasz javítása megváltoztatta volna a védett tartalmat, ezért elutasítottam. Próbáld meg újra."
+                if hungarian else
+                "The repair would have changed protected response content, so it was rejected. Please try again."
+            ),
+        )
     return PublicError(
         "execution_failed",
         (

@@ -6,6 +6,10 @@ from .language_policy import (
     effective_response_language,
     explicit_response_language,
 )
+from .generation_policy import (
+    output_budget_for_response_length,
+    requested_response_length,
+)
 from .request_semantics import classify_request
 
 
@@ -19,6 +23,8 @@ class TaskConstraints:
     user_explicit_constraints: tuple[str, ...] = ()
     request_profile: object = None
     explicit_batch_child: bool = False
+    response_length: str = "normal"
+    output_budget: int = 1024
 
 
 def _clean(text):
@@ -108,6 +114,8 @@ def build_task_constraints(
             else ("natural_english" if language == "en" else "match_user_language")
         )
     )
+    profile = classify_request(parent)
+    response_length = requested_response_length(parent, profile=profile)
     return TaskConstraints(
         response_language=language,
         output_style=output_style,
@@ -119,8 +127,10 @@ def build_task_constraints(
         ),
         format_constraints=_format_constraints(canonical_parent),
         user_explicit_constraints=_explicit_constraints(canonical_parent),
-        request_profile=classify_request(parent),
+        request_profile=profile,
         explicit_batch_child=bool(explicit_batch_child),
+        response_length=response_length,
+        output_budget=output_budget_for_response_length(response_length),
     )
 
 
@@ -167,6 +177,10 @@ def task_constraints_instruction(constraints, *, current_subtask=""):
             f"- Response depth: {getattr(profile, 'response_depth', 'standard')}.",
             f"- Research breadth: {getattr(profile, 'research_breadth', 'balanced')}.",
         ])
+    lines.extend([
+        f"- Requested response length: {constraints.response_length}.",
+        f"- Output budget: {constraints.output_budget}.",
+    ])
 
     if constraints.user_explicit_constraints:
         lines.append(

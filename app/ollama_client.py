@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 import uuid
 from typing import Callable
 
@@ -27,7 +28,93 @@ class IncompleteGenerationError(RuntimeError):
     pass
 
 
+def _tag_ollama_failure(
+    exc,
+    *,
+    stage,
+    classification,
+    request_sequence=None,
+    call_phase=None,
+):
+    """Attach safe, machine-readable context without replacing the root error."""
+    try:
+        exc.localai_failure_stage = str(stage)
+        exc.localai_failure_classification = str(classification)
+        if request_sequence is not None:
+            exc.localai_ollama_request_sequence = int(request_sequence)
+            exc.localai_ollama_initial_request = int(request_sequence) == 1
+        if call_phase:
+            exc.localai_ollama_call_phase = str(call_phase)
+        response = getattr(exc, "response", None)
+        status = getattr(response, "status_code", None)
+        if status is not None:
+            exc.localai_ollama_http_status = int(status)
+    except Exception:
+        pass
+    return exc
+
+
+def ollama_failure_metadata(exc):
+    """Return trace-safe failure classification for a caught Ollama error."""
+    stage = str(getattr(exc, "localai_failure_stage", "") or "")
+    classification = str(
+        getattr(exc, "localai_failure_classification", "") or ""
+    )
+    if not stage:
+        if isinstance(exc, IncompleteGenerationError):
+            stage = "stream_completion"
+            classification = "incomplete_generation"
+        elif isinstance(exc, requests.Timeout):
+            stage = "ollama_transport"
+            classification = "transport_timeout"
+        elif isinstance(exc, requests.ConnectionError):
+            stage = "ollama_transport"
+            classification = "transport_connection"
+        elif isinstance(exc, requests.HTTPError):
+            stage = "ollama_http"
+            classification = "http_status"
+        elif isinstance(exc, requests.RequestException):
+            stage = "ollama_transport"
+            classification = "transport_error"
+        elif isinstance(exc, OllamaResourceBusyError):
+            stage = "model_preparation"
+            classification = "model_resource_safety"
+        else:
+            stage = "unknown"
+            classification = "unexpected_execution_error"
+
+    metadata = {
+        "ollama_failure_stage": stage,
+        "ollama_failure_classification": classification,
+    }
+    for attribute, key in (
+        ("localai_ollama_request_sequence", "ollama_request_sequence"),
+        ("localai_ollama_initial_request", "ollama_initial_request"),
+        ("localai_ollama_http_status", "ollama_http_status"),
+        ("localai_ollama_call_phase", "ollama_call_phase"),
+    ):
+        value = getattr(exc, attribute, None)
+        if value is not None:
+            metadata[key] = value
+    return metadata
+
+
+def _request_failure_details(exc):
+    if isinstance(exc, requests.Timeout):
+        return "ollama_transport", "transport_timeout"
+    if isinstance(exc, requests.ConnectionError):
+        return "ollama_transport", "transport_connection"
+    if isinstance(exc, requests.HTTPError):
+        return "ollama_http", "http_status"
+    if isinstance(exc, requests.RequestException):
+        return "ollama_transport", "transport_error"
+    return "model_inference", "model_request_failed"
+
+
 class OllamaClient:
+    # The shared response guard may use strict JSON for a bounded fluency audit.
+    supports_hungarian_fluency_audit = True
+
     def __init__(
         self,
         base_url: str = OLLAMA_BASE_URL,
@@ -44,6 +131,13 @@ class OllamaClient:
             f"{self.owner_type.lower()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
         )
         self.resource_store = resource_store or ResourceLeaseStore()
+        self._request_sequence_lock = threading.Lock()
+        self._request_sequence = 0
+
+    def _next_request_sequence(self):
+        with self._request_sequence_lock:
+            self._request_sequence += 1
+            return self._request_sequence
 
     def is_available(self, timeout: float = 2.0) -> bool:
         try:
@@ -329,26 +423,51 @@ class OllamaClient:
         timeout: float = 600.0,
         response_format=None,
         control=None,
+        num_predict=None,
+        call_phase=None,
     ) -> str:
+        call_phase = str(call_phase or "model_inference")
+        request_sequence = self._next_request_sequence()
         if control is not None:
             control.claim_model_call()
             timeout = control.request_timeout(timeout)
 
         if self.auto_prepare_model:
-            self.prepare_model(model)
+            try:
+                self.prepare_model(model)
+            except Exception as exc:
+                raise _tag_ollama_failure(
+                    exc,
+                    stage="model_preparation",
+                    classification="model_prepare_failed",
+                    request_sequence=request_sequence,
+                    call_phase=call_phase,
+                )
 
         request_id = uuid.uuid4().hex
         self._set_request_state(model, request_id, STATE_MODEL_LOADING)
+        output_budget = (
+            OLLAMA_NUM_PREDICT
+            if num_predict is None
+            else max(1, int(num_predict))
+        )
+        structured_response = response_format is not None
         payload = {
             "model": model,
             "messages": messages,
+            # Keep controlled helper calls on the same streaming transport as
+            # ordinary generation. Some Ollama/model combinations return HTTP
+            # 500 for non-streaming structured requests. If a structured stream
+            # closes after emitting complete JSON but before the terminal done
+            # marker, the JSON contract below can safely accept that content;
+            # the caller still performs its stricter semantic validation.
             "stream": bool(control is not None),
             # Recent Ollama thinking-capable models, including the preferred
             # Gemma model, otherwise spend tokens on hidden reasoning before
             # they emit a visible answer.  The explicit request is harmless
             # for ordinary models and can be opt-in overridden by the operator.
             "think": OLLAMA_THINKING_ENABLED,
-            "options": {"num_predict": OLLAMA_NUM_PREDICT},
+            "options": {"num_predict": output_budget},
         }
         if response_format is not None:
             if not isinstance(response_format, (str, dict)):
@@ -395,16 +514,45 @@ class OllamaClient:
                         control.cancellation.unregister(close_callback)
                 result = "".join(parts)
                 if not control.cancellation.is_cancelled() and not item.get("done"):
-                    raise IncompleteGenerationError(
-                        "Ollama ended the response stream without a completion marker; "
-                        "the incomplete response was rejected."
-                    )
+                    structured_json_complete = False
+                    if structured_response and result.strip():
+                        try:
+                            json.loads(result)
+                            structured_json_complete = True
+                        except (TypeError, ValueError, json.JSONDecodeError):
+                            structured_json_complete = False
+                    if not structured_json_complete:
+                        raise _tag_ollama_failure(
+                            IncompleteGenerationError(
+                                "Ollama ended the response stream without a completion marker; "
+                                "the incomplete response was rejected."
+                            ),
+                            stage="stream_completion",
+                            classification="stream_terminated_without_completion",
+                            request_sequence=request_sequence,
+                            call_phase=call_phase,
+                        )
             if str(item.get("done_reason") or "").strip().lower() == "length":
-                raise IncompleteGenerationError(
-                    "Ollama stopped at the configured output-token limit; "
-                    "the incomplete response was rejected."
+                raise _tag_ollama_failure(
+                    IncompleteGenerationError(
+                        "Ollama stopped at the configured output-token limit; "
+                        "the incomplete response was rejected."
+                    ),
+                    stage="generation_length",
+                    classification="output_token_limit",
+                    request_sequence=request_sequence,
+                    call_phase=call_phase,
                 )
         except Exception as exc:
+            if not getattr(exc, "localai_failure_stage", ""):
+                stage, classification = _request_failure_details(exc)
+                _tag_ollama_failure(
+                    exc,
+                    stage=stage,
+                    classification=classification,
+                    request_sequence=request_sequence,
+                    call_phase=call_phase,
+                )
             self._set_request_state(
                 model,
                 request_id,
@@ -430,22 +578,40 @@ class OllamaClient:
         should_stop: Callable[[], bool],
         timeout: float = 600.0,
         control=None,
+        num_predict=None,
+        call_phase=None,
     ) -> None:
+        call_phase = str(call_phase or "model_inference")
+        request_sequence = self._next_request_sequence()
         if control is not None:
             control.claim_model_call()
             timeout = control.request_timeout(timeout)
 
         if self.auto_prepare_model:
-            self.prepare_model(model)
+            try:
+                self.prepare_model(model)
+            except Exception as exc:
+                raise _tag_ollama_failure(
+                    exc,
+                    stage="model_preparation",
+                    classification="model_prepare_failed",
+                    request_sequence=request_sequence,
+                    call_phase=call_phase,
+                )
 
         request_id = uuid.uuid4().hex
         self._set_request_state(model, request_id, STATE_MODEL_LOADING)
+        output_budget = (
+            OLLAMA_NUM_PREDICT
+            if num_predict is None
+            else max(1, int(num_predict))
+        )
         payload = {
             "model": model,
             "messages": messages,
             "stream": True,
             "think": OLLAMA_THINKING_ENABLED,
-            "options": {"num_predict": OLLAMA_NUM_PREDICT},
+            "options": {"num_predict": output_budget},
         }
         final_item = {}
         done_reason = ""
@@ -498,16 +664,37 @@ class OllamaClient:
                     control.cancellation.unregister(close_callback)
                 done_reason = str(final_item.get("done_reason") or "").strip().lower()
                 if not stopped and not final_item.get("done"):
-                    raise IncompleteGenerationError(
-                        "Ollama ended the response stream without a completion marker; "
-                        "the incomplete response was rejected."
+                    raise _tag_ollama_failure(
+                        IncompleteGenerationError(
+                            "Ollama ended the response stream without a completion marker; "
+                            "the incomplete response was rejected."
+                        ),
+                        stage="stream_completion",
+                        classification="stream_terminated_without_completion",
+                        request_sequence=request_sequence,
+                        call_phase=call_phase,
                     )
                 if not stopped and done_reason == "length":
-                    raise IncompleteGenerationError(
-                        "Ollama stopped at the configured output-token limit; "
-                        "the incomplete response was rejected."
+                    raise _tag_ollama_failure(
+                        IncompleteGenerationError(
+                            "Ollama stopped at the configured output-token limit; "
+                            "the incomplete response was rejected."
+                        ),
+                        stage="generation_length",
+                        classification="output_token_limit",
+                        request_sequence=request_sequence,
+                        call_phase=call_phase,
                     )
         except Exception as exc:
+            if not getattr(exc, "localai_failure_stage", ""):
+                stage, classification = _request_failure_details(exc)
+                _tag_ollama_failure(
+                    exc,
+                    stage=stage,
+                    classification=classification,
+                    request_sequence=request_sequence,
+                    call_phase=call_phase,
+                )
             self._set_request_state(
                 model,
                 request_id,

@@ -63,6 +63,7 @@ from .chat_orchestration import (
     is_global_memory_request,
     is_other_window_request,
     plan_chat_actions,
+    resolve_memory_context_scope,
 )
 from .chat_extensions_dialog import ChatExtensionsDialog
 from .conversation_memory_recall import (
@@ -91,6 +92,7 @@ from .memory_answers import direct_user_memory_answer
 from .memory_dialog import MemoryDialog
 from .memory_extractor import is_explicit_memory_request
 from .memory_runtime import semantic_memory_context_lines
+from .memory_scope import is_durable_memory_query
 from .memory_store import MemoryStore
 from .window_memory import WindowMemoryService
 from .ollama_client import OllamaClient
@@ -99,6 +101,7 @@ from .resource_monitor import format_resource_summary, get_system_metrics
 from .scheduler_dialog import SchedulerDialog
 from .sidebar_controller import SidebarController
 from .request_trace import RequestTrace
+from .ollama_client import ollama_failure_metadata
 from .user_error_messages import public_error
 from .task_constraints import task_constraints_instruction
 from .scheduler_runtime import SchedulerRuntime
@@ -1100,6 +1103,7 @@ class MainWindow(QMainWindow):
             trace.end(
                 "memory_scope_resolution",
                 memory_scope="current_window",
+                memory_reason="current_window_direct_recall",
                 cross_window_requested=False,
                 global_memory_requested=False,
             )
@@ -1151,6 +1155,8 @@ class MainWindow(QMainWindow):
 
     def _build_memory_context(self, query, *, limit=8):
         """Build bounded runtime-only long-term memory context for the model."""
+        if not is_durable_memory_query(query):
+            return ""
         memories = self.memory_store.retrieve_memories(query, limit=limit)
         if not memories:
             return ""
@@ -1380,25 +1386,26 @@ class MainWindow(QMainWindow):
                 "window memory and raw messages. If the requested fact was not stated "
                 "here, say so. Do not infer it from other chats or long-term memory."
             )
-        other_window_request = is_other_window_request(prompt)
-        global_memory_request = is_global_memory_request(prompt)
+        memory_scope = resolve_memory_context_scope(
+            prompt,
+            conversation_local=conversation_local,
+        )
         if trace is not None:
             trace.end(
                 "memory_scope_resolution",
-                memory_scope=(
-                    "current_window" if conversation_local else
-                    "other_window" if other_window_request else
-                    "global_memory" if global_memory_request else
-                    "mixed_context"
-                ),
-                cross_window_requested=other_window_request,
-                global_memory_requested=global_memory_request,
+                memory_scope=memory_scope.memory_scope,
+                memory_reason=memory_scope.reason,
+                cross_window_requested=memory_scope.cross_window_requested,
+                global_memory_requested=memory_scope.global_memory_requested,
+                current_window_allowed=memory_scope.include_current_memory,
+                cross_window_allowed=memory_scope.include_cross_window,
+                global_memory_allowed=memory_scope.include_global_memory,
             )
             trace.begin("global_memory_retrieval")
         memory_context = (
-            ""
-            if conversation_local or other_window_request
-            else self._build_memory_context(prompt)
+            self._build_memory_context(prompt)
+            if memory_scope.include_global_memory
+            else ""
         )
         if trace is not None:
             trace.end(
@@ -1415,15 +1422,11 @@ class MainWindow(QMainWindow):
             self.generation_chat_id,
             chat_messages,
             prompt,
-            include_related_windows=(
-                not conversation_local and not global_memory_request
-            ),
-            include_current_memory=(
-                not other_window_request and not global_memory_request
-            ),
+            include_related_windows=memory_scope.include_cross_window,
+            include_current_memory=memory_scope.include_current_memory,
             trace=trace,
         )
-        if other_window_request:
+        if memory_scope.cross_window_requested:
             if window_context.global_windows:
                 system_prompt = (
                     f"{system_prompt}\n\nOTHER CONVERSATION AUTHORITY:\n"
@@ -1536,6 +1539,7 @@ class MainWindow(QMainWindow):
             batch_size=self.pending_action_batch_size,
         )
         profile = contract.constraints.request_profile
+        synthesis_policy = getattr(contract, "synthesis_policy", None)
         self.pending_request_trace.add_metadata(
             batch_size=self.pending_action_batch_size,
             child_index=contract.index,
@@ -1549,9 +1553,27 @@ class MainWindow(QMainWindow):
                 False,
             ),
             route=contract.route,
+            routing_reason=getattr(contract, "routing_reason", ""),
+            web_reason=getattr(contract, "web_reason", ""),
+            internal_project_authority=bool(
+                getattr(contract, "internal_project_authority", False)
+            ),
+            memory_write_intent=bool(
+                getattr(contract, "memory_write_intent", False)
+            ),
             conversation_local=bool(
                 getattr(contract, "conversation_local", False)
             ),
+            synthesis_route=str(
+                getattr(synthesis_policy, "synthesis_route", "LOCAL")
+            ),
+            response_length=str(
+                getattr(contract.constraints, "response_length", "normal")
+            ),
+            output_budget=int(
+                getattr(contract.constraints, "output_budget", 1024)
+            ),
+            web_required=bool(getattr(contract, "use_web", False)),
         )
         prompt = contract.prompt
         model = self.pending_action_model
@@ -1764,6 +1786,12 @@ class MainWindow(QMainWindow):
                     "explicit_batch_child",
                     False,
                 ),
+                output_budget=getattr(contract.constraints, "output_budget", None),
+                synthesis_route=getattr(
+                    synthesis_policy,
+                    "synthesis_route",
+                    None,
+                ),
             )
         elif contract.route == ROUTE_CHAT:
             self.worker = AdaptiveChatWorker(
@@ -1776,6 +1804,9 @@ class MainWindow(QMainWindow):
                     and not bool(
                         getattr(contract, "conversation_local", False)
                     )
+                    and not bool(
+                        getattr(contract, "internal_project_authority", False)
+                    )
                 ),
                 constraints=contract.constraints,
                 trace=self.pending_request_trace,
@@ -1783,6 +1814,12 @@ class MainWindow(QMainWindow):
                     contract,
                     "explicit_batch_child",
                     False,
+                ),
+                output_budget=getattr(contract.constraints, "output_budget", None),
+                synthesis_route=getattr(
+                    synthesis_policy,
+                    "synthesis_route",
+                    None,
                 ),
             )
         else:
@@ -1997,11 +2034,18 @@ class MainWindow(QMainWindow):
         full_message = " ".join(str(message or "").split())
         public = public_error(full_message)
         if self.pending_request_trace is not None:
+            existing_trace_metadata = dict(
+                self.pending_request_trace.snapshot().get("metadata") or {}
+            )
             self.pending_request_trace.add_metadata(
                 child_status="failed",
                 failure_code=public.code,
                 diagnostic_failure=full_message[:1000],
             )
+            if not existing_trace_metadata.get("ollama_failure_stage"):
+                self.pending_request_trace.add_metadata(
+                    **ollama_failure_metadata(message),
+                )
             self.pending_request_trace.emit_if_enabled()
         diagnostic = (
             self.pending_request_trace.snapshot()
@@ -2056,7 +2100,10 @@ class MainWindow(QMainWindow):
             self.pending_action_batch_size = 0
             self.pending_batch_trace = None
             self.generation_chat_id = ""
-            QTimer.singleShot(0, self._run_pending_scheduled_task)
+            # The batch is fully drained now.  Run the queued scheduler handoff
+            # before returning so a zero-delay event cannot be lost when the
+            # surrounding Qt loop is about to close.
+            self._run_pending_scheduled_task()
 
     def _stop_generation(self):
         if self.worker is not None:
@@ -2225,6 +2272,27 @@ class MainWindow(QMainWindow):
             ),
             ("Status", metadata.get("child_status")),
             ("Failure code", metadata.get("failure_code")),
+            ("Ollama failure stage", metadata.get("ollama_failure_stage")),
+            ("Ollama failure class", metadata.get("ollama_failure_classification")),
+            ("Ollama request sequence", metadata.get("ollama_request_sequence")),
+            ("Ollama initial request", metadata.get("ollama_initial_request")),
+            ("Ollama HTTP status", metadata.get("ollama_http_status")),
+            ("Ollama call phase", metadata.get("ollama_call_phase")),
+            ("Language validation result", metadata.get("language_validation_result")),
+            ("Language validation issues", metadata.get("language_validation_issues")),
+            ("Language validation evidence", metadata.get("language_validation_evidence")),
+            ("Hungarian fluency audit", metadata.get("hungarian_fluency_audit_result")),
+            ("Fluency audit evidence", metadata.get("fluency_audit_evidence")),
+            ("Fluency audit failure", metadata.get("fluency_audit_failure_reason")),
+            ("Fluency sentences audited", metadata.get("fluency_sentences_audited")),
+            ("Fluency sentences failed", metadata.get("fluency_sentences_failed")),
+            ("Fluency sentences unresolved", metadata.get("fluency_sentences_unresolved")),
+            ("Fluency reason codes", metadata.get("fluency_reason_codes")),
+            ("Language repair result", metadata.get("language_repair_result")),
+            ("Repair span count", metadata.get("language_repair_span_count")),
+            ("Repair integrity result", metadata.get("repair_integrity_result")),
+            ("Repair integrity issues", metadata.get("repair_integrity_issues")),
+            ("Repair integrity evidence", metadata.get("repair_integrity_evidence")),
             (
                 "Profile",
                 diagnostic.get("request_kind")
@@ -2238,7 +2306,24 @@ class MainWindow(QMainWindow):
                 or metadata.get("child_requested_fact"),
             ),
             ("Route", diagnostic.get("route") or metadata.get("route")),
+            (
+                "Synthesis",
+                diagnostic.get("synthesis_route") or metadata.get("synthesis_route"),
+            ),
+            (
+                "Response length",
+                diagnostic.get("response_length") or metadata.get("response_length"),
+            ),
+            (
+                "Output budget",
+                diagnostic.get("output_budget") or metadata.get("output_budget"),
+            ),
+            ("Routing reason", metadata.get("routing_reason")),
+            ("Web reason", metadata.get("web_reason")),
+            ("Internal/project authority", metadata.get("internal_project_authority")),
+            ("Memory-write intent", metadata.get("memory_write_intent")),
             ("Memory scope", diagnostic.get("memory_scope") or metadata.get("memory_scope")),
+            ("Memory reason", diagnostic.get("memory_reason") or metadata.get("memory_reason")),
             ("Current-window hit", diagnostic.get("current_window_hit") or metadata.get("current_window_hit")),
             ("Cross-window hit", diagnostic.get("cross_window_hit") or metadata.get("cross_window_hit")),
             ("Global-memory hit", diagnostic.get("global_memory_hit") or metadata.get("global_memory_hit")),
@@ -2260,7 +2345,11 @@ class MainWindow(QMainWindow):
             ("Ollama load", phases.get("ollama_load")),
             ("Ollama prompt evaluation", phases.get("ollama_prompt_evaluation")),
             ("Ollama generation", phases.get("ollama_generation")),
+            ("Primary generation", phases.get("primary_generation")),
             ("Language validation", phases.get("language_validation")),
+            ("Hungarian fluency audit", phases.get("hungarian_fluency_audit")),
+            ("Language repair", phases.get("language_repair")),
+            ("Repair integrity validation", phases.get("repair_integrity_validation")),
             ("Post-processing", phases.get("post_processing")),
             ("Persistence", phases.get("persistence")),
             ("UI delivery", phases.get("ui_delivery")),
@@ -2291,7 +2380,11 @@ class MainWindow(QMainWindow):
                 "Memory scope resolution", "Raw context", "Window memory", "Cross-window",
                 "Global memory", "Context assembly", "Search", "Page fetch",
                 "Inference", "Ollama queue/transport", "Ollama load",
-                "Ollama prompt evaluation", "Ollama generation", "Language validation",
+                "Ollama prompt evaluation", "Ollama generation", "Primary generation",
+                "Language validation",
+                "Hungarian fluency audit",
+                "Language repair",
+                "Repair integrity validation",
                 "Post-processing",
                 "Persistence", "UI delivery",
             }:

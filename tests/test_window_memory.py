@@ -4,6 +4,8 @@ from app.memory_store import MemoryStore
 from app.main_window import MainWindow
 from app.action_runtime import ActionRuntime, ROUTE_CHAT
 from app.chat_orchestration import plan_chat_actions
+from app.memory_scope import is_durable_memory_query
+from app.request_trace import RequestTrace
 from app.storage import ChatStore
 from app.window_memory import RECENT_MESSAGE_LIMIT, WindowMemoryService
 
@@ -18,13 +20,13 @@ def _conversation(turns):
     return messages
 
 
-def _desktop_messages(store, service, chat_id, history, prompt, *, local):
+def _desktop_messages(store, service, chat_id, history, prompt, *, local, trace=None):
     host = SimpleNamespace(
         memory_store=store,
         window_memory=service,
         generation_chat_id=chat_id,
         pending_action_history_messages=list(history),
-        pending_request_trace=None,
+        pending_request_trace=trace,
         pending_action_original_text=prompt,
         pending_action_context_suffix="",
         pending_action_images=[],
@@ -38,6 +40,106 @@ def _desktop_messages(store, service, chat_id, history, prompt, *, local):
         prompt,
         conversation_local=local,
     )
+
+
+def test_fresh_general_prompt_omits_unrelated_durable_and_cross_window_context(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    store.add_memory(
+        category="PROJECT",
+        scope="GLOBAL",
+        subject="Lokalis modellek projekt",
+        key="model_preference",
+        value="A felhasznalo helyi modelleket hasznal.",
+        importance="PINNED",
+    )
+    store.upsert_window_memory(
+        "chat-old",
+        "- User: The local models project uses personal preferences.",
+        compacted_message_count=2,
+        source_message_count=14,
+    )
+    retrieval_calls = []
+    original_retrieve = store.retrieve_memories
+
+    def retrieve_spy(*args, **kwargs):
+        retrieval_calls.append((args, kwargs))
+        return original_retrieve(*args, **kwargs)
+
+    store.retrieve_memories = retrieve_spy
+    trace = RequestTrace("test")
+    messages = _desktop_messages(
+        store,
+        WindowMemoryService(store),
+        "chat-new",
+        [],
+        (
+            "Írj egy részletes, legalább 10 bekezdéses magyar összefoglalót "
+            "arról, hogyan működik a mesterséges intelligencia "
+            "általánosságban, különös tekintettel a lokális modellek "
+            "előnyei-hátrányai."
+        ),
+        local=False,
+        trace=trace,
+    )
+
+    system = messages[0]["content"]
+    metadata = trace.snapshot()["metadata"]
+    assert "LONG-TERM MEMORY CONTEXT:" not in system
+    assert "RELATED WINDOW MEMORY:" not in system
+    assert "helyi modelleket" not in system
+    assert retrieval_calls == []
+    assert metadata["memory_scope"] == "fresh_general"
+    assert metadata["cross_window_hit"] is False
+    assert metadata["global_memory_hit"] is False
+
+
+def test_semantically_relevant_durable_memory_still_reaches_model_context(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    store.add_memory(
+        category="PROJECT",
+        scope="GLOBAL",
+        subject="Atlas-7319 project",
+        key="deployment_preference",
+        value="Use a local deployment.",
+        importance="REMEMBER",
+    )
+    messages = _desktop_messages(
+        store,
+        WindowMemoryService(store),
+        "chat-new",
+        [],
+        "What is in global memory about my Atlas-7319 project?",
+        local=False,
+    )
+
+    system = messages[0]["content"]
+    assert "LONG-TERM MEMORY CONTEXT:" in system
+    assert "Use a local deployment." in system
+
+
+def test_user_project_reference_can_load_semantically_matching_memory(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    store.add_memory(
+        category="PROJECT",
+        scope="GLOBAL",
+        subject="Atlas Desktop project",
+        key="deployment_preference",
+        value="Use a local deployment.",
+        importance="REMEMBER",
+    )
+    prompt = "How should I improve my Atlas Desktop project?"
+
+    assert is_durable_memory_query(prompt) is True
+    messages = _desktop_messages(
+        store,
+        WindowMemoryService(store),
+        "chat-new",
+        [],
+        prompt,
+        local=False,
+    )
+
+    assert "Use a local deployment." in messages[0]["content"]
 
 
 def test_window_memory_persists_and_is_isolated(tmp_path):

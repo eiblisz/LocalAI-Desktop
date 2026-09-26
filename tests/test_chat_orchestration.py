@@ -1,4 +1,9 @@
-from app.action_runtime import ActionRuntime, ROUTE_CHAT, ROUTE_WEB
+from app.action_runtime import (
+    ActionRuntime,
+    ROUTE_CHAT,
+    ROUTE_MEMORY_WRITE,
+    ROUTE_WEB,
+)
 from app.chat_orchestration import normalize_web_mode, plan_chat_actions
 from app.followup_resolution import resolve_contextual_followup
 
@@ -78,6 +83,24 @@ def test_current_window_recall_stays_local_with_web_on():
     assert contracts[0].conversation_local is True
 
 
+def test_memory_architecture_feature_explanation_is_not_conversation_recall():
+    prompt = (
+        "Írj részletes összefoglalót a LocalAI Desktop jelenlegi memóriaarchitektúrájáról; "
+        "térj ki a current chat contextre, Window Memoryra, Global Memoryra, "
+        "cross-window retrievalre és a Remember ikonra."
+    )
+    contracts = plan_chat_actions(
+        ActionRuntime(),
+        prompt,
+        web_mode="ON",
+    )
+
+    assert contracts[0].route == ROUTE_CHAT
+    assert contracts[0].use_web is False
+    assert contracts[0].conversation_local is False
+    assert contracts[0].internal_project_authority is True
+
+
 def test_genuine_fresh_external_question_still_uses_web_with_web_on():
     contracts = plan_chat_actions(
         ActionRuntime(),
@@ -87,6 +110,45 @@ def test_genuine_fresh_external_question_still_uses_web_with_web_on():
 
     assert contracts[0].route == ROUTE_WEB
     assert contracts[0].use_web is True
+
+
+def test_routing_matrix_is_model_independent_and_preserves_authority_reasons():
+    # The model identifier is deliberately not a planner input: routing is host
+    # policy and must be identical before Gemma, Qwen or Devstral is chosen as
+    # the inference engine.
+    cases = (
+        ("Magyarázd el röviden, mi az a TCP.", ROUTE_CHAT, False, "stable_local"),
+        ("Melyik a legfrissebb Ollama verzió?", ROUTE_WEB, True, "freshness"),
+        ("Keress rá a weben a TCP történetére.", ROUTE_WEB, True, "explicit_web"),
+        (
+            "Mutasd be a LocalAI Desktop jelenlegi memóriaarchitektúráját.",
+            ROUTE_CHAT,
+            False,
+            "internal_project_authority",
+        ),
+        (
+            "Magyarázd el, hogyan működik a Window Memory és a Remember ikon.",
+            ROUTE_CHAT,
+            False,
+            "stable_local",
+        ),
+        ("Jegyezd meg, hogy a kedvenc tesztszínem a kék.", ROUTE_MEMORY_WRITE, False, "explicit memory request"),
+    )
+    signatures = {}
+
+    for model_id in ("gemma4:26b", "qwen3:14b", "devstral:24b"):
+        runtime = ActionRuntime()
+        signatures[model_id] = tuple(
+            (
+                plan_chat_actions(runtime, prompt, web_mode="AUTO")[0].route,
+                plan_chat_actions(runtime, prompt, web_mode="AUTO")[0].use_web,
+                plan_chat_actions(runtime, prompt, web_mode="AUTO")[0].routing_reason,
+            )
+            for prompt, _route, _use_web, _reason in cases
+        )
+
+    expected = tuple((route, use_web, reason) for _prompt, route, use_web, reason in cases)
+    assert set(signatures.values()) == {expected}
 
 
 def test_external_chatgpt_and_historical_context_questions_are_not_local():

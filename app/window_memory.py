@@ -119,18 +119,26 @@ class WindowMemoryService:
     ):
         if trace is not None:
             trace.begin("current_raw_context_retrieval")
-        eligible = [
-            dict(message)
-            for message in list(messages or [])
-            if message.get("role") in {"user", "assistant"}
-        ]
+        eligible = (
+            [
+                dict(message)
+                for message in list(messages or [])
+                if message.get("role") in {"user", "assistant"}
+            ]
+            if include_current_memory
+            else []
+        )
         if trace is not None:
             trace.end(
                 "current_raw_context_retrieval",
                 eligible_raw_message_count=len(eligible),
             )
             trace.begin("window_memory_retrieval")
-        current = self.store.get_window_memory(chat_id)
+        current = (
+            self.store.get_window_memory(chat_id)
+            if include_current_memory
+            else None
+        )
         if trace is not None:
             trace.end(
                 "window_memory_retrieval",

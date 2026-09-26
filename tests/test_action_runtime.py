@@ -24,6 +24,16 @@ def test_action_runtime_routes_normal_chat_locally():
     assert decision.market_fallback is False
 
 
+def test_action_runtime_memory_feature_mention_is_not_memory_write():
+    decision = ActionRuntime().decide(
+        "Magyarázd el, hogyan működik a Window Memory, a Global Memory és a Remember ikon."
+    )
+
+    assert decision.route == ROUTE_CHAT
+    assert decision.use_web is False
+    assert decision.market_fallback is False
+
+
 def test_action_runtime_routes_memory_write_before_other_actions():
     decision = ActionRuntime().decide(
         "Jegyezd meg, hogy Lilla a lányom."
@@ -73,6 +83,40 @@ def test_action_runtime_routes_fresh_non_market_request_to_web():
 
     assert decision.route == ROUTE_WEB
     assert decision.use_web is True
+
+
+def test_internal_host_system_request_stays_local_despite_current_wording():
+    contract = ActionRuntime().plan_many(
+        "Mutasd be a LocalAI Desktop jelenlegi memóriaarchitektúráját és routingját."
+    )[0]
+
+    assert contract.route == ROUTE_CHAT
+    assert contract.use_web is False
+    assert contract.routing_reason == "internal_project_authority"
+    assert contract.internal_project_authority is True
+    assert contract.web_reason == ""
+
+
+def test_fresh_external_version_request_still_uses_web_when_host_is_mentioned():
+    contract = ActionRuntime().plan_many(
+        "Melyik a legfrissebb Ollama verzió, amit érdemes beépíteni a LocalAI Desktopba?"
+    )[0]
+
+    assert contract.route == ROUTE_WEB
+    assert contract.use_web is True
+    assert contract.routing_reason == "freshness"
+    assert contract.web_reason == "freshness"
+    assert contract.internal_project_authority is False
+
+
+def test_explicit_web_override_remains_available_for_internal_host_question():
+    contract = ActionRuntime().plan_many(
+        "Keress rá a weben a LocalAI Desktop jelenlegi memóriaarchitektúrájára."
+    )[0]
+
+    assert contract.route == ROUTE_WEB
+    assert contract.use_web is True
+    assert contract.routing_reason == "explicit_web"
 
 
 def test_action_runtime_force_web_preserves_web_authority():

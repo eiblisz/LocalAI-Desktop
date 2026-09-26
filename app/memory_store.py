@@ -519,8 +519,9 @@ class MemoryStore:
             memory_tokens = set(re.findall(r"[a-z0-9_]+", searchable))
             overlap = len(query_tokens & memory_tokens)
 
-            # PINNED memories are always eligible as durable global context.
-            if overlap == 0 and memory.get("importance") != "PINNED":
+            # Importance ranks a relevant fact; it never turns an unrelated
+            # durable memory into implicit prompt context.
+            if overlap == 0:
                 continue
 
             score = (

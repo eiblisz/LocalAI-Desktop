@@ -35,6 +35,12 @@ from .direct_fact import (
     targeted_fact_refinement_query,
 )
 from .grounded_factual_guard import guard_grounded_answer
+from .generation_policy import (
+    SYNTHESIS_HYBRID,
+    SYNTHESIS_LOCAL,
+    SYNTHESIS_WEB,
+    build_generation_policy,
+)
 from .generic_shopping_evidence import (
     build_generic_shopping_queries,
     build_generic_shopping_records,
@@ -46,13 +52,11 @@ from .multi_asset_market_data import run_multi_asset_market_request
 from .language_policy import (
     detect_user_language,
     effective_response_language,
-    repair_preserves_factual_literals,
     response_language_instruction,
     response_language_matches,
-    response_language_repair_instruction,
 )
-from .ollama_client import OllamaClient
-from .response_guard import guard_response, validate_response
+from .ollama_client import OllamaClient, ollama_failure_metadata
+from .response_guard import ResponseValidationError, guard_response
 from .request_semantics import (
     TASK_DIRECT_FACT,
     TASK_ENTITY_OVERVIEW,
@@ -107,6 +111,20 @@ def _record_ollama_timing(trace, metadata, wall_ms):
         ollama_prompt_eval_count=metadata.get("prompt_eval_count"),
         ollama_generated_count=metadata.get("eval_count"),
     )
+
+
+def _record_ollama_failure(trace, exc):
+    """Preserve a classified root cause before the UI presents a safe error."""
+    if trace is not None:
+        metadata = ollama_failure_metadata(exc)
+        trace.add_metadata(**metadata)
+        call_phase = metadata.get("ollama_call_phase")
+        if call_phase == "primary_generation":
+            trace.end("primary_generation", primary_generation_result="failed")
+        elif call_phase == "hungarian_fluency_audit":
+            trace.end("hungarian_fluency_audit", hungarian_fluency_audit_result="failed")
+        elif call_phase == "language_repair":
+            trace.end("language_repair", language_repair_result="failed")
 
 
 class ChatWorker(QObject):
@@ -358,6 +376,8 @@ class ChatWebWorker(QObject):
         compact_market_quote: bool = False,
         trace=None,
         explicit_batch_child=False,
+        output_budget=None,
+        synthesis_route=None,
     ):
         super().__init__()
         self.client = client
@@ -375,6 +395,25 @@ class ChatWebWorker(QObject):
         )
         classification_started = perf_counter()
         self.request_profile = classify_request(self.user_prompt)
+        default_generation_policy = build_generation_policy(
+            self.user_prompt,
+            profile=self.request_profile,
+            use_web=True,
+        )
+        self.synthesis_route = str(
+            synthesis_route or SYNTHESIS_WEB
+        ).upper()
+        if self.synthesis_route not in {
+            SYNTHESIS_LOCAL,
+            SYNTHESIS_WEB,
+            SYNTHESIS_HYBRID,
+        }:
+            self.synthesis_route = SYNTHESIS_WEB
+        self.output_budget = max(
+            1,
+            int(output_budget or default_generation_policy.output_budget),
+        )
+        self.response_length = default_generation_policy.response_length
         self._classification_ms = round(
             (perf_counter() - classification_started) * 1000,
             2,
@@ -391,6 +430,10 @@ class ChatWebWorker(QObject):
                 child_relation=self.request_profile.relation,
                 semantic_confidence=self.request_profile.semantic_confidence,
                 freshness=self.request_profile.freshness,
+                synthesis_route=self.synthesis_route,
+                response_length=self.response_length,
+                output_budget=self.output_budget,
+                web_required=True,
             )
         self._stop_event = threading.Event()
         self.web_research_pipeline = WebResearchPipeline(self)
@@ -411,9 +454,11 @@ class ChatWebWorker(QObject):
         context_modes=(),
         verification_status="",
         evidence_diagnostic="",
+        evidence_coverage="not_applicable",
     ):
         self.diagnostic_metadata = {
             "route": "web",
+            "synthesis_route": self.synthesis_route,
             "search_queries": list(queries),
             "providers": list(providers),
             "provider_fallbacks": list(provider_fallbacks),
@@ -422,12 +467,15 @@ class ChatWebWorker(QObject):
             "context_modes": list(context_modes),
             "verification_status": str(verification_status or ""),
             "evidence_diagnostic": str(evidence_diagnostic or ""),
+            "evidence_coverage": str(evidence_coverage or "not_applicable"),
             "request_kind": self.request_profile.kind,
             "requested_fact": self.request_profile.requested_fact,
             "relation": self.request_profile.relation,
             "semantic_confidence": self.request_profile.semantic_confidence,
             "freshness": self.request_profile.freshness,
             "response_depth": self.request_profile.response_depth,
+            "response_length": self.response_length,
+            "output_budget": self.output_budget,
             "research_breadth": self.request_profile.research_breadth,
             "query_budget": self.request_profile.query_budget,
             "source_budget": self.request_profile.source_budget,
@@ -445,7 +493,20 @@ class ChatWebWorker(QObject):
                 **kwargs,
             )
         self.execution_control.claim_model_call()
-        return self.client.chat_once(**kwargs)
+        while True:
+            try:
+                return self.client.chat_once(**kwargs)
+            except TypeError as exc:
+                unsupported = next(
+                    (
+                        name for name in ("num_predict", "call_phase")
+                        if name in str(exc) and name in kwargs
+                    ),
+                    "",
+                )
+                if not unsupported:
+                    raise
+                kwargs.pop(unsupported)
 
     def _chat_stream(self, **kwargs):
         if isinstance(self.client, OllamaClient):
@@ -454,7 +515,20 @@ class ChatWebWorker(QObject):
                 **kwargs,
             )
         self.execution_control.claim_model_call()
-        return self.client.chat_stream(**kwargs)
+        while True:
+            try:
+                return self.client.chat_stream(**kwargs)
+            except TypeError as exc:
+                unsupported = next(
+                    (
+                        name for name in ("num_predict", "call_phase")
+                        if name in str(exc) and name in kwargs
+                    ),
+                    "",
+                )
+                if not unsupported:
+                    raise
+                kwargs.pop(unsupported)
 
     def _search_payload(self, query, *, max_results, fetch_pages):
         self.execution_control.claim_search()
@@ -670,82 +744,32 @@ class ChatWebWorker(QObject):
 
     def _repair_response_language(self, answer):
         language_source = self._response_language_source()
-        if self.trace is not None:
-            self.trace.begin("language_validation")
-        validation = validate_response(language_source, answer)
-        if self.trace is not None:
-            self.trace.end("language_validation")
-        if validation.valid:
-            return answer
-
-        expected = effective_response_language(language_source)
-        if expected not in {"hu", "de", "en"}:
-            return answer
-
-        if self.trace is not None:
-            self.trace.begin("language_repair")
-        self.phase.emit("Nyelvi javítás")
-
-        self.execution_control.claim_repair()
-        repaired = self._chat_once(
-            model=self.model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": response_language_repair_instruction(
-                        language_source
+        try:
+            return guard_response(
+                self.client,
+                self.model,
+                language_source,
+                answer,
+                control=self.execution_control,
+                output_budget=self.output_budget,
+                trace=self.trace,
+                phase_callback=self.phase.emit,
+            )
+        except ResponseValidationError as exc:
+            if self.trace is not None:
+                self.trace.add_metadata(
+                    language_repair_failure_classification=str(
+                        getattr(exc, "localai_failure_classification", "")
                     ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        "DRAFT TO REPAIR:\n"
-                        + answer
-                        + (
-                            "\n\nVERIFIED EVIDENCE REFERENCE "
-                            "(do not add content absent from the draft):\n"
-                            + self._factual_authority_text
-                            if self._factual_authority_text
-                            else ""
-                        )
-                    ),
-                },
-            ],
-        ).strip()
-
-        if self.trace is not None:
-            self.trace.end("language_repair")
-
-        repaired_validation = validate_response(language_source, repaired)
-        if (
-            repaired
-            and repaired_validation.valid
-            and repair_preserves_factual_literals(answer, repaired)
-        ):
-            return repaired
-
-        if expected == "hu":
-            fallback = deterministic_hungarian_fact_fallback(
-                self._factual_authority_text,
-                self.request_profile.requested_fact,
-            )
-            if fallback:
-                return fallback
-
-        if expected == "hu":
-            return (
-                "A választ most nem sikerült megbízhatóan összeállítani a "
-                "rendelkezésre álló forrásokból. Kérlek, próbáld újra."
-            )
-        if expected == "de":
-            return (
-                "Die Antwort konnte aus den verfügbaren Quellen nicht zuverlässig "
-                "erstellt werden. Bitte versuche es erneut."
-            )
-        return (
-            "A reliable answer could not be produced from the available sources. "
-            "Please try again."
-        )
+                )
+            if effective_response_language(language_source) == "hu":
+                fallback = deterministic_hungarian_fact_fallback(
+                    self._factual_authority_text,
+                    self.request_profile.requested_fact,
+                )
+                if fallback:
+                    return fallback
+            raise
 
     def _query_is_literal_followup_command(self, query):
         normalized = self._fold_text(query)
@@ -1031,7 +1055,10 @@ class ChatWebWorker(QObject):
 
 
     def _wants_detailed_web_answer(self):
-        return self.request_profile.response_depth != "concise"
+        return (
+            self.request_profile.response_depth != "concise"
+            or self.response_length == "long"
+        )
 
     @staticmethod
     def _numeric_fact_tokens(text):
@@ -1197,6 +1224,33 @@ class ChatWebWorker(QObject):
             "I could not find enough reliable public sources for this answer. "
             "Please try again later or use more specific keywords."
         )
+
+    def _hybrid_without_usable_sources(self):
+        """Keep stable explanatory synthesis useful when its web add-on fails."""
+        answer_parts = []
+        self.phase.emit(f"{self.model} válaszol")
+        self._chat_stream(
+            model=self.model,
+            num_predict=self.output_budget,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Answer the stable explanatory parts of the user's request "
+                        "from general knowledge. The requested fresh/external evidence "
+                        "could not be verified, so do not invent or state current dates, "
+                        "numbers, prices, versions, URLs, or events. Say briefly that "
+                        "the fresh add-on could not be verified, then give the useful "
+                        "stable explanation. "
+                        + self._conversation_language_instruction()
+                    ),
+                },
+                {"role": "user", "content": self.user_prompt},
+            ],
+            on_token=answer_parts.append,
+            should_stop=self._stop_event.is_set,
+        )
+        return "".join(answer_parts).strip()
 
     @staticmethod
     def _evidence_diagnostic(ledgers, limit=6):
@@ -1565,6 +1619,52 @@ class ChatWebWorker(QObject):
                 return
 
             if not contexts or not urls:
+                if self.synthesis_route == SYNTHESIS_HYBRID:
+                    if self.trace is not None:
+                        self.trace.begin("model_inference")
+                    answer = self._hybrid_without_usable_sources()
+                    if self.trace is not None:
+                        self.trace.end("model_inference")
+                    if answer:
+                        if self.trace is not None:
+                            self.trace.begin("post_processing")
+                        answer = self._repair_response_language(answer)
+                        # With no usable web evidence, a hybrid answer may still
+                        # explain stable concepts but cannot introduce a fresh
+                        # literal absent from the user's own request.
+                        answer = guard_grounded_answer(
+                            self.client,
+                            self.model,
+                            self.user_prompt,
+                            answer,
+                            self.user_prompt,
+                            trace=self.trace,
+                            language_instruction=self._conversation_language_instruction(),
+                            output_budget=self.output_budget,
+                        )
+                        if self.trace is not None:
+                            self.trace.end("post_processing")
+                        self._set_diagnostics(
+                            queries=queries,
+                            providers=successful_providers,
+                            provider_fallbacks=provider_fallback_notes,
+                            evidence_ledger_count=len(evidence_ledgers),
+                            context_modes=context_modes,
+                            verification_status="HYBRID stable synthesis; web augmentation unavailable",
+                            evidence_coverage="unavailable_for_web_augmentation",
+                        )
+                        self.diagnostic_metadata.update({
+                            "failure_code": "no_usable_public_sources",
+                            "failure_detail": "Web augmentation returned no usable public sources.",
+                        })
+                        if self.trace is not None:
+                            self.trace.add_metadata(
+                                evidence_coverage="unavailable_for_web_augmentation",
+                                source_count=0,
+                            )
+                        self.token.emit(answer)
+                        self.finished.emit()
+                        return
                 if constrained_rejections:
                     evidence_diagnostic = self._evidence_diagnostic(evidence_ledgers)
                     self._set_diagnostics(
@@ -1616,6 +1716,17 @@ class ChatWebWorker(QObject):
                     if message.get("role") in {"user", "assistant"}
                 ][-6:]
 
+            synthesis_instruction = (
+                " This is HYBRID SYNTHESIS: use the authorized web data for "
+                "current/external claims, while you may explain stable general concepts "
+                "from local knowledge. Do not invent any fresh number, date, percentage, "
+                "price, version, URL, or event that is absent from the authorized web data. "
+                "If the available evidence covers only part of the requested fresh material, "
+                "answer the stable explanatory sections and state the limitation only for "
+                "the unsupported fresh part."
+                if self.synthesis_route == SYNTHESIS_HYBRID
+                else ""
+            )
             grounded_system = {
                 "role": "system",
                 "content": (
@@ -1653,6 +1764,7 @@ class ChatWebWorker(QObject):
                     + " For a simple latest/current version question, preserve the direct "
                     "authoritative answer. Do not say you cannot browse the web; the authorized "
                     "web data has already been collected for you. "
+                    + synthesis_instruction
                     + self._conversation_language_instruction()
                 ),
             }
@@ -1743,10 +1855,13 @@ class ChatWebWorker(QObject):
                     evidence_sufficiency=evidence_sufficiency,
                 )
             self.phase.emit(f"{self.model} válaszol")
+            model_started = perf_counter()
+            generation_metadata = {}
 
             if single_pass_factual:
                 answer = self._chat_once(
                     model=self.model,
+                    num_predict=self.output_budget,
                     messages=[
                         {
                             "role": "system",
@@ -1776,11 +1891,12 @@ class ChatWebWorker(QObject):
                 ).strip()
             else:
                 answer_parts = []
-                self._chat_stream(
+                generation_metadata = self._chat_stream(
                     model=self.model,
                     messages=stream_messages,
                     on_token=answer_parts.append,
                     should_stop=self._stop_event.is_set,
+                    num_predict=self.output_budget,
                 )
                 answer = "".join(answer_parts).strip()
 
@@ -1790,6 +1906,19 @@ class ChatWebWorker(QObject):
 
             if self.trace is not None:
                 self.trace.end("model_inference")
+                _record_ollama_timing(
+                    self.trace,
+                    dict(generation_metadata or {}),
+                    (perf_counter() - model_started) * 1000.0,
+                )
+                self.trace.add_metadata(
+                    done_reason=dict(generation_metadata or {}).get(
+                        "done_reason", ""
+                    ),
+                    generated_count=dict(generation_metadata or {}).get(
+                        "eval_count"
+                    ),
+                )
                 self.trace.begin("post_processing")
             self.phase.emit("Evidence ellenőrzése")
 
@@ -1822,6 +1951,7 @@ class ChatWebWorker(QObject):
                     and not single_pass_factual
                 ),
                 language_instruction=self._conversation_language_instruction(),
+                output_budget=self.output_budget,
             )
             if self.trace is not None:
                 self.trace.end("factual_validation")
@@ -1845,7 +1975,10 @@ class ChatWebWorker(QObject):
 
             verification_status = ""
             unique_verification_queries = list(dict.fromkeys(verification_queries))
-            if len(unique_verification_queries) == 1:
+            if (
+                len(unique_verification_queries) == 1
+                and self.synthesis_route != SYNTHESIS_HYBRID
+            ):
                 valid, reasons = verify_answer_against_evidence(
                     answer,
                     unique_verification_queries[0],
@@ -1868,6 +2001,10 @@ class ChatWebWorker(QObject):
                         )
                 else:
                     verification_status = "Evidence + answer verification: PASS"
+            elif self.synthesis_route == SYNTHESIS_HYBRID:
+                verification_status = (
+                    "HYBRID evidence coverage: web claims guarded; stable synthesis allowed"
+                )
 
             if self.trace is not None:
                 self.trace.end("post_processing")
@@ -1893,7 +2030,20 @@ class ChatWebWorker(QObject):
                 evidence_ledger_count=len(evidence_ledgers),
                 context_modes=context_modes,
                 verification_status=verification_status,
+                evidence_coverage=(
+                    "partial_or_available"
+                    if self.synthesis_route == SYNTHESIS_HYBRID
+                    else "required"
+                ),
             )
+            self.diagnostic_metadata.update({
+                "done_reason": dict(generation_metadata or {}).get(
+                    "done_reason", ""
+                ),
+                "generated_count": dict(generation_metadata or {}).get(
+                    "eval_count"
+                ),
+            })
             if self.trace is not None:
                 self.trace.add_metadata(
                     web_provider=",".join(successful_providers),
@@ -1907,6 +2057,7 @@ class ChatWebWorker(QObject):
             self.token.emit(answer)
             self.finished.emit()
         except Exception as exc:
+            _record_ollama_failure(self.trace, exc)
             self.failed.emit(str(exc))
 
     def stop(self):
@@ -1938,6 +2089,8 @@ def run_chat_web_request(
     *,
     trace=None,
     explicit_batch_child=False,
+    output_budget=None,
+    synthesis_route=None,
 ):
     """Run the existing grounded web worker synchronously and collect its answer."""
     return _run_web_worker(
@@ -1948,6 +2101,8 @@ def run_chat_web_request(
             user_prompt,
             trace=trace,
             explicit_batch_child=explicit_batch_child,
+            output_budget=output_budget,
+            synthesis_route=synthesis_route,
         )
     )
 
@@ -2000,6 +2155,8 @@ class AdaptiveChatWorker(QObject):
         constraints=None,
         trace=None,
         explicit_batch_child=False,
+        output_budget=None,
+        synthesis_route=SYNTHESIS_LOCAL,
     ):
         super().__init__()
         self.client = client
@@ -2010,6 +2167,19 @@ class AdaptiveChatWorker(QObject):
         self.constraints = constraints
         self.trace = trace
         self.explicit_batch_child = bool(explicit_batch_child)
+        default_generation_policy = build_generation_policy(
+            self.user_prompt,
+            profile=getattr(constraints, "request_profile", None),
+            use_web=False,
+        )
+        self.output_budget = max(
+            1,
+            int(output_budget or default_generation_policy.output_budget),
+        )
+        self.response_length = default_generation_policy.response_length
+        self.synthesis_route = str(synthesis_route or SYNTHESIS_LOCAL).upper()
+        if self.synthesis_route not in {SYNTHESIS_LOCAL, SYNTHESIS_WEB, SYNTHESIS_HYBRID}:
+            self.synthesis_route = SYNTHESIS_LOCAL
         self._stop_event = threading.Event()
         self.execution_control = ExecutionControl()
         self.used_web_fallback = False
@@ -2017,6 +2187,13 @@ class AdaptiveChatWorker(QObject):
         self.final_output = ""
         self.generation_metadata = {}
         self.diagnostic_metadata = {}
+        if self.trace is not None:
+            self.trace.add_metadata(
+                synthesis_route=self.synthesis_route,
+                response_length=self.response_length,
+                output_budget=self.output_budget,
+                web_required=False,
+            )
 
     @Slot()
     def run(self):
@@ -2027,6 +2204,7 @@ class AdaptiveChatWorker(QObject):
 
             if self.trace is not None:
                 self.trace.begin("model_inference")
+                self.trace.begin("primary_generation")
             self.phase.emit(f"{self.model} válaszol")
             model_started = perf_counter()
 
@@ -2038,6 +2216,8 @@ class AdaptiveChatWorker(QObject):
                     on_token=draft_parts.append,
                     should_stop=self._stop_event.is_set,
                     control=self.execution_control,
+                    num_predict=self.output_budget,
+                    call_phase="primary_generation",
                 )
                 draft = "".join(draft_parts).strip()
                 self.generation_metadata = dict(metadata or {})
@@ -2051,10 +2231,15 @@ class AdaptiveChatWorker(QObject):
 
             if self.trace is not None:
                 self.trace.end("model_inference")
+                self.trace.end("primary_generation", primary_generation_result="completed")
                 _record_ollama_timing(
                     self.trace,
                     self.generation_metadata,
                     (perf_counter() - model_started) * 1000.0,
+                )
+                self.trace.add_metadata(
+                    done_reason=self.generation_metadata.get("done_reason", ""),
+                    generated_count=self.generation_metadata.get("eval_count"),
                 )
                 self.trace.begin("post_processing")
 
@@ -2073,6 +2258,11 @@ class AdaptiveChatWorker(QObject):
                         if self.explicit_batch_child
                         else {}
                     )
+                    if isinstance(self.client, OllamaClient):
+                        web_kwargs.update({
+                            "output_budget": self.output_budget,
+                            "synthesis_route": SYNTHESIS_WEB,
+                        })
                     final = run_chat_web_request(
                         self.client,
                         self.model,
@@ -2084,6 +2274,11 @@ class AdaptiveChatWorker(QObject):
                     web_kwargs = {"trace": self.trace}
                     if self.explicit_batch_child:
                         web_kwargs["explicit_batch_child"] = True
+                    if isinstance(self.client, OllamaClient):
+                        web_kwargs.update({
+                            "output_budget": self.output_budget,
+                            "synthesis_route": SYNTHESIS_WEB,
+                        })
                     final = run_chat_web_request(
                         self.client,
                         self.model,
@@ -2093,6 +2288,10 @@ class AdaptiveChatWorker(QObject):
                     ).strip()
                 if self.trace is not None:
                     self.trace.begin("post_processing")
+                    self.trace.add_metadata(
+                        synthesis_route=SYNTHESIS_WEB,
+                        web_required=True,
+                    )
             else:
                 final = draft
 
@@ -2105,6 +2304,9 @@ class AdaptiveChatWorker(QObject):
                     final,
                     constraints=self.constraints,
                     control=self.execution_control,
+                    output_budget=self.output_budget,
+                    trace=self.trace,
+                    phase_callback=self.phase.emit,
                 )
                 final = guard_context_response(
                     self.client,
@@ -2114,6 +2316,7 @@ class AdaptiveChatWorker(QObject):
                     self.messages,
                     constraints=self.constraints,
                     control=self.execution_control,
+                    output_budget=self.output_budget,
                 )
 
             if self._stop_event.is_set():
@@ -2135,6 +2338,9 @@ class AdaptiveChatWorker(QObject):
                     "done_reason": self.generation_metadata.get("done_reason", ""),
                     "prompt_eval_count": self.generation_metadata.get("prompt_eval_count"),
                     "eval_count": self.generation_metadata.get("eval_count"),
+                    "synthesis_route": self.synthesis_route,
+                    "response_length": self.response_length,
+                    "output_budget": self.output_budget,
                 }
             }
 
@@ -2144,6 +2350,7 @@ class AdaptiveChatWorker(QObject):
                 self.token.emit(final)
             self.finished.emit()
         except Exception as exc:
+            _record_ollama_failure(self.trace, exc)
             self.failed.emit(str(exc))
 
     def stop(self):
