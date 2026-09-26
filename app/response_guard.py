@@ -84,6 +84,12 @@ _AUDIT_PROTECTED_SPAN_RE = re.compile(
 )
 _ASCII_TECHNICAL_SPAN_RE = re.compile(r"^[A-Za-z][A-Za-z0-9 ._+/#:-]*$")
 _DUPLICATED_PREFIX_RE = re.compile(r"^([A-Za-zÁÉÍÓÖŐÚÜŰáéíóöőúüű]{2,5})\1", re.UNICODE)
+_INTERNAL_PROTOCOL_LEAK_RE = re.compile(
+    r'"(?:left_context|right_context)"\s*:'
+    r"|\bBOUNDED SPANS TO REPAIR\b"
+    r"|\bUSER-VISIBLE RESPONSE SEGMENTS TO AUDIT\b",
+    flags=re.IGNORECASE,
+)
 
 _EXPLICIT_SCRIPT_REQUEST_MARKERS = (
     "korean",
@@ -119,6 +125,28 @@ def _bounded_response_evidence(value, limit=220):
     if len(compact) <= limit:
         return compact
     return compact[:limit - 3].rstrip() + "..."
+
+
+def internal_protocol_leak_evidence(user_text, response_text):
+    """Detect host-only repair/audit payload markers in user-visible prose."""
+    raw = str(response_text or "")
+    request = str(user_text or "").casefold()
+    findings = []
+    for match in _INTERNAL_PROTOCOL_LEAK_RE.finditer(raw):
+        marker = match.group(0)
+        marker_key = (
+            "left_context"
+            if "left_context" in marker.casefold()
+            else "right_context"
+            if "right_context" in marker.casefold()
+            else marker.casefold()
+        )
+        if marker_key in request:
+            continue
+        start = max(0, match.start() - 70)
+        end = min(len(raw), match.end() + 120)
+        findings.append(_bounded_response_evidence(raw[start:end]))
+    return tuple(dict.fromkeys(findings))[:_MAX_FLUENCY_FINDINGS]
 
 
 def unexpected_script_evidence(user_text, response_text, constraints=None):
@@ -166,6 +194,11 @@ def validate_response(
         for snippets in script_evidence.values()
         for snippet in snippets
     ]
+
+    protocol_evidence = internal_protocol_leak_evidence(user_text, response_text)
+    if protocol_evidence:
+        issues.append("internal_control_payload_leak")
+        evidence.extend(protocol_evidence)
 
     if expected in {"hu", "de", "en"} and not response_language_matches(
         user_text,
