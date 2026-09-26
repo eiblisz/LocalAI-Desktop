@@ -56,6 +56,32 @@ def _marked_title(prompt):
                 candidate = article_parts[-1].strip()
             if 2 <= len(candidate) <= 120:
                 return candidate
+
+    # Natural Hungarian direct-fact questions often omit "című", for example
+    # "Mikor írta <person> a <Work>?"  Keep the alleged person out of search
+    # authority by extracting only the post-article object when it is visibly
+    # title-like.  We intentionally keep Hungarian inflection intact instead of
+    # guessing a lemma; search providers can normalize it, while the host avoids
+    # inventing entity spelling.
+    implicit = re.match(
+        r"^\s*mikor\s+[ií]rta\s+(.+?)\s+(?:a|az)\s+(.+?)\s*[?!.]*$",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    if implicit:
+        alleged_subject = _clean(implicit.group(1))
+        candidate = _clean(implicit.group(2)).rstrip("?!.").strip()
+        subject_tokens = re.findall(r"[^\W_]+", alleged_subject, flags=re.UNICODE)
+        generic_objects = {
+            "verset", "muvet", "konyvet", "regenyt", "dalt", "tortenetet",
+        }
+        if (
+            2 <= len(candidate) <= 120
+            and candidate[:1].isupper()
+            and any(token[:1].isupper() for token in subject_tokens)
+            and _fold(candidate) not in generic_objects
+        ):
+            return candidate
     return ""
 
 
@@ -180,6 +206,85 @@ def _temporal_relation_supported(text, relation):
     return True if not expected else any(marker in folded for marker in expected)
 
 
+_DATE_RE = re.compile(
+    r"(?<!\d)(?:1[0-9]{3}|20[0-9]{2})(?!\d)"
+    r"|\b\d{4}-\d{2}-\d{2}\b"
+    r"|\b\d{1,2}[./]\d{1,2}[./](?:19|20)\d{2}\b"
+)
+
+_CREATION_DATE_MARKERS = (
+    "irta", "megirta", "keletkez", "keszult", "wrote", "written",
+    "authored", "composed", "created", "schrieb", "verfasste",
+)
+
+_PUBLICATION_DATE_MARKERS = (
+    "jelent meg", "megjelent", "kiadas", "kiadva", "publikal",
+    "published", "publication", "edition", "released",
+    "erschien", "veroffentlicht", "ausgabe",
+)
+
+
+def _nearest_marker_distance(text, pivot_start, pivot_end, markers):
+    best = None
+    for marker in markers:
+        start = 0
+        while True:
+            index = text.find(marker, start)
+            if index < 0:
+                break
+            marker_end = index + len(marker)
+            if marker_end <= pivot_start:
+                distance = pivot_start - marker_end
+            elif index >= pivot_end:
+                distance = index - pivot_end
+            else:
+                distance = 0
+            if best is None or distance < best:
+                best = distance
+            start = index + 1
+    return best
+
+
+def _creation_date_supported(text):
+    """Require a date to bind to creation rather than publication.
+
+    Search snippets often place a publication year beside an authorship note.
+    Evaluate each punctuation-bounded clause independently first; this prevents
+    "published in 1847, written for the competition" from promoting 1847 to a
+    composition year while still accepting "wrote it in 1912".
+    """
+    raw = str(text or "")
+    clauses = [
+        _fold(clause)
+        for clause in re.split(r"[.!?;,]+", raw)
+        if clause.strip()
+    ]
+    for clause in clauses:
+        for match in _DATE_RE.finditer(clause):
+            creation_distance = _nearest_marker_distance(
+                clause,
+                match.start(),
+                match.end(),
+                _CREATION_DATE_MARKERS,
+            )
+            publication_distance = _nearest_marker_distance(
+                clause,
+                match.start(),
+                match.end(),
+                _PUBLICATION_DATE_MARKERS,
+            )
+            if creation_distance is None:
+                continue
+            if (
+                publication_distance is not None
+                and publication_distance < creation_distance
+            ):
+                continue
+            if creation_distance <= 80:
+                return True
+    return False
+
+
 def requested_fact_supported(payload, requested_fact="general", request_text=""):
     """Whether provider snippets/page text contain a usable fact-shaped signal."""
     text = _evidence_text(payload)
@@ -216,10 +321,13 @@ def requested_fact_supported(payload, requested_fact="general", request_text="")
             str(item.get("page_text") or ""),
             str(item.get("pre_extracted_context") or ""),
         ))
-        if re.search(pattern, item_text) and _temporal_relation_supported(
-            item_text,
-            relation,
-        ):
+        if not re.search(pattern, item_text):
+            continue
+        if relation == "creation":
+            if _creation_date_supported(item_text):
+                return True
+            continue
+        if _temporal_relation_supported(item_text, relation):
             return True
     return False
 

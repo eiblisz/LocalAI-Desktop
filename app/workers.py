@@ -1784,6 +1784,11 @@ class ChatWebWorker(QObject):
                 and not self._wants_detailed_web_answer()
                 and not has_authoritative_current_fact
                 and not self.compact_market_quote
+                and evidence_sufficiency in {
+                    "snippet_supported",
+                    "page_supported",
+                    "targeted_search_supported",
+                }
             )
             factual_authority_text = (
                 compact_evidence_bundle(
@@ -1813,9 +1818,18 @@ class ChatWebWorker(QObject):
                 ),
             }
 
+            if base_history:
+                grounded_system = {
+                    "role": "system",
+                    "content": (
+                        str(base_history[0].get("content") or "").rstrip()
+                        + "\n\n"
+                        + str(grounded_system.get("content") or "").lstrip()
+                    ),
+                }
+
             stream_messages = (
-                base_history
-                + [grounded_system]
+                [grounded_system]
                 + conversation_history
                 + [grounded_user]
             )

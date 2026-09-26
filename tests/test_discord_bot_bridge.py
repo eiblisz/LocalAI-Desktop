@@ -1678,8 +1678,14 @@ def test_discord_factual_web_path_uses_bounded_relevant_authority(tmp_path: Path
                     "a mű Correct Author alkotása, és 1912-ben jelent meg."
                 )
             if "Repair the grounded answer" in system:
-                raise AssertionError(
-                    "single-pass factual path must not require a forced repair call"
+                authority = str(messages[-1].get("content") or "")
+                self.repair_authority_size = len(authority)
+                assert "Correct Author: Silver Story" in authority
+                assert len(authority) < 9000
+                return (
+                    "Wrong Author nem írta a Silver Story című művet; "
+                    "a források Correct Authort nevezik meg alkotóként, "
+                    "és 1912-es megjelenést támasztanak alá."
                 )
             return "unused"
 

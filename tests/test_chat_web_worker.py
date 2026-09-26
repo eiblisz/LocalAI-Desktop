@@ -102,7 +102,9 @@ def test_chat_web_worker_searches_streams_and_keeps_sources_structured(monkeypat
     assert client.stream_calls
 
     streamed_messages = client.stream_calls[0][1]
-    assert "use ONLY the AUTHORIZED WEB TOOL DATA" in streamed_messages[1]["content"]
+    assert [message["role"] for message in streamed_messages].count("system") == 1
+    assert "Base system" in streamed_messages[0]["content"]
+    assert "use ONLY the AUTHORIZED WEB TOOL DATA" in streamed_messages[0]["content"]
     assert "AUTHORIZED WEB TOOL DATA" in streamed_messages[-1]["content"]
 
     combined = "".join(tokens)
@@ -116,6 +118,63 @@ def test_chat_web_worker_searches_streams_and_keeps_sources_structured(monkeypat
     assert worker.diagnostic_metadata["search_queries"] == [
         "Qwen local AI latest news"
     ]
+
+
+def test_grounded_stream_merges_base_and_grounding_system_roles(monkeypatch):
+    monkeypatch.setattr(
+        workers,
+        "search_web",
+        lambda query, max_results=8, fetch_pages=True: {
+            "provider": "test",
+            "query": query,
+            "results": [{
+                "title": "Result",
+                "url": "https://example.com/result",
+                "snippet": "Sample current fact.",
+            }],
+        },
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: ["https://example.com/result"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_entries",
+        lambda payload, limit=6: [{
+            "title": "Result",
+            "url": "https://example.com/result",
+        }],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: "WEB SEARCH TOOL DATA\nSample current fact.",
+    )
+
+    class StreamCaptureClient(DummyWebClient):
+        def chat_once(self, model, messages, timeout=600.0, **kwargs):
+            return "sample current fact"
+
+    client = StreamCaptureClient()
+    worker = workers.ChatWebWorker(
+        client,
+        "eurollm-test",
+        [
+            {"role": "system", "content": "Base system authority."},
+            {"role": "user", "content": "Mi a legfrissebb Sample adat?"},
+        ],
+        "Mi a legfrissebb Sample adat?",
+    )
+    worker.run()
+
+    assert client.stream_calls
+    messages = client.stream_calls[0][1]
+    assert [item["role"] for item in messages].count("system") == 1
+    assert messages[0]["role"] == "system"
+    assert "Base system authority." in messages[0]["content"]
+    assert "AUTHORIZED WEB TOOL DATA" in messages[-1]["content"]
 
 
 def test_chat_web_worker_returns_safe_message_without_sources(monkeypatch):
@@ -2007,8 +2066,7 @@ def test_single_factual_risk_request_skips_model_query_generation(monkeypatch):
     class FactualClient:
         def chat_once(self, model, messages, timeout=600.0, **kwargs):
             return (
-                "A Silver Story című művet Correct Author írta, "
-                "és 1912-ben jelent meg."
+                "A Silver Story című művet Correct Author 1912-ben írta."
             )
 
         def chat_stream(
@@ -2022,8 +2080,7 @@ def test_single_factual_risk_request_skips_model_query_generation(monkeypatch):
         ):
             if not should_stop():
                 on_token(
-                    "A Silver Story című művet Correct Author írta, "
-                    "és 1912-ben jelent meg."
+                    "A Silver Story című művet Correct Author 1912-ben írta."
                 )
 
     def fake_search(query, max_results=6, fetch_pages=True):
@@ -2037,12 +2094,10 @@ def test_single_factual_risk_request_skips_model_query_generation(monkeypatch):
                 "title": "Correct Author: Silver Story",
                 "url": "https://example.com/silver-story",
                 "snippet": (
-                    "Silver Story was written by Correct Author and "
-                    "published in 1912."
+                    "Silver Story was written by Correct Author in 1912."
                 ),
                 "page_text": (
-                    "Silver Story was written by Correct Author and "
-                    "published in 1912."
+                    "Silver Story was written by Correct Author in 1912."
                 ),
             }],
         }
@@ -2072,7 +2127,7 @@ def test_single_factual_risk_request_skips_model_query_generation(monkeypatch):
         workers,
         "web_search_context_text",
         lambda payload: (
-            "Silver Story was written by Correct Author and published in 1912."
+            "Silver Story was written by Correct Author in 1912."
         ),
     )
 
@@ -2136,7 +2191,7 @@ def test_direct_factual_request_uses_one_grounded_model_call_not_forced_second_p
             self.once_calls.append((model, messages))
             return (
                 "A Silver Story című művet nem Wrong Author, hanem Correct Author "
-                "írta, és 1912-ben jelent meg."
+                "írta 1912-ben."
             )
 
         def chat_stream(self, *args, **kwargs):
@@ -2156,12 +2211,10 @@ def test_direct_factual_request_uses_one_grounded_model_call_not_forced_second_p
                 "title": "Correct Author: Silver Story",
                 "url": "https://example.com/silver-story",
                 "snippet": (
-                    "Silver Story was written by Correct Author and "
-                    "published in 1912."
+                    "Silver Story was written by Correct Author in 1912."
                 ),
                 "page_text": (
-                    "Silver Story was written by Correct Author and "
-                    "published in 1912."
+                    "Silver Story was written by Correct Author in 1912."
                 ),
             }],
         }
@@ -2192,7 +2245,7 @@ def test_direct_factual_request_uses_one_grounded_model_call_not_forced_second_p
         workers,
         "web_search_context_text",
         lambda payload: (
-            "Silver Story was written by Correct Author and published in 1912."
+            "Silver Story was written by Correct Author in 1912."
         ),
     )
 
@@ -2219,12 +2272,129 @@ def test_direct_factual_request_uses_one_grounded_model_call_not_forced_second_p
     assert bundle_kwargs["max_text_chars"] == 320
     assert tokens == [
         "A Silver Story című művet nem Wrong Author, hanem Correct Author "
-        "írta, és 1912-ben jelent meg."
+        "írta 1912-ben."
     ]
     snapshot = trace.snapshot()
     assert snapshot["metadata"]["generation_strategy"] == "factual_single_pass"
     assert snapshot["metadata"]["factual_authority_profile"] == "direct_compact"
     assert snapshot["metadata"]["factual_authority_chars"] <= 3000
+
+
+def test_direct_factual_insufficient_relation_evidence_forces_guarded_path(
+    monkeypatch,
+):
+    from app.request_trace import RequestTrace
+
+    prompt = "Mikor írta Wrong Author a Silver Storyt?"
+    search_calls = []
+    forced = []
+
+    class InsufficientRelationClient:
+        def __init__(self):
+            self.once_calls = []
+            self.stream_calls = []
+
+        def chat_once(self, model, messages, timeout=600.0, **kwargs):
+            self.once_calls.append((model, messages))
+            raise AssertionError("relation repair is intercepted by the guard stub")
+
+        def chat_stream(
+            self,
+            model,
+            messages,
+            on_token,
+            should_stop,
+            timeout=600.0,
+            **kwargs,
+        ):
+            self.stream_calls.append((model, messages))
+            if not should_stop():
+                on_token("Wrong Author 1922-ben írta a Silver Storyt.")
+
+    def fake_search(query, max_results=6, fetch_pages=True):
+        search_calls.append((query, fetch_pages))
+        return {
+            "provider": "Brave Search API",
+            "query": query,
+            "retrieved_at": "2026-09-26T16:00:00",
+            "provider_chain_errors": [],
+            "results": [{
+                "title": "Silver Story",
+                "url": f"https://example.com/{len(search_calls)}",
+                "snippet": (
+                    "Wrong Author read Correct Author's Silver Story in 1922."
+                ),
+            }],
+        }
+
+    def capture_guard(client, model, user_prompt, answer, authority, **kwargs):
+        forced.append(kwargs.get("force_verify"))
+        return "Wrong Author nem a Silver Story szerzője; a forrás Correct Authort nevezi meg."
+
+    monkeypatch.setattr(workers, "search_web", fake_search)
+    monkeypatch.setattr(
+        workers,
+        "fetch_result_pages",
+        lambda payload, page_fetch_budget=1, timeout=8.0: payload,
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: [
+            item["url"] for item in payload.get("results") or []
+        ],
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_entries",
+        lambda payload, limit=6: [
+            {"title": item["title"], "url": item["url"]}
+            for item in (payload.get("results") or [])[:limit]
+        ],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: "\n".join(
+            item.get("snippet", "") for item in payload.get("results") or []
+        ),
+    )
+    monkeypatch.setattr(workers, "guard_grounded_answer", capture_guard)
+    monkeypatch.setattr(
+        workers,
+        "guard_current_turn_binding",
+        lambda client, model, prompt, answer, authority, **kwargs: answer,
+    )
+
+    client = InsufficientRelationClient()
+    trace = RequestTrace("test")
+    tokens = []
+    errors = []
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        prompt,
+        trace=trace,
+    )
+    worker.token.connect(tokens.append)
+    worker.failed.connect(errors.append)
+    worker.run()
+
+    assert errors == []
+    assert forced == [True]
+    assert len(client.stream_calls) == 1
+    assert client.once_calls == []
+    assert search_calls == [
+        ("Silver Storyt composition writing date year", 0),
+        ("Silver Storyt original composition year", 0),
+    ]
+    assert tokens == [
+        "Wrong Author nem a Silver Story szerzője; a forrás Correct Authort nevezi meg."
+    ]
+    snapshot = trace.snapshot()
+    assert snapshot["metadata"]["generation_strategy"] == "grounded_stream"
+    assert snapshot["metadata"]["evidence_sufficiency"] == "insufficient_after_targeted_search"
 
 
 def test_short_named_identity_question_uses_direct_grounded_lookup_without_query_model(
@@ -2329,7 +2499,7 @@ def test_direct_fact_fetches_one_page_only_when_snippets_lack_requested_date(
         fetched.append((page_fetch_budget, timeout))
         payload = dict(payload)
         payload["results"] = [dict(payload["results"][0])]
-        payload["results"][0]["page_text"] = "Published in 1912."
+        payload["results"][0]["page_text"] = "Correct Author wrote Silver Story in 1912."
         return payload
 
     monkeypatch.setattr(workers, "fetch_result_pages", fetch_one)
@@ -2349,7 +2519,7 @@ def test_direct_fact_fetches_one_page_only_when_snippets_lack_requested_date(
     monkeypatch.setattr(
         workers,
         "web_search_context_text",
-        lambda payload: "Silver Story was written by Correct Author and published in 1912.",
+        lambda payload: "Correct Author wrote Silver Story in 1912.",
     )
 
     worker = workers.ChatWebWorker(

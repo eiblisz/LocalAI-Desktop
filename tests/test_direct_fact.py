@@ -19,6 +19,26 @@ def test_marked_work_title_produces_entity_neutral_temporal_query():
     assert strategy == "premise_neutral_title_relation"
 
 
+def test_unmarked_hungarian_work_object_produces_premise_neutral_query():
+    query, strategy = derive_premise_neutral_query(
+        "Mikor írta Wrong Author a Silver Storyt?",
+        "temporal",
+    )
+
+    assert query == "Silver Storyt composition writing date year"
+    assert "Wrong Author" not in query
+    assert strategy == "premise_neutral_title_relation"
+
+
+def test_unmarked_hungarian_generic_object_is_not_misclassified_as_a_title():
+    prompt = "Mikor írta Wrong Author a verset?"
+
+    assert derive_premise_neutral_query(prompt, "temporal") == (
+        prompt,
+        "validated_original",
+    )
+
+
 def test_unmarked_free_form_request_falls_back_to_validated_original():
     prompt = "Mikor alakult a Sample Band?"
 
@@ -57,6 +77,42 @@ def test_creation_request_rejects_an_unrelated_edition_year():
     assert targeted_fact_refinement_query(prompt, "temporal") == (
         "Silver Story original composition year"
     )
+
+
+def test_creation_request_rejects_publication_year_even_with_authorship_in_same_result():
+    prompt = "Mikor írta Wrong Author a Silver Story című művet?"
+    mixed_publication = {
+        "results": [{
+            "snippet": (
+                "Silver Story was first published in 1922. "
+                "Correct Author wrote it for the competition."
+            ),
+        }],
+    }
+
+    assert requested_fact_supported(
+        mixed_publication,
+        "temporal",
+        prompt,
+    ) is False
+
+
+def test_creation_request_accepts_creation_year_when_publication_year_is_also_present():
+    prompt = "Mikor írta Wrong Author a Silver Story című művet?"
+    mixed_dates = {
+        "results": [{
+            "snippet": (
+                "Correct Author wrote Silver Story in 1912. "
+                "It was first published in 1922."
+            ),
+        }],
+    }
+
+    assert requested_fact_supported(
+        mixed_dates,
+        "temporal",
+        prompt,
+    ) is True
 
 
 def test_hungarian_fallback_only_repeats_a_supported_requested_literal():
