@@ -939,7 +939,11 @@ def normalize_user_visible_output(text, constraints=None):
         for item in getattr(constraints, "format_constraints", ())
     }
     if "html" not in formats:
-        value = value.replace("&#x20;", " ").replace("&#X20;", " ").replace("&#32;", " ")
+        for artifact in (
+            "&#x20;", "&#X20;", "&#32;",
+            "&amp;#x20;", "&amp;#X20;", "&amp;#32;",
+        ):
+            value = value.replace(artifact, " ")
     return value
 
 
