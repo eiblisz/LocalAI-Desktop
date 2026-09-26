@@ -705,6 +705,35 @@ def test_initial_model_preparation_failure_keeps_root_cause_classified(monkeypat
     assert metadata["ollama_initial_request"] is True
 
 
+def test_ollama_http_error_detail_is_bounded_and_exposed():
+    response = requests.Response()
+    response.status_code = 400
+    response._content = (
+        b'{"error":"prompt exceeds the configured context window"}'
+    )
+    exc = requests.HTTPError(
+        "400 Client Error: Bad Request",
+        response=response,
+    )
+
+    from app.ollama_client import _tag_ollama_failure
+
+    _tag_ollama_failure(
+        exc,
+        stage="ollama_http",
+        classification="http_status",
+        request_sequence=1,
+        call_phase="model_inference",
+    )
+    metadata = ollama_failure_metadata(exc)
+
+    assert metadata["ollama_http_status"] == 400
+    assert metadata["ollama_http_detail"] == (
+        "prompt exceeds the configured context window"
+    )
+    assert metadata["ollama_call_phase"] == "model_inference"
+
+
 def test_ollama_transport_failure_is_classified_for_retry_diagnostics(monkeypatch):
     client = OllamaClient()
 
