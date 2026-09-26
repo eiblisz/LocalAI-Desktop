@@ -133,6 +133,17 @@ def test_internal_repair_payload_marker_gets_bounded_repair():
     assert "belső javítási payloadot" in result
 
 
+def test_accented_hungarian_words_do_not_create_fake_english_function_words():
+    answer = (
+        "Minden fenti elem együttműködve biztosítja, hogy amikor egy webcímet "
+        "beírok a böngészőbe, az oldal gyorsan és biztonságosan jelenjen meg a "
+        "képernyőn, még akkor is, ha a szerver és a kliens egymástól távoli "
+        "helyeken található."
+    )
+
+    assert "foreign_language_fragment" not in hungarian_output_quality_issues(answer)
+
+
 def test_hungarian_quality_reports_only_bounded_foreign_fragment_evidence():
     evidence = hungarian_output_quality_evidence(
         "A rendszer called inference l\u00e9p\u00e9st hajtott v\u00e9gre."
