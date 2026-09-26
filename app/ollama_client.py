@@ -28,6 +28,32 @@ class IncompleteGenerationError(RuntimeError):
     pass
 
 
+def _ollama_http_error_detail(response, limit=500):
+    """Return only Ollama's bounded error message, never the request payload."""
+    if response is None:
+        return ""
+    detail = ""
+    try:
+        payload = response.json()
+        if isinstance(payload, dict):
+            for key in ("error", "detail", "message"):
+                value = payload.get(key)
+                if isinstance(value, str) and value.strip():
+                    detail = value.strip()
+                    break
+    except Exception:
+        detail = ""
+    if not detail:
+        try:
+            detail = str(getattr(response, "text", "") or "").strip()
+        except Exception:
+            detail = ""
+    detail = " ".join(detail.split())
+    if len(detail) > int(limit):
+        detail = detail[: int(limit) - 3].rstrip() + "..."
+    return detail
+
+
 def _tag_ollama_failure(
     exc,
     *,
@@ -49,6 +75,9 @@ def _tag_ollama_failure(
         status = getattr(response, "status_code", None)
         if status is not None:
             exc.localai_ollama_http_status = int(status)
+        http_detail = _ollama_http_error_detail(response)
+        if http_detail:
+            exc.localai_ollama_http_detail = http_detail
     except Exception:
         pass
     return exc
@@ -91,6 +120,7 @@ def ollama_failure_metadata(exc):
         ("localai_ollama_request_sequence", "ollama_request_sequence"),
         ("localai_ollama_initial_request", "ollama_initial_request"),
         ("localai_ollama_http_status", "ollama_http_status"),
+        ("localai_ollama_http_detail", "ollama_http_detail"),
         ("localai_ollama_call_phase", "ollama_call_phase"),
     ):
         value = getattr(exc, attribute, None)
