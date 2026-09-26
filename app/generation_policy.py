@@ -74,7 +74,16 @@ def requested_response_length(text, *, profile=None):
     if paragraph_count and int(paragraph_count.group(1)) >= 6:
         return LENGTH_LONG
 
-    # canonical_match_text removes punctuation, so numeric ranges such as\n    # 8-12 / 8–12 / 8—12 arrive here as "8 12". Accept that canonical\n    # form as well as language words such as "to" and "bis".\n    paragraph_range = re.search(\n        r"(?:\\b(?:legalabb|at least|mindestens)\\s+)?"\n        r"\\b(\\d{1,2})\\s+(?:(?:to|bis)\\s+)?(\\d{1,2})\\s*"\n        r"(?:bekezdes|paragraph|absatz)",\n        folded,\n    )\n    if paragraph_range and max(
+    # canonical_match_text removes punctuation, so numeric ranges such as
+    # 8-12 / 8–12 / 8—12 arrive here as "8 12". Accept that canonical
+    # form as well as language words such as "to" and "bis".
+    paragraph_range = re.search(
+        r"(?:\b(?:legalabb|at least|mindestens)\s+)?"
+        r"\b(\d{1,2})\s+(?:(?:to|bis)\s+)?(\d{1,2})\s*"
+        r"(?:bekezdes|paragraph|absatz)",
+        folded,
+    )
+    if paragraph_range and max(
         int(paragraph_range.group(1)), int(paragraph_range.group(2))
     ) >= 6:
         return LENGTH_LONG
