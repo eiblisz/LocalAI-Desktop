@@ -174,6 +174,7 @@ class MemoryContextScope:
     include_global_memory: bool
     cross_window_requested: bool
     global_memory_requested: bool
+    reason: str = "fresh_general"
 
 
 def resolve_memory_context_scope(user_text, *, conversation_local=False):
@@ -210,16 +211,26 @@ def resolve_memory_context_scope(user_text, *, conversation_local=False):
 
     if other_window_requested:
         memory_scope = "other_window"
+        reason = "explicit_other_conversation"
     elif global_memory_requested:
         memory_scope = "global_memory"
+        reason = "explicit_global_memory"
     elif conversation_local:
         memory_scope = "current_window"
+        reason = "current_window_context"
     elif include_global_memory or include_cross_window:
         memory_scope = "relevant_memory"
+        reason = (
+            "durable_user_state"
+            if include_global_memory
+            else "cross_window_recall"
+        )
     elif include_current_memory:
         memory_scope = "current_context"
+        reason = "current_context_reference"
     else:
         memory_scope = "fresh_general"
+        reason = "fresh_general"
 
     return MemoryContextScope(
         memory_scope=memory_scope,
@@ -228,4 +239,5 @@ def resolve_memory_context_scope(user_text, *, conversation_local=False):
         include_global_memory=include_global_memory,
         cross_window_requested=other_window_requested,
         global_memory_requested=global_memory_requested,
+        reason=reason,
     )

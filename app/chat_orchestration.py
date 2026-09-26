@@ -145,7 +145,21 @@ def plan_chat_actions(
             "routing",
             web_mode=mode,
             routes=",".join(str(item.route) for item in validated),
+            routing_reasons=",".join(
+                str(getattr(item, "routing_reason", ""))
+                for item in validated
+            ),
             batch_size=len(validated),
             conversation_local_count=conversation_local_count,
+            internal_project_authority_count=sum(
+                1
+                for item in validated
+                if bool(getattr(item, "internal_project_authority", False))
+            ),
+            memory_write_intent_count=sum(
+                1
+                for item in validated
+                if bool(getattr(item, "memory_write_intent", False))
+            ),
         )
     return validated

@@ -61,6 +61,28 @@ class ActionContract:
     def artifact_plans(self):
         return self.plan.artifact_plans
 
+    @property
+    def routing_reason(self):
+        """The deterministic, model-independent reason for this route."""
+        return str(self.plan.reason or "")
+
+    @property
+    def web_reason(self):
+        if self.use_web:
+            return self.routing_reason.removeprefix("artifact:")
+        return ""
+
+    @property
+    def internal_project_authority(self):
+        return (
+            self.routing_reason.removeprefix("artifact:")
+            == "internal_project_authority"
+        )
+
+    @property
+    def memory_write_intent(self):
+        return self.route == ROUTE_MEMORY_WRITE
+
 
 @dataclass(frozen=True)
 class ActionAuthorization:

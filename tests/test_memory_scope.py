@@ -15,6 +15,7 @@ def test_fresh_general_knowledge_omits_all_runtime_memory_scopes():
     assert scope.include_current_memory is False
     assert scope.include_cross_window is False
     assert scope.include_global_memory is False
+    assert scope.reason == "fresh_general"
 
 
 def test_domain_overlap_without_user_reference_does_not_enable_global_memory():
@@ -50,6 +51,7 @@ def test_explicit_durable_memory_request_keeps_global_memory_available():
     assert scope.include_global_memory is True
     assert scope.include_cross_window is False
     assert scope.include_current_memory is False
+    assert scope.reason == "explicit_global_memory"
 
 
 def test_explicit_other_conversation_request_keeps_cross_window_available():
@@ -61,6 +63,7 @@ def test_explicit_other_conversation_request_keeps_cross_window_available():
     assert scope.include_cross_window is True
     assert scope.include_global_memory is False
     assert scope.include_current_memory is False
+    assert scope.reason == "explicit_other_conversation"
 
 
 def test_current_window_recall_scope_remains_available():
@@ -73,3 +76,4 @@ def test_current_window_recall_scope_remains_available():
     assert scope.include_current_memory is True
     assert scope.include_cross_window is False
     assert scope.include_global_memory is False
+    assert scope.reason == "current_window_context"
