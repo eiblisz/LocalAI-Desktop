@@ -13,6 +13,7 @@ from .language_policy import (
     response_validation_text,
 )
 from .task_constraints import TaskConstraints
+from .runtime_control import ExecutionCancelled
 
 
 class ResponseValidationError(RuntimeError):
@@ -973,12 +974,14 @@ def guard_response(
             trace=trace,
             phase_callback=phase_callback,
         )
-    except FluencyAuditFailed as exc:
+    except Exception as exc:
+        if isinstance(exc, ExecutionCancelled):
+            raise
         # The fluency audit is an editorial quality layer, not an authority or
-        # safety gate. If its structured output is inconsistent, fail open for
-        # fluency while preserving the deterministic language/script guard.
-        # This prevents an optional quality check from discarding a complete
-        # model answer or blocking deterministic CJK/language repair.
+        # safety gate. Backend/model compatibility failures (for example a
+        # structured-output HTTP 400) must not discard an otherwise complete
+        # primary answer. Deterministic language/script validation remains in
+        # force, while the optional fluency layer degrades for this response.
         if trace is not None:
             trace.add_metadata(
                 hungarian_fluency_audit_result="degraded",

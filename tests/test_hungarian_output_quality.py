@@ -354,6 +354,34 @@ def test_fluency_audit_missing_bounded_evidence_is_partial_not_request_fatal():
     assert snapshot["metadata"]["fluency_sentences_unresolved"] == 1
 
 
+def test_fluency_audit_backend_failure_degrades_without_discarding_clean_answer():
+    prompt = "Válaszolj magyarul."
+    draft = "Ez egy teljesen érthető magyar mondat."
+    trace = RequestTrace("desktop")
+
+    class BackendFailureClient:
+        supports_hungarian_fluency_audit = True
+
+        def chat_once(self, model, messages, **kwargs):
+            if "Hungarian fluency classifier" in messages[0]["content"]:
+                raise RuntimeError("400 Client Error: Bad Request")
+            raise AssertionError("unexpected repair call")
+
+    result = guard_response(
+        BackendFailureClient(),
+        "eurollm:9b-q4",
+        prompt,
+        draft,
+        constraints=build_task_constraints(prompt),
+        trace=trace,
+    )
+
+    assert result == draft
+    snapshot = trace.snapshot()
+    assert snapshot["metadata"]["hungarian_fluency_audit_result"] == "degraded"
+    assert "400 Client Error" in snapshot["metadata"]["fluency_audit_failure_reason"]
+
+
 def test_fluency_audit_contract_failure_degrades_without_discarding_clean_answer():
     prompt = "Válaszolj magyarul."
     draft = "Ez egy teljes, használható magyar válasz."
