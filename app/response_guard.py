@@ -842,11 +842,17 @@ def _splice_span_repairs(original, spans, replacements, *, user_text):
                 "language_repair_failed: bounded repair returned an empty span"
             )
         original_length = len(span["text"])
-        if original_length >= 40 and not (
-            original_length * 0.4 <= len(replacement) <= original_length * 3.0
-        ):
+        if "\n" not in span["text"] and ("\n" in replacement or "\r" in replacement):
+            raise RepairIntegrityFailed(
+                "repair_integrity_failed: bounded repair changed paragraph structure"
+            )
+        if len(replacement) > _max_repair_replacement_chars(span["text"]):
             raise RepairIntegrityFailed(
                 "repair_integrity_failed: bounded repair exceeded span length limits"
+            )
+        if original_length >= 40 and len(replacement) < original_length * 0.4:
+            raise RepairIntegrityFailed(
+                "repair_integrity_failed: bounded repair shortened span excessively"
             )
         if not repair_preserves_response_shape(
             span["text"],
