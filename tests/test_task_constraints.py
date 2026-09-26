@@ -98,5 +98,7 @@ def test_paragraph_range_becomes_hard_format_constraint():
 
     instruction = task_constraints_instruction(constraints)
     assert "hard structural constraint" in instruction
+    assert "STRICT PARAGRAPH CONTRACT: 6-8 paragraphs" in instruction
+    assert "must stay within that paragraph count/range" in instruction
     assert "Sources/Források/References" in instruction
     assert "&#x20;" in instruction
