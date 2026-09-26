@@ -201,11 +201,12 @@ def test_guard_fails_closed_after_one_bad_repair():
 def test_normal_output_hygiene_removes_html_space_entities_from_prose():
     constraints = build_task_constraints("Írj magyar magyarázatot az internetről.")
     value = normalize_user_visible_output(
-        "Első mondat.&#x20;\n\nMásodik mondat.&#32;",
+        "Első mondat.&amp;#x20;\n\nMásodik mondat.&#32;",
         constraints,
     )
 
     assert "&#x20;" not in value
+    assert "&amp;#x20;" not in value
     assert "&#32;" not in value
     assert "Első mondat." in value
     assert "Második mondat." in value
