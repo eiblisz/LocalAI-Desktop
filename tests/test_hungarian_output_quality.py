@@ -128,7 +128,11 @@ def test_fluency_audit_accepts_schema_bound_status_and_findings_contract():
                 self.audit_format = kwargs.get("response_format")
                 return json.dumps({
                     "status": ["pass", "malformed_morphology"],
-                    "findings": [{"id": 1, "spans": ["működéskére"]}],
+                    "findings": [{
+                        "id": 1,
+                        "reason": "malformed_morphology",
+                        "spans": ["működéskére"],
+                    }],
                 })
             return json.dumps({
                 "repairs": [{"id": 0, "text": "működésre"}],
@@ -148,6 +152,79 @@ def test_fluency_audit_accepts_schema_bound_status_and_findings_contract():
     status_schema = client.audit_format["properties"]["status"]
     assert status_schema["minItems"] == 2
     assert status_schema["maxItems"] == 2
+
+
+def test_fluency_audit_reconciles_pass_status_with_reasoned_exact_finding():
+    prompt = "Válaszolj magyarul."
+    constraints = build_task_constraints(prompt)
+    draft = "Ez egy jó mondat. A rendszer szozaver újraindítása után is működik."
+
+    class ContradictoryAuditClient:
+        supports_hungarian_fluency_audit = True
+
+        def __init__(self):
+            self.calls = 0
+
+        def chat_once(self, model, messages, **kwargs):
+            self.calls += 1
+            if "Hungarian fluency classifier" in messages[0]["content"]:
+                return json.dumps({
+                    "status": ["pass", "pass"],
+                    "findings": [{
+                        "id": 1,
+                        "reason": "hybrid_or_pseudoword",
+                        "spans": ["szozaver"],
+                    }],
+                })
+            return json.dumps({
+                "repairs": [{"id": 0, "text": "szoftver"}],
+            })
+
+    client = ContradictoryAuditClient()
+    trace = RequestTrace("desktop")
+    result = guard_response(
+        client,
+        "gemma4:26b",
+        prompt,
+        draft,
+        constraints=constraints,
+        trace=trace,
+    )
+
+    assert result == draft.replace("szozaver", "szoftver")
+    snapshot = trace.snapshot()
+    assert snapshot["metadata"]["hungarian_fluency_audit_result"] == "repair_required"
+    assert snapshot["metadata"]["fluency_sentences_failed"] == 1
+    assert snapshot["metadata"]["fluency_sentences_unresolved"] == 0
+    assert snapshot["metadata"]["fluency_reason_codes"] == "hybrid_or_pseudoword"
+
+
+def test_fluency_audit_pass_status_with_unreasoned_finding_is_partial_not_fatal():
+    prompt = "Válaszolj magyarul."
+    draft = "Ez egy jó mondat. Ez a mondat lehet hibás."
+
+    class LegacyContradictoryAuditClient:
+        supports_hungarian_fluency_audit = True
+
+        def chat_once(self, model, messages, **kwargs):
+            return json.dumps({
+                "status": ["pass", "pass"],
+                "findings": [{"id": 1, "spans": ["lehet hibás"]}],
+            })
+
+    trace = RequestTrace("desktop")
+    result = guard_response(
+        LegacyContradictoryAuditClient(),
+        "gemma4:26b",
+        prompt,
+        draft,
+        trace=trace,
+    )
+
+    assert result == draft
+    snapshot = trace.snapshot()
+    assert snapshot["metadata"]["hungarian_fluency_audit_result"] == "partial"
+    assert snapshot["metadata"]["fluency_sentences_unresolved"] == 1
 
 
 def test_fluency_audit_missing_bounded_evidence_is_partial_not_request_fatal():
