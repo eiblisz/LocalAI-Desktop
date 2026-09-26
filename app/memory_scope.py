@@ -135,7 +135,8 @@ _STRONG_CONTEXT_REFERENCE_TOKENS = {
     "previous", "above", "continue", "continuation", "earlier",
 }
 _WEAK_CONTEXT_REFERENCE_TOKENS = {
-    "ez", "ezt", "ennek", "ebben", "erre", "arra", "azt", "azok",
+    "ez", "ezt", "ennek", "ebben", "erre", "arra", "errol", "arrol",
+    "ezzel", "azzal", "azt", "azok",
     "this", "that", "these", "those", "it", "they", "also",
 }
 _CONTEXT_REFERENT_TOKENS = {
