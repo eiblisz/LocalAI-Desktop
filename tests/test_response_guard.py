@@ -5,6 +5,7 @@ import pytest
 from app.response_guard import (
     ResponseValidationError,
     guard_response,
+    normalize_user_visible_output,
     unexpected_script_issues,
     validate_response,
 )
@@ -195,3 +196,23 @@ def test_guard_fails_closed_after_one_bad_repair():
         )
 
     assert len(client.calls) == 2
+
+
+def test_normal_output_hygiene_removes_html_space_entities_from_prose():
+    constraints = build_task_constraints("Írj magyar magyarázatot az internetről.")
+    value = normalize_user_visible_output(
+        "Első mondat.&#x20;\n\nMásodik mondat.&#32;",
+        constraints,
+    )
+
+    assert "&#x20;" not in value
+    assert "&#32;" not in value
+    assert "Első mondat." in value
+    assert "Második mondat." in value
+
+
+def test_output_hygiene_preserves_entities_when_html_is_requested():
+    constraints = build_task_constraints("Adj HTML példát.")
+    value = normalize_user_visible_output("<p>A&#x20;B</p>", constraints)
+
+    assert value == "<p>A&#x20;B</p>"
