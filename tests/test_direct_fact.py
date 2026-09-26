@@ -19,6 +19,26 @@ def test_marked_work_title_produces_entity_neutral_temporal_query():
     assert strategy == "premise_neutral_title_relation"
 
 
+def test_unmarked_hungarian_work_object_produces_premise_neutral_query():
+    query, strategy = derive_premise_neutral_query(
+        "Mikor írta Wrong Author a Silver Storyt?",
+        "temporal",
+    )
+
+    assert query == "Silver Storyt composition writing date year"
+    assert "Wrong Author" not in query
+    assert strategy == "premise_neutral_title_relation"
+
+
+def test_unmarked_hungarian_generic_object_is_not_misclassified_as_a_title():
+    prompt = "Mikor írta Wrong Author a verset?"
+
+    assert derive_premise_neutral_query(prompt, "temporal") == (
+        prompt,
+        "validated_original",
+    )
+
+
 def test_unmarked_free_form_request_falls_back_to_validated_original():
     prompt = "Mikor alakult a Sample Band?"
 
