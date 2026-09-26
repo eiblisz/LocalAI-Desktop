@@ -56,6 +56,32 @@ def _marked_title(prompt):
                 candidate = article_parts[-1].strip()
             if 2 <= len(candidate) <= 120:
                 return candidate
+
+    # Natural Hungarian direct-fact questions often omit "című", for example
+    # "Mikor írta <person> a <Work>?"  Keep the alleged person out of search
+    # authority by extracting only the post-article object when it is visibly
+    # title-like.  We intentionally keep Hungarian inflection intact instead of
+    # guessing a lemma; search providers can normalize it, while the host avoids
+    # inventing entity spelling.
+    implicit = re.match(
+        r"^\s*mikor\s+[ií]rta\s+(.+?)\s+(?:a|az)\s+(.+?)\s*[?!.]*$",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    if implicit:
+        alleged_subject = _clean(implicit.group(1))
+        candidate = _clean(implicit.group(2)).rstrip("?!.").strip()
+        subject_tokens = re.findall(r"[^\W_]+", alleged_subject, flags=re.UNICODE)
+        generic_objects = {
+            "verset", "muvet", "konyvet", "regenyt", "dalt", "tortenetet",
+        }
+        if (
+            2 <= len(candidate) <= 120
+            and candidate[:1].isupper()
+            and any(token[:1].isupper() for token in subject_tokens)
+            and _fold(candidate) not in generic_objects
+        ):
+            return candidate
     return ""
 
 
