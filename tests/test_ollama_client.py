@@ -52,7 +52,6 @@ def test_chat_once_forwards_explicit_native_response_format(monkeypatch):
         "model": "qwen-test",
         "messages": [{"role": "user", "content": "test"}],
         "stream": False,
-        "think": False,
         "options": {"num_predict": 1024},
         "format": schema,
     }
@@ -74,8 +73,26 @@ def test_chat_once_omits_format_when_not_explicitly_selected(monkeypatch):
     )
 
     assert "format" not in captured["json"]
-    assert captured["json"]["think"] is False
+    assert "think" not in captured["json"]
     assert captured["json"]["options"]["num_predict"] == 1024
+
+
+def test_non_thinking_chat_omits_think_for_model_compatibility(monkeypatch):
+    captured = {}
+
+    def fake_post(_url, **kwargs):
+        captured.update(kwargs)
+        return _Response()
+
+    monkeypatch.setattr("app.ollama_client.requests.post", fake_post)
+    monkeypatch.setattr("app.ollama_client.OLLAMA_THINKING_ENABLED", False)
+
+    OllamaClient().chat_once(
+        model="eurollm:9b-q4",
+        messages=[{"role": "user", "content": "test"}],
+    )
+
+    assert "think" not in captured["json"]
 
 
 def test_chat_request_allows_explicit_operator_thinking_opt_in(monkeypatch):
@@ -414,7 +431,7 @@ def test_controlled_chat_once_uses_streaming_and_honors_budget(monkeypatch):
 
     assert result == "hello world"
     assert captured["json"]["stream"] is True
-    assert captured["json"]["think"] is False
+    assert "think" not in captured["json"]
     assert captured["stream"] is True
     assert control.budget.model_calls == 1
 
