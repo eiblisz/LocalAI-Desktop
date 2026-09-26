@@ -81,6 +81,58 @@ def test_hungarian_quality_flags_generic_foreign_and_unicode_corruption():
     assert any("\ufffd" in snippet for snippet in validation.evidence)
 
 
+def test_internal_repair_payload_marker_is_rejected_before_display():
+    prompt = "Válaszolj magyarul."
+    draft = (
+        "A modellváltás során a memória állapota megmarad, "
+        '"left_context": "belső javítási payload", majd a válasz folytatódik.'
+    )
+
+    validation = validate_response(
+        prompt,
+        draft,
+        constraints=build_task_constraints(prompt),
+    )
+
+    assert validation.valid is False
+    assert "internal_control_payload_leak" in validation.issues
+    assert any("left_context" in snippet for snippet in validation.evidence)
+
+
+def test_internal_repair_payload_marker_gets_bounded_repair():
+    prompt = "Válaszolj magyarul."
+    draft = (
+        "A modellváltás során a memória állapota megmarad. "
+        'A mondatba bekerült "left_context": "belső payload", ami nem felhasználói tartalom.'
+    )
+
+    class ProtocolLeakRepairClient:
+        supports_hungarian_fluency_audit = True
+
+        def chat_once(self, model, messages, **kwargs):
+            if "Hungarian fluency classifier" in messages[0]["content"]:
+                return _passing_fluency_audit(messages)
+            payload = json.loads(messages[1]["content"].split(
+                "BOUNDED SPANS TO REPAIR:\n", 1
+            )[1])
+            assert len(payload) == 1
+            return json.dumps({"repairs": [{
+                "id": payload[0]["id"],
+                "text": "A mondatból eltávolítottuk a belső javítási payloadot.",
+            }]})
+
+    result = guard_response(
+        ProtocolLeakRepairClient(),
+        "gemma4:26b",
+        prompt,
+        draft,
+        constraints=build_task_constraints(prompt),
+    )
+
+    assert "left_context" not in result
+    assert "belső javítási payloadot" in result
+
+
 def test_hungarian_quality_reports_only_bounded_foreign_fragment_evidence():
     evidence = hungarian_output_quality_evidence(
         "A rendszer called inference l\u00e9p\u00e9st hajtott v\u00e9gre."
