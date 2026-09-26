@@ -462,13 +462,13 @@ class OllamaClient:
             # marker, the JSON contract below can safely accept that content;
             # the caller still performs its stricter semantic validation.
             "stream": bool(control is not None),
-            # Recent Ollama thinking-capable models, including the preferred
-            # Gemma model, otherwise spend tokens on hidden reasoning before
-            # they emit a visible answer.  The explicit request is harmless
-            # for ordinary models and can be opt-in overridden by the operator.
-            "think": OLLAMA_THINKING_ENABLED,
             "options": {"num_predict": output_budget},
         }
+        # The think parameter is not accepted by every model template. Some
+        # ordinary models reject even an explicit false value with HTTP 400.
+        # Only send it when the operator deliberately enables thinking.
+        if OLLAMA_THINKING_ENABLED:
+            payload["think"] = True
         if response_format is not None:
             if not isinstance(response_format, (str, dict)):
                 raise TypeError("response_format must be a string, object, or None.")
@@ -610,9 +610,10 @@ class OllamaClient:
             "model": model,
             "messages": messages,
             "stream": True,
-            "think": OLLAMA_THINKING_ENABLED,
             "options": {"num_predict": output_budget},
         }
+        if OLLAMA_THINKING_ENABLED:
+            payload["think"] = True
         final_item = {}
         done_reason = ""
         stopped = False
