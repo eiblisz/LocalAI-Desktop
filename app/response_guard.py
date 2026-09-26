@@ -233,12 +233,16 @@ def _fluency_audit_response_schema(segment_count):
                 "items": {
                     "type": "object",
                     "additionalProperties": False,
-                    "required": ["id", "spans"],
+                    "required": ["id", "reason", "spans"],
                     "properties": {
                         "id": {
                             "type": "integer",
                             "minimum": 0,
                             "maximum": count - 1,
+                        },
+                        "reason": {
+                            "type": "string",
+                            "enum": sorted(_FLUENCY_REASON_CODES),
                         },
                         "spans": {
                             "type": "array",
@@ -268,9 +272,10 @@ def _fluency_audit_messages(segments):
                 "in the same order. Each status is pass or one of: malformed_morphology, "
                 "agreement_or_inflection, broken_phrase, hybrid_or_pseudoword, "
                 "duplicated_morphology, semantic_language_corruption. findings contains entries "
-                "only for non-pass segments, each as {id, spans}, where id is the supplied stable "
-                "segment id and spans are one or more exact short substrings copied byte-for-byte "
-                "from that same segment. Check every sentence for broken Hungarian inflection, "
+                "only for non-pass segments, each as {id, reason, spans}, where id is the supplied "
+                "stable segment id, reason MUST equal the non-pass status for that segment, and "
+                "spans are one or more exact short substrings copied byte-for-byte from that same "
+                "segment. Check every sentence for broken Hungarian inflection, "
                 "agreement, article choice, verb complements, pseudo-words, duplicated morphology "
                 "and locally nonsensical phrasing. A sentence that is mostly good can still fail "
                 "for one short malformed span. Do not rewrite anything. Do not flag legitimate "
@@ -403,6 +408,7 @@ def _parse_fluency_audit(raw_response, response_text, segments):
             )
         identifier = finding.get("id")
         spans = finding.get("spans")
+        finding_reason = str(finding.get("reason") or "").strip().lower()
         if (
             not isinstance(identifier, int)
             or identifier not in segments_by_id
@@ -412,22 +418,46 @@ def _parse_fluency_audit(raw_response, response_text, segments):
             raise FluencyAuditFailed(
                 "fluency_audit_failed: Hungarian fluency finding id/spans are invalid"
             )
-        findings_by_id[identifier] = spans
+        if finding_reason and finding_reason not in _FLUENCY_REASON_CODES:
+            raise FluencyAuditFailed(
+                "fluency_audit_failed: Hungarian fluency finding reason is invalid"
+            )
+        findings_by_id[identifier] = {
+            "spans": spans,
+            "reason": finding_reason,
+        }
+
+    # The model can occasionally contradict itself by marking a segment pass
+    # while still returning exact findings for it.  Prefer concrete bounded
+    # evidence when it also carries a valid reason; otherwise keep the text
+    # unchanged and expose the segment as unresolved instead of degrading the
+    # entire audit.
+    effective_status_values = list(status_values)
+    contradictory_unresolved_ids = set()
+    for identifier, finding in findings_by_id.items():
+        if effective_status_values[identifier] != "pass":
+            continue
+        finding_reason = finding.get("reason") or ""
+        if finding_reason in _FLUENCY_REASON_CODES:
+            effective_status_values[identifier] = finding_reason
+        else:
+            contradictory_unresolved_ids.add(identifier)
 
     parsed = []
     failed_sentence_ids = set()
     unresolved_sentence_ids = set()
     reason_codes = []
     raw_response_text = str(response_text or "")
-    for identifier, status in enumerate(status_values):
+    for identifier, status in enumerate(effective_status_values):
+        if identifier in contradictory_unresolved_ids:
+            failed_sentence_ids.add(identifier)
+            unresolved_sentence_ids.add(identifier)
+            continue
         if status == "pass":
-            if identifier in findings_by_id:
-                raise FluencyAuditFailed(
-                    "fluency_audit_failed: passing sentence unexpectedly contains findings"
-                )
             continue
 
-        spans = findings_by_id.get(identifier)
+        finding = findings_by_id.get(identifier) or {}
+        spans = finding.get("spans")
         if not spans or len(spans) > _MAX_FLUENCY_SPANS_PER_SENTENCE:
             # Fluency is a quality-only audit. A model may classify a sentence
             # as bad yet omit exact evidence even under a structured schema.
@@ -472,14 +502,10 @@ def _parse_fluency_audit(raw_response, response_text, segments):
         # model classifier.
 
     failed_status_ids = {
-        index for index, status in enumerate(status_values) if status != "pass"
+        index for index, status in enumerate(effective_status_values) if status != "pass"
     }
-    extra_finding_ids = set(findings_by_id) - failed_status_ids
-    if extra_finding_ids:
-        raise FluencyAuditFailed(
-            "fluency_audit_failed: passing sentence unexpectedly contains findings"
-        )
     unresolved_sentence_ids.update(failed_status_ids - set(findings_by_id))
+    unresolved_sentence_ids.update(contradictory_unresolved_ids)
     if len(parsed) > _MAX_FLUENCY_FINDINGS:
         raise FluencyAuditFailed(
             "fluency_audit_failed: Hungarian fluency findings are out of bounds"
