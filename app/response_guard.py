@@ -319,12 +319,11 @@ def _fluency_span_is_protected(raw_response_text, start, end, span, reason):
         return True
     if protected_factual_literals(span) or protected_response_literals(span):
         return True
-    return bool(
-        _ASCII_TECHNICAL_SPAN_RE.fullmatch(span)
-        and not (
-            reason == "duplicated_morphology" and _DUPLICATED_PREFIX_RE.match(span)
-        )
-    )
+    # Do not treat arbitrary ASCII words as technical literals.  That broad
+    # fallback previously protected malformed pseudo-words such as "szozaver"
+    # from editorial repair.  Known technical terms and proper names are already
+    # covered by protected_response_literals() above.
+    return False
 
 
 def _parse_fluency_audit(raw_response, response_text, segments):
