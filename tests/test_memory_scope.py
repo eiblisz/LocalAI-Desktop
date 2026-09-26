@@ -66,6 +66,23 @@ def test_explicit_other_conversation_request_keeps_cross_window_available():
     assert scope.reason == "explicit_other_conversation"
 
 
+def test_memory_architecture_feature_explanation_does_not_claim_current_context_scope():
+    scope = resolve_memory_context_scope(
+        (
+            "Írj részletes összefoglalót a LocalAI Desktop memóriaarchitektúrájáról; "
+            "térj ki a current chat contextre, Window Memoryra, Global Memoryra, "
+            "cross-window retrievalre és a Remember ikonra."
+        ),
+        conversation_local=False,
+    )
+
+    assert scope.memory_scope == "fresh_general"
+    assert scope.include_current_memory is False
+    assert scope.include_cross_window is False
+    assert scope.include_global_memory is False
+    assert scope.reason == "fresh_general"
+
+
 def test_current_window_recall_scope_remains_available():
     scope = resolve_memory_context_scope(
         "What did I say in this conversation?",
