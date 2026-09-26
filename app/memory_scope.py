@@ -19,6 +19,68 @@ def _semantic_tokens(value):
     }
 
 
+def is_memory_architecture_topic_request(user_text):
+    """Return True when memory terms are being discussed as product/system features.
+
+    Feature mentions such as "Global Memory", "cross-window retrieval" and the
+    "Remember" button must not be interpreted as an instruction to retrieve or
+    write personal memory. Keep this semantic and language-agnostic enough for
+    architecture/explanation prompts while leaving explicit recall/write queries
+    to the normal memory-scope rules.
+    """
+    normalized = canonical_match_text(user_text)
+    tokens = set(normalized.split())
+    if not normalized:
+        return False
+
+    memory_feature_terms = (
+        "window memory",
+        "global memory",
+        "cross window",
+        "cross-window",
+        "remember icon",
+        "remember button",
+        "remember ikon",
+        "memoriaarchitekt",
+        "memory architecture",
+        "memory system",
+        "memory routing",
+    )
+    architecture_terms = {
+        "architektura", "architekturaja", "architecture", "routing",
+        "retrieval", "persistence", "ikon", "icon", "button", "feature",
+        "mukodik", "works", "viselkedes", "behavior",
+    }
+    explanation_stems = (
+        "irj", "magyaraz", "osszegz", "explain", "describe", "summar",
+        "how", "hogyan",
+    )
+    explicit_recall_phrases = (
+        "mit jegyeztel meg", "mire emlekszel", "what do you remember",
+        "recall from", "emlekezz arra", "jegyezd meg", "remember that",
+        "mi van a global memory", "what is in global memory",
+        "masik beszelgetes", "other conversation",
+    )
+
+    if any(phrase in normalized for phrase in explicit_recall_phrases):
+        return False
+
+    has_feature_phrase = any(
+        phrase.replace("-", " ") in normalized.replace("-", " ")
+        for phrase in memory_feature_terms
+    )
+    has_architecture_term = bool(tokens & architecture_terms)
+    has_explanation_intent = any(
+        token.startswith(stem)
+        for token in tokens
+        for stem in explanation_stems
+    )
+    return bool(
+        (has_feature_phrase or ("memory" in tokens and has_architecture_term))
+        and has_explanation_intent
+    )
+
+
 def is_other_window_request(user_text):
     tokens = _semantic_tokens(user_text)
     scope_terms = {
@@ -33,6 +95,8 @@ def is_other_window_request(user_text):
 
 
 def is_global_memory_request(user_text):
+    if is_memory_architecture_topic_request(user_text):
+        return False
     sequence = canonical_match_text(user_text).split()
     tokens = set(sequence)
     has_memory_term = any(
@@ -73,7 +137,9 @@ _CONTEXT_REFERENCE_TOKENS = {
     "above", "continue", "continuation", "also",
 }
 
-def _has_recall_cue(tokens):
+def _has_recall_cue(tokens, *, user_text=""):
+    if user_text and is_memory_architecture_topic_request(user_text):
+        return False
     return any(
         token.startswith(stem)
         for token in tokens
@@ -123,7 +189,8 @@ def resolve_memory_context_scope(user_text, *, conversation_local=False):
         user_text
     )
     cross_window_relevant = bool(
-        _has_recall_cue(_semantic_tokens(user_text)) and durable_relevant
+        _has_recall_cue(_semantic_tokens(user_text), user_text=user_text)
+        and durable_relevant
     )
 
     include_global_memory = bool(
