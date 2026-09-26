@@ -573,6 +573,59 @@ def test_short_span_repair_cannot_expand_into_surrounding_sentence():
         )
 
 
+def test_nonexact_fluency_span_is_partial_without_discarding_other_exact_repairs():
+    prompt = "Válaszolj magyarul."
+    draft = (
+        "Az első mondat hibásalak miatt problémás. "
+        "A második mondat rosszszó miatt hibás."
+    )
+
+    class MixedAuditClient:
+        supports_hungarian_fluency_audit = True
+
+        def chat_once(self, model, messages, **kwargs):
+            if "Hungarian fluency classifier" in messages[0]["content"]:
+                segments = _audit_segments(messages)
+                return json.dumps({"judgments": [
+                    [
+                        segments[0]["id"],
+                        "hybrid_or_pseudoword",
+                        ["hibas alak"],
+                    ],
+                    [
+                        segments[1]["id"],
+                        "hybrid_or_pseudoword",
+                        ["rosszszó"],
+                    ],
+                ]})
+            payload = json.loads(messages[1]["content"].split(
+                "BOUNDED SPANS TO REPAIR:\n", 1
+            )[1])
+            assert [item["text"] for item in payload] == ["rosszszó"]
+            return json.dumps({"repairs": [{
+                "id": payload[0]["id"],
+                "text": "hibás szó",
+            }]})
+
+    trace = RequestTrace("desktop")
+    result = guard_response(
+        MixedAuditClient(),
+        "gemma4:26b",
+        prompt,
+        draft,
+        trace=trace,
+    )
+
+    assert "hibásalak" in result
+    assert "rosszszó" not in result
+    assert "hibás szó" in result
+    snapshot = trace.snapshot()
+    assert snapshot["metadata"]["hungarian_fluency_audit_result"] == "partial"
+    assert snapshot["metadata"]["fluency_sentences_failed"] == 2
+    assert snapshot["metadata"]["fluency_sentences_unresolved"] == 1
+    assert snapshot["metadata"]["language_repair_span_count"] == 1
+
+
 def test_sentence_audit_covers_multiple_separated_hungarian_fluency_failures():
     prompt = "Válaszolj magyarul."
     repairs = {
