@@ -162,8 +162,13 @@ def is_durable_memory_query(user_text):
 
 
 def _has_current_context_reference(user_text):
+    if is_memory_architecture_topic_request(user_text):
+        return False
     tokens = _semantic_tokens(user_text)
-    return bool(tokens & _CONTEXT_REFERENCE_TOKENS or _has_recall_cue(tokens))
+    return bool(
+        tokens & _CONTEXT_REFERENCE_TOKENS
+        or _has_recall_cue(tokens, user_text=user_text)
+    )
 
 
 @dataclass(frozen=True)
