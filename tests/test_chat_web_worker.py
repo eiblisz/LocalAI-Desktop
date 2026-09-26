@@ -2007,8 +2007,7 @@ def test_single_factual_risk_request_skips_model_query_generation(monkeypatch):
     class FactualClient:
         def chat_once(self, model, messages, timeout=600.0, **kwargs):
             return (
-                "A Silver Story című művet Correct Author írta, "
-                "és 1912-ben jelent meg."
+                "A Silver Story című művet Correct Author 1912-ben írta."
             )
 
         def chat_stream(
@@ -2022,8 +2021,7 @@ def test_single_factual_risk_request_skips_model_query_generation(monkeypatch):
         ):
             if not should_stop():
                 on_token(
-                    "A Silver Story című művet Correct Author írta, "
-                    "és 1912-ben jelent meg."
+                    "A Silver Story című művet Correct Author 1912-ben írta."
                 )
 
     def fake_search(query, max_results=6, fetch_pages=True):
@@ -2037,12 +2035,10 @@ def test_single_factual_risk_request_skips_model_query_generation(monkeypatch):
                 "title": "Correct Author: Silver Story",
                 "url": "https://example.com/silver-story",
                 "snippet": (
-                    "Silver Story was written by Correct Author and "
-                    "published in 1912."
+                    "Silver Story was written by Correct Author in 1912."
                 ),
                 "page_text": (
-                    "Silver Story was written by Correct Author and "
-                    "published in 1912."
+                    "Silver Story was written by Correct Author in 1912."
                 ),
             }],
         }
@@ -2072,7 +2068,7 @@ def test_single_factual_risk_request_skips_model_query_generation(monkeypatch):
         workers,
         "web_search_context_text",
         lambda payload: (
-            "Silver Story was written by Correct Author and published in 1912."
+            "Silver Story was written by Correct Author in 1912."
         ),
     )
 
@@ -2136,7 +2132,7 @@ def test_direct_factual_request_uses_one_grounded_model_call_not_forced_second_p
             self.once_calls.append((model, messages))
             return (
                 "A Silver Story című művet nem Wrong Author, hanem Correct Author "
-                "írta, és 1912-ben jelent meg."
+                "írta 1912-ben."
             )
 
         def chat_stream(self, *args, **kwargs):
@@ -2156,12 +2152,10 @@ def test_direct_factual_request_uses_one_grounded_model_call_not_forced_second_p
                 "title": "Correct Author: Silver Story",
                 "url": "https://example.com/silver-story",
                 "snippet": (
-                    "Silver Story was written by Correct Author and "
-                    "published in 1912."
+                    "Silver Story was written by Correct Author in 1912."
                 ),
                 "page_text": (
-                    "Silver Story was written by Correct Author and "
-                    "published in 1912."
+                    "Silver Story was written by Correct Author in 1912."
                 ),
             }],
         }
@@ -2192,7 +2186,7 @@ def test_direct_factual_request_uses_one_grounded_model_call_not_forced_second_p
         workers,
         "web_search_context_text",
         lambda payload: (
-            "Silver Story was written by Correct Author and published in 1912."
+            "Silver Story was written by Correct Author in 1912."
         ),
     )
 
@@ -2219,7 +2213,7 @@ def test_direct_factual_request_uses_one_grounded_model_call_not_forced_second_p
     assert bundle_kwargs["max_text_chars"] == 320
     assert tokens == [
         "A Silver Story című művet nem Wrong Author, hanem Correct Author "
-        "írta, és 1912-ben jelent meg."
+        "írta 1912-ben."
     ]
     snapshot = trace.snapshot()
     assert snapshot["metadata"]["generation_strategy"] == "factual_single_pass"
@@ -2446,7 +2440,7 @@ def test_direct_fact_fetches_one_page_only_when_snippets_lack_requested_date(
         fetched.append((page_fetch_budget, timeout))
         payload = dict(payload)
         payload["results"] = [dict(payload["results"][0])]
-        payload["results"][0]["page_text"] = "Published in 1912."
+        payload["results"][0]["page_text"] = "Correct Author wrote Silver Story in 1912."
         return payload
 
     monkeypatch.setattr(workers, "fetch_result_pages", fetch_one)
@@ -2466,7 +2460,7 @@ def test_direct_fact_fetches_one_page_only_when_snippets_lack_requested_date(
     monkeypatch.setattr(
         workers,
         "web_search_context_text",
-        lambda payload: "Silver Story was written by Correct Author and published in 1912.",
+        lambda payload: "Correct Author wrote Silver Story in 1912.",
     )
 
     worker = workers.ChatWebWorker(
