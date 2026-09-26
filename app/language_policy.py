@@ -135,6 +135,10 @@ _HUNGARIAN_ALLOWED_TECHNICAL_TERMS = {
     "training",
     "inference",
     "tool use",
+    "machine learning",
+    "deep learning",
+    "embedding",
+    "Large Language Models",
 }
 _CORRUPTED_UNICODE_RE = re.compile(r"[\ufffd\u0000-\u0008\u000b\u000c\u000e-\u001f]")
 _ASCII_WORD_RE = re.compile(r"[A-Za-z]+(?:[-'][A-Za-z]+)?")
