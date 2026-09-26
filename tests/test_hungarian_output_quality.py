@@ -9,7 +9,13 @@ from app.language_policy import (
     repair_preserves_response_shape,
 )
 from app.request_trace import RequestTrace
-from app.response_guard import FluencyAuditFailed, LanguageRepairFailed, guard_response, validate_response
+from app.response_guard import (
+    FluencyAuditFailed,
+    LanguageRepairFailed,
+    RepairIntegrityFailed,
+    guard_response,
+    validate_response,
+)
 from app.task_constraints import build_task_constraints
 from app.workers import AdaptiveChatWorker
 from app.ollama_client import ollama_failure_metadata
