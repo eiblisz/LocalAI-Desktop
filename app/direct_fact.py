@@ -253,10 +253,10 @@ def _creation_date_supported(text):
     "published in 1847, written for the competition" from promoting 1847 to a
     composition year while still accepting "wrote it in 1912".
     """
-    folded = _fold(text)
+    raw = str(text or "")
     clauses = [
-        clause.strip()
-        for clause in re.split(r"[.!?;,]+", folded)
+        _fold(clause)
+        for clause in re.split(r"[.!?;,]+", raw)
         if clause.strip()
     ]
     for clause in clauses:
