@@ -79,6 +79,42 @@ def test_creation_request_rejects_an_unrelated_edition_year():
     )
 
 
+def test_creation_request_rejects_publication_year_even_with_authorship_in_same_result():
+    prompt = "Mikor írta Wrong Author a Silver Story című művet?"
+    mixed_publication = {
+        "results": [{
+            "snippet": (
+                "Silver Story was first published in 1922. "
+                "Correct Author wrote it for the competition."
+            ),
+        }],
+    }
+
+    assert requested_fact_supported(
+        mixed_publication,
+        "temporal",
+        prompt,
+    ) is False
+
+
+def test_creation_request_accepts_creation_year_when_publication_year_is_also_present():
+    prompt = "Mikor írta Wrong Author a Silver Story című művet?"
+    mixed_dates = {
+        "results": [{
+            "snippet": (
+                "Correct Author wrote Silver Story in 1912. "
+                "It was first published in 1922."
+            ),
+        }],
+    }
+
+    assert requested_fact_supported(
+        mixed_dates,
+        "temporal",
+        prompt,
+    ) is True
+
+
 def test_hungarian_fallback_only_repeats_a_supported_requested_literal():
     fallback = deterministic_hungarian_fact_fallback(
         "Relevant text: Sample Band formed in 1980.",
