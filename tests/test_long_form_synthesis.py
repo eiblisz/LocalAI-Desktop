@@ -42,6 +42,18 @@ def test_case_02_explicit_long_form_receives_bounded_larger_budget():
     assert contract.constraints.output_budget == 2048
 
 
+def test_case_02b_hungarian_paragraph_range_with_dash_is_long_form():
+    prompt = (
+        "Írj egy részletes, legalább 8–12 bekezdéses magyar összefoglalót "
+        "a LocalAI Desktop memóriaarchitektúrájáról."
+    )
+    contract = _contract(prompt)
+
+    assert contract.route == ROUTE_CHAT
+    assert contract.constraints.response_length == LENGTH_LONG
+    assert contract.constraints.output_budget == 2048
+
+
 def test_case_03_partial_web_coverage_uses_hybrid_synthesis_policy():
     prompt = (
         "Mutasd be részletesen, hogyan működik a neurális háló, "
