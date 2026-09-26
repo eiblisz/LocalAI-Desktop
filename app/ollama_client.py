@@ -2,6 +2,7 @@ import json
 import os
 import threading
 import uuid
+from math import ceil
 from typing import Callable
 
 import requests
@@ -24,8 +25,88 @@ from .ollama_resource_coordinator import (
 from .vram_release import loaded_ollama_models, unload_ollama_model
 
 
+# Ollama's default runner window is 4096 tokens.  We only request a larger
+# window when the final, already-assembled chat payload needs it.  The steps
+# avoid an unnecessarily large KV cache while still giving a loaded model one
+# predictable next size when grounded context would otherwise overflow.
+_DEFAULT_NUM_CTX = 4096
+_CONTEXT_SAFETY_FLOOR = 192
+_CONTEXT_SAFETY_MAX = 512
+_MESSAGE_TEMPLATE_OVERHEAD = 16
+_IMAGE_CONTEXT_ALLOWANCE = 256
+
+
 class IncompleteGenerationError(RuntimeError):
     pass
+
+
+def _positive_int(value):
+    try:
+        result = int(value)
+    except (TypeError, ValueError):
+        return None
+    return result if result > 0 else None
+
+
+def _text_token_estimate(value):
+    """Stable, conservative local estimate; this is not a tokenizer contract."""
+    text = str(value or "")
+    return max(1, ceil(len(text) / 4)) if text else 0
+
+
+def _final_message_token_estimate(messages):
+    """Estimate the final API payload, including role/template overhead.
+
+    This intentionally runs at the Ollama boundary, after workers have added
+    evidence, grounded system instructions, and conversation messages.  Image
+    bytes are not text tokens, but a bounded per-image allowance preserves a
+    safety margin for multimodal templates without serializing image data.
+    """
+    total = 0
+    for message in list(messages or []):
+        if not isinstance(message, dict):
+            total += _text_token_estimate(message) + _MESSAGE_TEMPLATE_OVERHEAD
+            continue
+        content = message.get("content", "")
+        if isinstance(content, str):
+            total += _text_token_estimate(content)
+        elif content:
+            try:
+                total += _text_token_estimate(
+                    json.dumps(content, ensure_ascii=False, sort_keys=True)
+                )
+            except (TypeError, ValueError):
+                total += _text_token_estimate(content)
+        total += _MESSAGE_TEMPLATE_OVERHEAD
+        images = message.get("images") or []
+        if isinstance(images, (list, tuple)):
+            total += _IMAGE_CONTEXT_ALLOWANCE * len(images)
+    return total
+
+
+def _context_length_from_show_payload(payload):
+    """Extract a model-declared context maximum without model-name rules."""
+    if not isinstance(payload, dict):
+        return None
+    candidates = []
+    pending = [payload]
+    while pending:
+        current = pending.pop()
+        if not isinstance(current, dict):
+            continue
+        for key, value in current.items():
+            normalized = str(key or "").strip().lower().replace("-", "_")
+            if normalized.endswith("context_length") or normalized in {
+                "context_length",
+                "context_window",
+                "num_ctx",
+            }:
+                parsed = _positive_int(value)
+                if parsed:
+                    candidates.append(parsed)
+            elif isinstance(value, dict):
+                pending.append(value)
+    return max(candidates) if candidates else None
 
 
 def _ollama_http_error_detail(response, limit=500):
@@ -87,6 +168,40 @@ def _tag_ollama_failure(
     return exc
 
 
+def _context_budget_metadata(
+    *,
+    estimated_prompt_tokens,
+    output_tokens,
+    requested_num_ctx,
+    model_max_context,
+    decision,
+    safety_tokens,
+):
+    metadata = {
+        # RequestTrace deliberately excludes metadata keys containing "token"
+        # so these use its established "units" naming while UI labels remain
+        # explicit about their token-estimate meaning.
+        "estimated_final_prompt_units": int(estimated_prompt_tokens),
+        "requested_output_units": int(output_tokens),
+        "requested_num_ctx": int(requested_num_ctx),
+        "context_budget_decision": str(decision or ""),
+        "context_budget_safety_units": int(safety_tokens),
+    }
+    if model_max_context:
+        metadata["model_max_context"] = int(model_max_context)
+    return metadata
+
+
+def _tag_context_budget(exc, metadata):
+    """Preserve the exact context decision on a later Ollama failure."""
+    try:
+        for key, value in dict(metadata or {}).items():
+            setattr(exc, f"localai_{key}", value)
+    except Exception:
+        pass
+    return exc
+
+
 def ollama_failure_metadata(exc):
     """Return trace-safe failure classification for a caught Ollama error."""
     stage = str(getattr(exc, "localai_failure_stage", "") or "")
@@ -127,6 +242,12 @@ def ollama_failure_metadata(exc):
         ("localai_ollama_http_detail", "ollama_http_detail"),
         ("localai_ollama_call_phase", "ollama_call_phase"),
         ("localai_ollama_preparation_reason", "ollama_preparation_reason"),
+        ("localai_estimated_final_prompt_units", "estimated_final_prompt_units"),
+        ("localai_requested_output_units", "requested_output_units"),
+        ("localai_requested_num_ctx", "requested_num_ctx"),
+        ("localai_model_max_context", "model_max_context"),
+        ("localai_context_budget_decision", "context_budget_decision"),
+        ("localai_context_budget_safety_units", "context_budget_safety_units"),
     ):
         value = getattr(exc, attribute, None)
         if value is not None:
@@ -168,6 +289,10 @@ class OllamaClient:
         self.resource_store = resource_store or ResourceLeaseStore()
         self._request_sequence_lock = threading.Lock()
         self._request_sequence = 0
+        self._model_context_lock = threading.Lock()
+        # ``/api/show`` is static model metadata. Cache known limits for this
+        # client lifetime; a transient metadata failure remains retryable.
+        self._model_context_max_cache = {}
 
     def _next_request_sequence(self):
         with self._request_sequence_lock:
@@ -186,6 +311,99 @@ class OllamaClient:
         response.raise_for_status()
         payload = response.json()
         return [item["name"] for item in payload.get("models", []) if item.get("name")]
+
+    def _model_max_context(self, model):
+        """Return the declared context maximum from cached Ollama metadata."""
+        key = str(model or "").strip().casefold()
+        if not key:
+            return None
+        with self._model_context_lock:
+            if key in self._model_context_max_cache:
+                return self._model_context_max_cache[key]
+        maximum = None
+        try:
+            response = requests.post(
+                f"{self.base_url}/api/show",
+                json={"model": str(model).strip()},
+                timeout=5.0,
+            )
+            response.raise_for_status()
+            maximum = _context_length_from_show_payload(response.json())
+        except (requests.RequestException, TypeError, ValueError, AttributeError):
+            maximum = None
+        if maximum is not None:
+            with self._model_context_lock:
+                self._model_context_max_cache[key] = maximum
+        return maximum
+
+    def _context_budget(self, model, messages, output_budget):
+        """Choose the smallest safe Ollama context for the final chat payload."""
+        prompt_tokens = _final_message_token_estimate(messages)
+        safety_tokens = max(
+            _CONTEXT_SAFETY_FLOOR,
+            min(
+                _CONTEXT_SAFETY_MAX,
+                ceil((prompt_tokens + int(output_budget)) * 0.07),
+            ),
+        )
+        required_tokens = prompt_tokens + int(output_budget) + safety_tokens
+        if required_tokens <= _DEFAULT_NUM_CTX:
+            # Do not send num_ctx when the request already fits the runner's
+            # ordinary 4096-token window. This preserves the resident model's
+            # existing context and avoids an unnecessary configuration change.
+            return (
+                _context_budget_metadata(
+                    estimated_prompt_tokens=prompt_tokens,
+                    output_tokens=output_budget,
+                    requested_num_ctx=_DEFAULT_NUM_CTX,
+                    model_max_context=None,
+                    decision="fits_default_context",
+                    safety_tokens=safety_tokens,
+                ),
+                False,
+            )
+
+        model_max_context = self._model_max_context(model)
+        if model_max_context is None:
+            # Without a declared bound, preserve the current safe default. A
+            # speculative larger KV cache could exceed an unknown model limit.
+            requested_num_ctx = _DEFAULT_NUM_CTX
+            decision = "model_max_context_unavailable_preserved_default"
+        else:
+            requested_num_ctx = _DEFAULT_NUM_CTX
+            while (
+                requested_num_ctx < required_tokens
+                and requested_num_ctx < model_max_context
+            ):
+                requested_num_ctx *= 2
+            requested_num_ctx = min(requested_num_ctx, model_max_context)
+            decision = (
+                "raised_to_next_context_step"
+                if requested_num_ctx >= required_tokens
+                else "model_max_context_insufficient"
+            )
+
+        return (
+            _context_budget_metadata(
+                estimated_prompt_tokens=prompt_tokens,
+                output_tokens=output_budget,
+                requested_num_ctx=requested_num_ctx,
+                model_max_context=model_max_context,
+                decision=decision,
+                safety_tokens=safety_tokens,
+            ),
+            requested_num_ctx != _DEFAULT_NUM_CTX,
+        )
+
+    @staticmethod
+    def _notify_context_budget(callback, metadata):
+        if callback is None:
+            return
+        try:
+            callback(dict(metadata or {}))
+        except Exception:
+            # Diagnostics must never block a local inference request.
+            pass
 
     @staticmethod
     def _busy_message(model, ownership):
@@ -481,6 +699,7 @@ class OllamaClient:
         control=None,
         num_predict=None,
         call_phase=None,
+        context_budget_callback=None,
     ) -> str:
         call_phase = str(call_phase or "model_inference")
         request_sequence = self._next_request_sequence()
@@ -488,10 +707,23 @@ class OllamaClient:
             control.claim_model_call()
             timeout = control.request_timeout(timeout)
 
+        output_budget = (
+            OLLAMA_NUM_PREDICT
+            if num_predict is None
+            else max(1, int(num_predict))
+        )
+        context_budget, apply_num_ctx = self._context_budget(
+            model,
+            messages,
+            output_budget,
+        )
+        self._notify_context_budget(context_budget_callback, context_budget)
+
         if self.auto_prepare_model:
             try:
                 self.prepare_model(model, allow_model_release=False)
             except Exception as exc:
+                _tag_context_budget(exc, context_budget)
                 raise _tag_ollama_failure(
                     exc,
                     stage="model_preparation",
@@ -503,12 +735,10 @@ class OllamaClient:
 
         request_id = uuid.uuid4().hex
         self._set_request_state(model, request_id, STATE_MODEL_LOADING)
-        output_budget = (
-            OLLAMA_NUM_PREDICT
-            if num_predict is None
-            else max(1, int(num_predict))
-        )
         structured_response = response_format is not None
+        options = {"num_predict": output_budget}
+        if apply_num_ctx:
+            options["num_ctx"] = context_budget["requested_num_ctx"]
         payload = {
             "model": model,
             "messages": messages,
@@ -519,7 +749,7 @@ class OllamaClient:
             # marker, the JSON contract below can safely accept that content;
             # the caller still performs its stricter semantic validation.
             "stream": bool(control is not None),
-            "options": {"num_predict": output_budget},
+            "options": options,
         }
         # The think parameter is not accepted by every model template. Some
         # ordinary models reject even an explicit false value with HTTP 400.
@@ -610,6 +840,7 @@ class OllamaClient:
                     request_sequence=request_sequence,
                     call_phase=call_phase,
                 )
+            _tag_context_budget(exc, context_budget)
             self._set_request_state(
                 model,
                 request_id,
@@ -637,6 +868,7 @@ class OllamaClient:
         control=None,
         num_predict=None,
         call_phase=None,
+        context_budget_callback=None,
     ) -> None:
         call_phase = str(call_phase or "model_inference")
         request_sequence = self._next_request_sequence()
@@ -644,10 +876,23 @@ class OllamaClient:
             control.claim_model_call()
             timeout = control.request_timeout(timeout)
 
+        output_budget = (
+            OLLAMA_NUM_PREDICT
+            if num_predict is None
+            else max(1, int(num_predict))
+        )
+        context_budget, apply_num_ctx = self._context_budget(
+            model,
+            messages,
+            output_budget,
+        )
+        self._notify_context_budget(context_budget_callback, context_budget)
+
         if self.auto_prepare_model:
             try:
                 self.prepare_model(model, allow_model_release=False)
             except Exception as exc:
+                _tag_context_budget(exc, context_budget)
                 raise _tag_ollama_failure(
                     exc,
                     stage="model_preparation",
@@ -659,16 +904,14 @@ class OllamaClient:
 
         request_id = uuid.uuid4().hex
         self._set_request_state(model, request_id, STATE_MODEL_LOADING)
-        output_budget = (
-            OLLAMA_NUM_PREDICT
-            if num_predict is None
-            else max(1, int(num_predict))
-        )
+        options = {"num_predict": output_budget}
+        if apply_num_ctx:
+            options["num_ctx"] = context_budget["requested_num_ctx"]
         payload = {
             "model": model,
             "messages": messages,
             "stream": True,
-            "options": {"num_predict": output_budget},
+            "options": options,
         }
         if OLLAMA_THINKING_ENABLED:
             payload["think"] = True
@@ -754,6 +997,7 @@ class OllamaClient:
                     request_sequence=request_sequence,
                     call_phase=call_phase,
                 )
+            _tag_context_budget(exc, context_budget)
             self._set_request_state(
                 model,
                 request_id,
@@ -780,4 +1024,5 @@ class OllamaClient:
                 "prompt_eval_duration": final_item.get("prompt_eval_duration"),
                 "eval_duration": final_item.get("eval_duration"),
                 "total_duration": final_item.get("total_duration"),
+                "context_budget": context_budget,
             }

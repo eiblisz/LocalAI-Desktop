@@ -113,6 +113,204 @@ def test_chat_request_allows_explicit_operator_thinking_opt_in(monkeypatch):
     assert captured["json"]["think"] is True
 
 
+class _ShowResponse:
+    def __init__(self, context_length):
+        self.context_length = context_length
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return {"model_info": {"llama.context_length": self.context_length}}
+
+
+def test_small_final_payload_keeps_default_context_without_num_ctx_override(monkeypatch):
+    captured = {}
+    decisions = []
+
+    def fake_post(url, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return _Response()
+
+    monkeypatch.setattr("app.ollama_client.requests.post", fake_post)
+
+    assert OllamaClient().chat_once(
+        model="local-test:9b-q4",
+        messages=[{"role": "user", "content": "Rövid kérdés."}],
+        context_budget_callback=decisions.append,
+    ) == "ok"
+
+    assert captured["url"].endswith("/api/chat")
+    assert captured["json"]["options"] == {"num_predict": 1024}
+    assert decisions == [{
+        "estimated_final_prompt_units": 20,
+        "requested_output_units": 1024,
+        "requested_num_ctx": 4096,
+        "context_budget_decision": "fits_default_context",
+        "context_budget_safety_units": 192,
+    }]
+
+
+def test_final_grounded_payload_raises_context_to_next_safe_step(monkeypatch):
+    captured = {}
+    show_calls = []
+
+    def fake_post(url, **kwargs):
+        if url.endswith("/api/show"):
+            show_calls.append(kwargs["json"])
+            return _ShowResponse(32768)
+        captured["url"] = url
+        captured.update(kwargs)
+        return _Response()
+
+    monkeypatch.setattr("app.ollama_client.requests.post", fake_post)
+    messages = [
+        {"role": "system", "content": "Grounded answer instructions. " * 35},
+        {
+            "role": "user",
+            "content": (
+                "CURRENT USER REQUEST: factual question\n\n"
+                "AUTHORIZED WEB TOOL DATA:\n" + ("source evidence " * 800)
+            ),
+        },
+    ]
+    decisions = []
+
+    assert OllamaClient().chat_once(
+        model="local-test:9b-q4",
+        messages=messages,
+        num_predict=1024,
+        context_budget_callback=decisions.append,
+    ) == "ok"
+
+    assert show_calls == [{"model": "local-test:9b-q4"}]
+    assert captured["url"].endswith("/api/chat")
+    assert captured["json"]["options"] == {
+        "num_predict": 1024,
+        "num_ctx": 8192,
+    }
+    assert decisions[0]["estimated_final_prompt_units"] > 3000
+    assert decisions[0]["requested_num_ctx"] == 8192
+    assert decisions[0]["model_max_context"] == 32768
+    assert decisions[0]["context_budget_decision"] == "raised_to_next_context_step"
+
+
+def test_context_budget_never_exceeds_model_declared_maximum(monkeypatch):
+    captured = {}
+
+    def fake_post(url, **kwargs):
+        if url.endswith("/api/show"):
+            return _ShowResponse(8192)
+        captured.update(kwargs)
+        return _Response()
+
+    monkeypatch.setattr("app.ollama_client.requests.post", fake_post)
+    decisions = []
+
+    assert OllamaClient().chat_once(
+        model="context-limited-test",
+        messages=[{"role": "user", "content": "evidence " * 9000}],
+        num_predict=1024,
+        context_budget_callback=decisions.append,
+    ) == "ok"
+
+    assert captured["json"]["options"]["num_ctx"] == 8192
+    assert decisions[0]["requested_num_ctx"] <= decisions[0]["model_max_context"]
+    assert decisions[0]["context_budget_decision"] == "model_max_context_insufficient"
+
+
+def test_model_context_metadata_is_cached_for_repeated_large_requests(monkeypatch):
+    show_calls = []
+
+    def fake_post(url, **_kwargs):
+        if url.endswith("/api/show"):
+            show_calls.append(url)
+            return _ShowResponse(32768)
+        return _Response()
+
+    monkeypatch.setattr("app.ollama_client.requests.post", fake_post)
+    client = OllamaClient()
+    messages = [{"role": "user", "content": "grounded evidence " * 1200}]
+
+    assert client.chat_once("cached-context-test", messages, num_predict=1024) == "ok"
+    assert client.chat_once("cached-context-test", messages, num_predict=1024) == "ok"
+
+    assert show_calls == ["http://127.0.0.1:11434/api/show"]
+
+
+def test_grounded_direct_fact_payload_reaches_chat_with_context_override(monkeypatch):
+    captured = {}
+
+    def fake_post(url, **kwargs):
+        if url.endswith("/api/show"):
+            return _ShowResponse(32768)
+        captured["url"] = url
+        captured.update(kwargs)
+        if kwargs["json"]["options"].get("num_ctx") != 8192:
+            raise requests.HTTPError("would reject the undersized context")
+        return _Response()
+
+    monkeypatch.setattr("app.ollama_client.requests.post", fake_post)
+
+    answer = OllamaClient().chat_once(
+        model="local-factual-test:9b-q4",
+        num_predict=1024,
+        messages=[
+            {
+                "role": "system",
+                "content": "Use only authorized evidence. " * 40,
+            },
+            {
+                "role": "user",
+                "content": (
+                    "CURRENT USER REQUEST: false premise\n\n"
+                    "AUTHORIZED EVIDENCE:\n" + ("grounded source " * 900)
+                ),
+            },
+        ],
+    )
+
+    assert answer == "ok"
+    assert captured["url"].endswith("/api/chat")
+    assert captured["json"]["options"]["num_ctx"] == 8192
+
+
+def test_context_decision_is_preserved_on_a_later_ollama_http_failure(monkeypatch):
+    class BadRequestResponse:
+        status_code = 400
+        text = ""
+
+        def json(self):
+            return {}
+
+        def raise_for_status(self):
+            error = requests.HTTPError("Bad Request")
+            error.response = self
+            raise error
+
+    def fake_post(url, **_kwargs):
+        if url.endswith("/api/show"):
+            return _ShowResponse(32768)
+        return BadRequestResponse()
+
+    monkeypatch.setattr("app.ollama_client.requests.post", fake_post)
+
+    with pytest.raises(requests.HTTPError) as exc:
+        OllamaClient().chat_once(
+            model="local-factual-test:9b-q4",
+            num_predict=1024,
+            messages=[{"role": "user", "content": "evidence " * 1800}],
+        )
+
+    metadata = ollama_failure_metadata(exc.value)
+    assert metadata["ollama_failure_stage"] == "ollama_http"
+    assert metadata["ollama_http_status"] == 400
+    assert metadata["requested_num_ctx"] == 8192
+    assert metadata["model_max_context"] == 32768
+    assert metadata["context_budget_decision"] == "raised_to_next_context_step"
+
+
 def _desktop_client(tmp_path):
     store = ResourceLeaseStore(tmp_path / "leases.json")
     return OllamaClient(

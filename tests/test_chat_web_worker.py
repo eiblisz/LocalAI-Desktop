@@ -2189,6 +2189,14 @@ def test_direct_factual_request_uses_one_grounded_model_call_not_forced_second_p
 
         def chat_once(self, model, messages, timeout=600.0, **kwargs):
             self.once_calls.append((model, messages))
+            kwargs["context_budget_callback"]({
+                "estimated_final_prompt_units": 3210,
+                "requested_output_units": 1024,
+                "requested_num_ctx": 8192,
+                "model_max_context": 32768,
+                "context_budget_decision": "raised_to_next_context_step",
+                "context_budget_safety_units": 296,
+            })
             return (
                 "A Silver Story című művet nem Wrong Author, hanem Correct Author "
                 "írta 1912-ben."
@@ -2278,6 +2286,9 @@ def test_direct_factual_request_uses_one_grounded_model_call_not_forced_second_p
     assert snapshot["metadata"]["generation_strategy"] == "factual_single_pass"
     assert snapshot["metadata"]["factual_authority_profile"] == "direct_compact"
     assert snapshot["metadata"]["factual_authority_chars"] <= 3000
+    assert snapshot["metadata"]["estimated_final_prompt_units"] == 3210
+    assert snapshot["metadata"]["requested_num_ctx"] == 8192
+    assert snapshot["metadata"]["model_max_context"] == 32768
 
 
 def test_direct_factual_insufficient_relation_evidence_forces_guarded_path(

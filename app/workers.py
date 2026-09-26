@@ -499,7 +499,12 @@ class ChatWebWorker(QObject):
             except TypeError as exc:
                 unsupported = next(
                     (
-                        name for name in ("num_predict", "call_phase")
+                        name
+                        for name in (
+                            "num_predict",
+                            "call_phase",
+                            "context_budget_callback",
+                        )
                         if name in str(exc) and name in kwargs
                     ),
                     "",
@@ -521,7 +526,12 @@ class ChatWebWorker(QObject):
             except TypeError as exc:
                 unsupported = next(
                     (
-                        name for name in ("num_predict", "call_phase")
+                        name
+                        for name in (
+                            "num_predict",
+                            "call_phase",
+                            "context_budget_callback",
+                        )
                         if name in str(exc) and name in kwargs
                     ),
                     "",
@@ -529,6 +539,10 @@ class ChatWebWorker(QObject):
                 if not unsupported:
                     raise
                 kwargs.pop(unsupported)
+
+    def _record_context_budget(self, metadata):
+        if self.trace is not None:
+            self.trace.add_metadata(**dict(metadata or {}))
 
     def _search_payload(self, query, *, max_results, fetch_pages):
         self.execution_control.claim_search()
@@ -1876,6 +1890,7 @@ class ChatWebWorker(QObject):
                 answer = self._chat_once(
                     model=self.model,
                     num_predict=self.output_budget,
+                    context_budget_callback=self._record_context_budget,
                     messages=[
                         {
                             "role": "system",
@@ -1911,6 +1926,7 @@ class ChatWebWorker(QObject):
                     on_token=answer_parts.append,
                     should_stop=self._stop_event.is_set,
                     num_predict=self.output_budget,
+                    context_budget_callback=self._record_context_budget,
                 )
                 answer = "".join(answer_parts).strip()
 
