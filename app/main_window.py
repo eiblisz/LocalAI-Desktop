@@ -1103,6 +1103,7 @@ class MainWindow(QMainWindow):
             trace.end(
                 "memory_scope_resolution",
                 memory_scope="current_window",
+                memory_reason="current_window_direct_recall",
                 cross_window_requested=False,
                 global_memory_requested=False,
             )
@@ -1393,6 +1394,7 @@ class MainWindow(QMainWindow):
             trace.end(
                 "memory_scope_resolution",
                 memory_scope=memory_scope.memory_scope,
+                memory_reason=memory_scope.reason,
                 cross_window_requested=memory_scope.cross_window_requested,
                 global_memory_requested=memory_scope.global_memory_requested,
                 current_window_allowed=memory_scope.include_current_memory,
@@ -1551,6 +1553,14 @@ class MainWindow(QMainWindow):
                 False,
             ),
             route=contract.route,
+            routing_reason=getattr(contract, "routing_reason", ""),
+            web_reason=getattr(contract, "web_reason", ""),
+            internal_project_authority=bool(
+                getattr(contract, "internal_project_authority", False)
+            ),
+            memory_write_intent=bool(
+                getattr(contract, "memory_write_intent", False)
+            ),
             conversation_local=bool(
                 getattr(contract, "conversation_local", False)
             ),
@@ -1793,6 +1803,9 @@ class MainWindow(QMainWindow):
                     self.web_mode != "OFF"
                     and not bool(
                         getattr(contract, "conversation_local", False)
+                    )
+                    and not bool(
+                        getattr(contract, "internal_project_authority", False)
                     )
                 ),
                 constraints=contract.constraints,
@@ -2305,7 +2318,12 @@ class MainWindow(QMainWindow):
                 "Output budget",
                 diagnostic.get("output_budget") or metadata.get("output_budget"),
             ),
+            ("Routing reason", metadata.get("routing_reason")),
+            ("Web reason", metadata.get("web_reason")),
+            ("Internal/project authority", metadata.get("internal_project_authority")),
+            ("Memory-write intent", metadata.get("memory_write_intent")),
             ("Memory scope", diagnostic.get("memory_scope") or metadata.get("memory_scope")),
+            ("Memory reason", diagnostic.get("memory_reason") or metadata.get("memory_reason")),
             ("Current-window hit", diagnostic.get("current_window_hit") or metadata.get("current_window_hit")),
             ("Cross-window hit", diagnostic.get("cross_window_hit") or metadata.get("cross_window_hit")),
             ("Global-memory hit", diagnostic.get("global_memory_hit") or metadata.get("global_memory_hit")),

@@ -162,6 +162,21 @@ def test_normal_chat_has_web_on_auto_off_modes():
     assert 'getattr(contract, "conversation_local", False)' in run
 
 
+def test_desktop_preserves_shared_routing_reasons_and_blocks_internal_fallback():
+    from app.main_window import MainWindow
+
+    run_source = inspect.getsource(MainWindow._run_next_action_contract)
+    diagnostics_source = inspect.getsource(MainWindow._diagnostic_html)
+
+    assert 'getattr(contract, "routing_reason", "")' in run_source
+    assert 'getattr(contract, "web_reason", "")' in run_source
+    assert 'getattr(contract, "internal_project_authority", False)' in run_source
+    assert 'getattr(contract, "memory_write_intent", False)' in run_source
+    assert "and not bool(" in run_source
+    assert "Internal/project authority" in diagnostics_source
+    assert "Memory reason" in diagnostics_source
+
+
 def test_web_auto_detects_explicit_search_intent():
     from app.main_window import MainWindow
 

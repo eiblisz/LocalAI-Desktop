@@ -73,6 +73,19 @@ def test_discord_bot_settings_require_exact_allowlist_ids_and_model():
         DiscordBotSettings.from_extension(broken)
 
 
+def test_discord_uses_shared_authority_reason_and_blocks_internal_web_fallback():
+    batch_source = inspect.getsource(DiscordBotBridge._run_action_batch)
+    execute_source = inspect.getsource(DiscordBotBridge._execute_planned_action)
+    answer_source = inspect.getsource(DiscordBotBridge._answer_prompt)
+
+    assert 'getattr(contract, "routing_reason", "")' in batch_source
+    assert 'getattr(contract, "internal_project_authority", False)' in batch_source
+    assert "internal_project_authority=False" in execute_source
+    assert "and not internal_project_authority" in execute_source
+    assert "internal_project_authority=False" in answer_source
+    assert "and not internal_project_authority" in answer_source
+
+
 def test_split_discord_text_never_exceeds_limit():
     text = ("abc " * 1500).strip()
     chunks = split_discord_text(text, limit=500)

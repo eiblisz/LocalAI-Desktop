@@ -460,6 +460,14 @@ class DiscordBotBridge(QObject):
                 child_relation=profile.relation,
                 explicit_batch_child=contract.explicit_batch_child,
                 route=contract.route,
+                routing_reason=getattr(contract, "routing_reason", ""),
+                web_reason=getattr(contract, "web_reason", ""),
+                internal_project_authority=bool(
+                    getattr(contract, "internal_project_authority", False)
+                ),
+                memory_write_intent=bool(
+                    getattr(contract, "memory_write_intent", False)
+                ),
                 conversation_local=bool(
                     getattr(contract, "conversation_local", False)
                 ),
@@ -487,6 +495,9 @@ class DiscordBotBridge(QObject):
                         constraints=contract.constraints,
                         conversation_local=bool(
                             getattr(contract, "conversation_local", False)
+                        ),
+                        internal_project_authority=bool(
+                            getattr(contract, "internal_project_authority", False)
                         ),
                         synthesis_route=getattr(
                             synthesis_policy,
@@ -641,6 +652,7 @@ class DiscordBotBridge(QObject):
             trace.end(
                 "memory_scope_resolution",
                 memory_scope="current_window",
+                memory_reason="current_window_direct_recall",
                 cross_window_requested=False,
                 global_memory_requested=False,
             )
@@ -917,6 +929,7 @@ class DiscordBotBridge(QObject):
             trace.end(
                 "memory_scope_resolution",
                 memory_scope=memory_scope.memory_scope,
+                memory_reason=memory_scope.reason,
                 cross_window_requested=memory_scope.cross_window_requested,
                 global_memory_requested=memory_scope.global_memory_requested,
                 current_window_allowed=memory_scope.include_current_memory,
@@ -1123,6 +1136,7 @@ class DiscordBotBridge(QObject):
         explicit_batch_child=False,
         constraints=None,
         conversation_local=False,
+        internal_project_authority=False,
         synthesis_route=None,
         output_budget=None,
     ):
@@ -1157,6 +1171,7 @@ class DiscordBotBridge(QObject):
             allow_web_fallback=(
                 self._current_web_mode() != "OFF"
                 and not conversation_local
+                and not internal_project_authority
             ),
             trace=trace,
             original_prompt=original_prompt,
@@ -1164,6 +1179,7 @@ class DiscordBotBridge(QObject):
             explicit_batch_child=explicit_batch_child,
             constraints=constraints,
             conversation_local=conversation_local,
+            internal_project_authority=internal_project_authority,
             synthesis_route=synthesis_route,
             output_budget=output_budget,
         )
@@ -1180,6 +1196,7 @@ class DiscordBotBridge(QObject):
         explicit_batch_child=False,
         constraints=None,
         conversation_local=False,
+        internal_project_authority=False,
         synthesis_route=None,
         output_budget=None,
     ):
@@ -1211,8 +1228,14 @@ class DiscordBotBridge(QObject):
                     }
                 )
             )
+            internal_project_authority = bool(
+                planned and planned[0].internal_project_authority
+            )
         if allow_web_fallback is None:
-            allow_web_fallback = self._current_web_mode() != "OFF"
+            allow_web_fallback = (
+                self._current_web_mode() != "OFF"
+                and not internal_project_authority
+            )
 
         constraints = constraints or build_task_constraints(prompt)
         generation_policy = build_generation_policy(
