@@ -102,7 +102,9 @@ def test_chat_web_worker_searches_streams_and_keeps_sources_structured(monkeypat
     assert client.stream_calls
 
     streamed_messages = client.stream_calls[0][1]
-    assert "use ONLY the AUTHORIZED WEB TOOL DATA" in streamed_messages[1]["content"]
+    assert [message["role"] for message in streamed_messages].count("system") == 1
+    assert "Base system" in streamed_messages[0]["content"]
+    assert "use ONLY the AUTHORIZED WEB TOOL DATA" in streamed_messages[0]["content"]
     assert "AUTHORIZED WEB TOOL DATA" in streamed_messages[-1]["content"]
 
     combined = "".join(tokens)
@@ -116,6 +118,63 @@ def test_chat_web_worker_searches_streams_and_keeps_sources_structured(monkeypat
     assert worker.diagnostic_metadata["search_queries"] == [
         "Qwen local AI latest news"
     ]
+
+
+def test_grounded_stream_merges_base_and_grounding_system_roles(monkeypatch):
+    monkeypatch.setattr(
+        workers,
+        "search_web",
+        lambda query, max_results=8, fetch_pages=True: {
+            "provider": "test",
+            "query": query,
+            "results": [{
+                "title": "Result",
+                "url": "https://example.com/result",
+                "snippet": "Sample current fact.",
+            }],
+        },
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: ["https://example.com/result"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_entries",
+        lambda payload, limit=6: [{
+            "title": "Result",
+            "url": "https://example.com/result",
+        }],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: "WEB SEARCH TOOL DATA\nSample current fact.",
+    )
+
+    class StreamCaptureClient(DummyWebClient):
+        def chat_once(self, model, messages, timeout=600.0, **kwargs):
+            return "sample current fact"
+
+    client = StreamCaptureClient()
+    worker = workers.ChatWebWorker(
+        client,
+        "eurollm-test",
+        [
+            {"role": "system", "content": "Base system authority."},
+            {"role": "user", "content": "Mi a legfrissebb Sample adat?"},
+        ],
+        "Mi a legfrissebb Sample adat?",
+    )
+    worker.run()
+
+    assert client.stream_calls
+    messages = client.stream_calls[0][1]
+    assert [item["role"] for item in messages].count("system") == 1
+    assert messages[0]["role"] == "system"
+    assert "Base system authority." in messages[0]["content"]
+    assert "AUTHORIZED WEB TOOL DATA" in messages[-1]["content"]
 
 
 def test_chat_web_worker_returns_safe_message_without_sources(monkeypatch):
