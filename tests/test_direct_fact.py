@@ -467,3 +467,23 @@ def test_host_direct_fact_fallback_fails_closed_on_conflicting_debut_titles():
         "selection",
         language="hu",
     ) == ""
+
+
+def test_host_resolves_first_album_from_artist_overview_without_using_band_page_title():
+    prompt = "melyik nagylemez volt az elso a wasp zenekarnak?"
+    evidence = {
+        "results": [{
+            "title": "W.A.S.P. (band)",
+            "snippet": (
+                "W.A.S.P. is an American heavy metal band. Their first two "
+                "full-length studio albums, W.A.S.P. (1984) and "
+                "The Last Command (1985), were certified gold."
+            ),
+        }],
+    }
+
+    fact = resolve_debut_release_fact(evidence, prompt)
+
+    assert fact["title"].replace(".", "") == "WASP"
+    assert "(band)" not in fact["title"]
+    assert fact["year"] == "1984"
