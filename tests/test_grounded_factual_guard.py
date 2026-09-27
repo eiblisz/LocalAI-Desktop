@@ -321,3 +321,19 @@ def test_grounded_guard_removes_adjacent_duplicate_name_token_before_checking():
 
     assert result == "Sample Author wrote the work in 1912."
     assert client.calls == 0
+
+
+def test_grounded_guard_rejects_invented_single_word_quoted_title():
+    authority = (
+        'USER REQUEST: Mikor jelent meg az első album?\n'
+        'AUTHORIZED EVIDENCE: The self-titled debut album was released in 1984.'
+    )
+
+    unsupported = unsupported_grounded_literals(
+        'A "Mystery" című album 1979-ben jelent meg.',
+        authority,
+    )
+
+    assert "Mystery" in unsupported
+    assert "1979" in unsupported
+
