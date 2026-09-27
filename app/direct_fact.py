@@ -133,6 +133,15 @@ def _release_subject_surface(prompt):
         r"(?:its|their|the)?\s*(?:first|debut)\s+(?:studio\s+)?album\b",
         r"(?i)\bwann\s+ver[oö]ffentlichte\s+(?P<subject>.+?)\s+"
         r"(?:sein|ihr|das)?\s*(?:erste|erstes|deb[uü]t)\w*\s+album\b",
+        # Generic typed-entity fallback for ordinal/debut questions such as
+        # "melyik nagylemez volt az első a sampleband zenekarnak?". The
+        # surrounding release/debut checks decide whether this surface is used.
+        r"(?i)\b(?:a|az)\s+(?P<subject>[A-Za-z0-9.&'’_-]{2,}"
+        r"(?:\s+[A-Za-z0-9.&'’_-]{2,}){0,4})\s+"
+        r"(?:egy[uü]ttes|zenekar)"
+        r"(?:nak|nek|n[aá]l|r[oó]l|ban|ben|b[oő]l|t[oő]l)?\b",
+        r"(?i)\b(?P<subject>[A-Za-z0-9.&'’_-]{2,}"
+        r"(?:\s+[A-Za-z0-9.&'’_-]{2,}){0,4})\s+band\b",
     )
     for pattern in patterns:
         match = re.search(pattern, raw)
@@ -268,15 +277,21 @@ def derive_premise_neutral_query(prompt, requested_fact="general"):
     relation = requested_fact_relation(clean)
     release_subject = _release_subject_surface(clean)
     if (
-        str(requested_fact or "") == "temporal"
-        and relation == "release"
+        relation == "release"
         and release_subject
         and _is_debut_release_request(clean)
     ):
-        return (
-            f"{release_subject} debut first album release date year",
-            "premise_neutral_entity_release_relation",
-        )
+        if str(requested_fact or "") == "temporal":
+            query = f"{release_subject} debut first album release date year"
+        elif str(requested_fact or "") == "selection":
+            query = f"{release_subject} debut first album discography"
+        else:
+            query = ""
+        if query:
+            return (
+                query,
+                "premise_neutral_entity_release_relation",
+            )
 
     title = _marked_title(clean)
     if not title:
@@ -313,7 +328,8 @@ def derive_premise_neutral_query(prompt, requested_fact="general"):
 def targeted_fact_refinement_query(prompt, requested_fact="general"):
     """Derive one stricter, bounded follow-up query after insufficient evidence."""
     clean = _clean(prompt)
-    if str(requested_fact or "") != "temporal":
+    requested_fact = str(requested_fact or "")
+    if requested_fact not in {"temporal", "selection"}:
         return ""
 
     relation = requested_fact_relation(clean)
@@ -323,7 +339,12 @@ def targeted_fact_refinement_query(prompt, requested_fact="general"):
         and release_subject
         and _is_debut_release_request(clean)
     ):
+        if requested_fact == "selection":
+            return f"{release_subject} debut first album discography"
         return f"{release_subject} debut studio album release year"
+
+    if requested_fact != "temporal":
+        return ""
 
     title = _marked_title(clean)
     if not title:
@@ -474,6 +495,23 @@ def requested_fact_supported(payload, requested_fact="general", request_text="")
         return False
 
     requested_fact = str(requested_fact or "general")
+
+    if (
+        requested_fact == "selection"
+        and requested_fact_relation(request_text) == "release"
+        and _is_debut_release_request(request_text)
+    ):
+        for item in dict(payload or {}).get("results") or []:
+            item_text = "\n".join((
+                str(item.get("title") or ""),
+                str(item.get("snippet") or ""),
+                str(item.get("page_text") or ""),
+                str(item.get("pre_extracted_context") or ""),
+            ))
+            if _debut_release_item_supported(item_text, request_text):
+                return True
+        return False
+
     checks = {
         "temporal": r"(?<!\d)(?:1[0-9]{3}|20[0-9]{2})(?!\d)|\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}[./]\d{1,2}[./](?:19|20)\d{2}\b",
         "quantity": r"\b\d+(?:[.,]\d+)?\b",
