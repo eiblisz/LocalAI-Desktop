@@ -133,6 +133,12 @@ def is_factual_risk_request(text):
             r"(?:egy[uü]ttes|zenekar|band)\b",
             raw,
         )
+        or re.search(
+            r"(?i)\bwhen\s+did\s+[A-Za-z0-9.&'’_-]{2,}"
+            r"(?:\s+[A-Za-z0-9.&'’_-]{2,}){0,3}\s+release\s+"
+            r"(?:its|their|the)?\s*(?:first|debut)\s+(?:studio\s+)?album\b",
+            raw,
+        )
     )
     return bool(named_tokens or quoted_title or year_literal or typed_entity)
 
