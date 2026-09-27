@@ -55,3 +55,9 @@ def test_lowercase_typed_band_release_date_is_still_factual_risk():
 def test_debut_release_question_variants_are_factual_risk_independent_of_casing(prompt):
     assert is_factual_risk_request(prompt) is True
 
+
+
+def test_lowercase_inflected_band_first_album_selection_is_factual_risk():
+    assert is_factual_risk_request(
+        "melyik nagylemez volt az elso a sampleband zenekarnak?"
+    ) is True
