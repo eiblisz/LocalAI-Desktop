@@ -71,6 +71,8 @@ _MAX_REPAIR_SPAN_CHARS = 900
 _MAX_FLUENCY_FINDINGS = 8
 _MAX_FLUENCY_SPAN_CHARS = 280
 _MAX_FLUENCY_SPANS_PER_SENTENCE = 3
+_FLUENCY_AUDIT_SCHEMA_BUDGET = 128
+_FLUENCY_AUDIT_FALLBACK_BUDGET = 96
 _FLUENCY_REASON_CODES = frozenset({
     "malformed_morphology",
     "agreement_or_inflection",
@@ -336,6 +338,68 @@ def _fluency_audit_messages(segments):
     ]
 
 
+def _fluency_audit_fallback_messages(segments):
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are a Hungarian fluency classifier. Return ONLY one compact JSON "
+                "object with a judgments field and no explanation. judgments MUST contain "
+                "exactly one array per supplied segment in the same order. Use "
+                "[id, \"pass\"] for a clean segment. For a real fluency problem use "
+                "[id, reason, [\"exact span\"]], where reason is one of: "
+                "malformed_morphology, agreement_or_inflection, broken_phrase, "
+                "hybrid_or_pseudoword, duplicated_morphology, "
+                "semantic_language_corruption. Exact spans must be copied byte-for-byte "
+                "from that segment. Do not rewrite text. Do not flag proper names, URLs, "
+                "numbers, code, or ordinary English technical terms. Stop immediately "
+                "after the closing JSON brace."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "USER-VISIBLE RESPONSE SEGMENTS TO AUDIT:\n"
+                + json.dumps(
+                    [{"id": item["id"], "text": item["text"]} for item in segments],
+                    ensure_ascii=False,
+                )
+            ),
+        },
+    ]
+
+
+def _http_status_from_exception(exc):
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    try:
+        return int(status) if status is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _fluency_transport_cache(client):
+    cache = getattr(client, "_localai_fluency_audit_transport_cache", None)
+    if isinstance(cache, dict):
+        return cache
+    cache = {}
+    try:
+        setattr(client, "_localai_fluency_audit_transport_cache", cache)
+    except Exception:
+        return {}
+    return cache
+
+
+def _fluency_model_incompatibility(exc):
+    lowered = str(exc or "").casefold()
+    return (
+        isinstance(exc, FluencyAuditFailed)
+        or _http_status_from_exception(exc) == 400
+        or "output-token limit" in lowered
+        or "output token limit" in lowered
+    )
+
+
 def _chat_once_compat(client, call_kwargs):
     """Call shared clients while allowing existing lightweight extension clients."""
     while True:
@@ -589,29 +653,108 @@ def _run_hungarian_fluency_audit(
         trace.begin("hungarian_fluency_audit")
     if callable(phase_callback):
         phase_callback("Magyar folyékonyság ellenőrzése")
-    call_kwargs = {
-        "model": model,
-        "messages": _fluency_audit_messages(segments),
-        "num_predict": 512,
-        "call_phase": "hungarian_fluency_audit",
-        "response_format": _fluency_audit_response_schema(len(segments)),
-    }
-    if control is not None:
-        call_kwargs["control"] = control
-    try:
-        audit = _parse_fluency_audit(
-            _chat_once_compat(client, call_kwargs),
-            response_text,
-            segments,
-        )
-    except Exception as exc:
+
+    cache = _fluency_transport_cache(client)
+    model_key = str(model or "").strip().casefold()
+    preferred = cache.get(model_key, "schema")
+    if preferred == "disabled":
         if trace is not None:
             trace.end(
                 "hungarian_fluency_audit",
-                hungarian_fluency_audit_result="failed",
-                fluency_audit_failure_reason=_bounded_response_evidence(str(exc), limit=220),
+                hungarian_fluency_audit_result="deterministic_only",
+                fluency_audit_transport="deterministic_only",
+                fluency_audit_degraded_reason=(
+                    "model audit transport disabled after repeated bounded incompatibility"
+                ),
+                fluency_audit_evidence="[]",
+                fluency_audit_finding_count=0,
+                fluency_sentences_audited=0,
+                fluency_sentences_failed=0,
+                fluency_sentences_unresolved=0,
+                fluency_reason_codes="",
             )
-        raise
+        return FluencyAuditResult()
+
+    schema_kwargs = {
+        "model": model,
+        "messages": _fluency_audit_messages(segments),
+        "num_predict": _FLUENCY_AUDIT_SCHEMA_BUDGET,
+        "call_phase": "hungarian_fluency_audit",
+        "response_format": _fluency_audit_response_schema(len(segments)),
+    }
+    fallback_kwargs = {
+        "model": model,
+        "messages": _fluency_audit_fallback_messages(segments),
+        "num_predict": _FLUENCY_AUDIT_FALLBACK_BUDGET,
+        "call_phase": "hungarian_fluency_audit",
+    }
+    if control is not None:
+        schema_kwargs["control"] = control
+        fallback_kwargs["control"] = control
+
+    audit = None
+    audit_transport = preferred
+
+    if preferred == "schema":
+        try:
+            raw_audit = _chat_once_compat(client, dict(schema_kwargs))
+            audit = _parse_fluency_audit(raw_audit, response_text, segments)
+            cache[model_key] = "schema"
+            audit_transport = "schema"
+        except Exception as exc:
+            if not _fluency_model_incompatibility(exc):
+                if trace is not None:
+                    trace.end(
+                        "hungarian_fluency_audit",
+                        hungarian_fluency_audit_result="failed",
+                        fluency_audit_transport="schema",
+                        fluency_audit_failure_reason=_bounded_response_evidence(
+                            str(exc), limit=220
+                        ),
+                    )
+                raise
+            preferred = "plain_json_fallback"
+
+    if audit is None and preferred == "plain_json_fallback":
+        try:
+            raw_audit = _chat_once_compat(client, dict(fallback_kwargs))
+            audit = _parse_fluency_audit(raw_audit, response_text, segments)
+            cache[model_key] = "plain_json_fallback"
+            audit_transport = "plain_json_fallback"
+        except Exception as exc:
+            if not _fluency_model_incompatibility(exc):
+                if trace is not None:
+                    trace.end(
+                        "hungarian_fluency_audit",
+                        hungarian_fluency_audit_result="failed",
+                        fluency_audit_transport="plain_json_fallback",
+                        fluency_audit_failure_reason=_bounded_response_evidence(
+                            str(exc), limit=220
+                        ),
+                    )
+                raise
+
+            # Both bounded model-audit transports proved incompatible for this
+            # client/model session. The deterministic language/script checks
+            # remain active; stop paying repeated model-call latency for an
+            # optional editorial layer until the application restarts.
+            cache[model_key] = "disabled"
+            if trace is not None:
+                trace.end(
+                    "hungarian_fluency_audit",
+                    hungarian_fluency_audit_result="deterministic_only",
+                    fluency_audit_transport="deterministic_only",
+                    fluency_audit_degraded_reason=_bounded_response_evidence(
+                        str(exc), limit=220
+                    ),
+                    fluency_audit_evidence="[]",
+                    fluency_audit_finding_count=0,
+                    fluency_sentences_audited=0,
+                    fluency_sentences_failed=0,
+                    fluency_sentences_unresolved=0,
+                    fluency_reason_codes="",
+                )
+            return FluencyAuditResult()
 
     if trace is not None:
         trace.end(
@@ -621,6 +764,7 @@ def _run_hungarian_fluency_audit(
                 if audit.sentences_unresolved
                 else ("repair_required" if audit.findings else "pass")
             ),
+            fluency_audit_transport=audit_transport,
             fluency_audit_evidence=json.dumps(
                 [item["text"] for item in audit.findings], ensure_ascii=False,
             ),

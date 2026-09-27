@@ -232,6 +232,15 @@ def guard_grounded_answer(
 ):
     draft = _collapse_adjacent_proper_name_repetition(str(answer or "").strip())
     unsupported = unsupported_grounded_literals(draft, authority_text)
+    if trace is not None:
+        trace.add_metadata(
+            factual_guard_force_verify=bool(force_verify),
+            factual_guard_initial_unsupported_literals=", ".join(unsupported[:6]),
+            factual_guard_remaining_unsupported_literals="",
+            factual_guard_repair_status=(
+                "pending" if (unsupported or force_verify) else "not_needed"
+            ),
+        )
     if unsupported and not force_verify:
         canonicalized = _canonicalize_identity_subject_expansion(
             draft,
@@ -307,6 +316,10 @@ def guard_grounded_answer(
 
     repair = _collapse_adjacent_proper_name_repetition(repair)
     remaining = unsupported_grounded_literals(repair, authority_text)
+    if trace is not None:
+        trace.add_metadata(
+            factual_guard_remaining_unsupported_literals=", ".join(remaining[:6]),
+        )
     if remaining:
         sanitized = _strip_unsupported_source_attributions(repair, remaining)
         sanitized_remaining = unsupported_grounded_literals(
@@ -314,12 +327,27 @@ def guard_grounded_answer(
             authority_text,
         )
         if sanitized and not sanitized_remaining:
+            if trace is not None:
+                trace.add_metadata(
+                    factual_guard_repair_status="pass_after_source_cleanup",
+                    factual_guard_remaining_unsupported_literals="",
+                )
             return sanitized
         remaining = sanitized_remaining or remaining
 
     if remaining:
+        if trace is not None:
+            trace.add_metadata(
+                factual_guard_repair_status="unsupported_literals",
+                factual_guard_remaining_literals=", ".join(remaining[:6]),
+            )
         raise GroundedFactualGuardError(
             "Grounded answer still contains unsupported factual literals: "
             + ", ".join(remaining[:6])
+        )
+    if trace is not None:
+        trace.add_metadata(
+            factual_guard_repair_status="pass",
+            factual_guard_remaining_literals="",
         )
     return repair

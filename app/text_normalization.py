@@ -80,6 +80,7 @@ def canonical_contains(text, candidate):
 _SAFE_HUNGARIAN_SUFFIXES = tuple(sorted({
     "atok", "etek", "otok", "unk",
     "nak", "nek", "ban", "ben", "bol", "tol", "rol", "hoz", "hez",
+    "nal", "nel",
     "val", "vel", "kent", "kepp", "jat", "jet", "ja", "je",
     "at", "et", "ot", "on", "en", "ig", "ra", "re", "ba", "be",
     "t", "k",

@@ -238,9 +238,105 @@ def test_fluency_audit_accepts_schema_bound_status_and_findings_contract():
 
     assert result == draft.replace("működéskére", "működésre")
     assert isinstance(client.audit_format, dict)
-    status_schema = client.audit_format["properties"]["status"]
-    assert status_schema["minItems"] == 2
-    assert status_schema["maxItems"] == 2
+    assert client.audit_format["properties"]["status"]["minItems"] == 2
+
+
+def test_fluency_audit_falls_back_to_plain_json_after_schema_http_400():
+    prompt = "Válaszolj magyarul."
+    draft = "Ez egy jó mondat."
+
+    class Response:
+        status_code = 400
+        text = ""
+
+    class SchemaRejected(Exception):
+        def __init__(self):
+            super().__init__("400 Client Error: Bad Request")
+            self.response = Response()
+
+    class PlainJsonAuditClient:
+        supports_hungarian_fluency_audit = True
+
+        def __init__(self):
+            self.calls = []
+
+        def chat_once(self, model, messages, **kwargs):
+            if "Hungarian fluency classifier" not in messages[0]["content"]:
+                raise AssertionError("unexpected repair call")
+            self.calls.append(dict(kwargs))
+            if kwargs.get("response_format") is not None:
+                raise SchemaRejected()
+            segments = _audit_segments(messages)
+            return json.dumps({
+                "judgments": [[item["id"], "pass"] for item in segments],
+            })
+
+    client = PlainJsonAuditClient()
+    trace = RequestTrace("desktop")
+    result = guard_response(
+        client,
+        "eurollm:9b-q4",
+        prompt,
+        draft,
+        constraints=build_task_constraints(prompt),
+        trace=trace,
+    )
+
+    assert result == draft
+    assert len(client.calls) == 2
+    assert isinstance(client.calls[0]["response_format"], dict)
+    assert "response_format" not in client.calls[1]
+    assert client.calls[1]["num_predict"] == 96
+    assert trace.snapshot()["metadata"]["fluency_audit_transport"] == "plain_json_fallback"
+
+
+def test_fluency_audit_disables_repeated_incompatible_model_transport():
+    prompt = "Válaszolj magyarul."
+    draft = "Ez egy jó mondat."
+
+    class IncompatibleAuditClient:
+        supports_hungarian_fluency_audit = True
+
+        def __init__(self):
+            self.calls = 0
+
+        def chat_once(self, model, messages, **kwargs):
+            self.calls += 1
+            if kwargs.get("response_format") is not None:
+                raise RuntimeError(
+                    "Ollama stopped at the configured output-token limit; "
+                    "the incomplete response was rejected."
+                )
+            return "{not valid json"
+
+    client = IncompatibleAuditClient()
+    first_trace = RequestTrace("desktop")
+    assert guard_response(
+        client,
+        "gemma4:26b",
+        prompt,
+        draft,
+        constraints=build_task_constraints(prompt),
+        trace=first_trace,
+    ) == draft
+    assert client.calls == 2
+    first = first_trace.snapshot()["metadata"]
+    assert first["hungarian_fluency_audit_result"] == "deterministic_only"
+    assert first["fluency_audit_transport"] == "deterministic_only"
+
+    second_trace = RequestTrace("desktop")
+    assert guard_response(
+        client,
+        "gemma4:26b",
+        prompt,
+        draft,
+        constraints=build_task_constraints(prompt),
+        trace=second_trace,
+    ) == draft
+    assert client.calls == 2
+    second = second_trace.snapshot()["metadata"]
+    assert second["hungarian_fluency_audit_result"] == "deterministic_only"
+    assert second["fluency_audit_transport"] == "deterministic_only"
 
 
 def test_fluency_audit_reconciles_pass_status_with_reasoned_exact_finding():
@@ -403,8 +499,9 @@ def test_fluency_audit_contract_failure_degrades_without_discarding_clean_answer
 
     assert result == draft
     snapshot = trace.snapshot()
-    assert snapshot["metadata"]["hungarian_fluency_audit_result"] == "degraded"
-    assert "valid JSON" in snapshot["metadata"]["fluency_audit_failure_reason"]
+    assert snapshot["metadata"]["hungarian_fluency_audit_result"] == "deterministic_only"
+    assert snapshot["metadata"]["fluency_audit_transport"] == "deterministic_only"
+    assert "valid JSON" in snapshot["metadata"]["fluency_audit_degraded_reason"]
 
 
 @pytest.mark.parametrize("suspicious, replacement, reason", [
@@ -802,8 +899,12 @@ def test_sentence_audit_omission_degrades_without_discarding_complete_answer():
 
     assert result == draft
     snapshot = trace.snapshot()
-    assert snapshot["metadata"]["hungarian_fluency_audit_result"] == "degraded"
-    assert "must judge every response sentence" in snapshot["metadata"]["fluency_audit_failure_reason"]
+    assert snapshot["metadata"]["hungarian_fluency_audit_result"] == "deterministic_only"
+    assert snapshot["metadata"]["fluency_audit_transport"] == "deterministic_only"
+    assert (
+        "must judge every response sentence"
+        in snapshot["metadata"]["fluency_audit_degraded_reason"]
+    )
 
 
 def test_clean_long_hungarian_answer_passes_without_editorial_repair():

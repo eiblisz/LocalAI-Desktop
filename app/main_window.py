@@ -2277,12 +2277,48 @@ class MainWindow(QMainWindow):
             ("Ollama request sequence", metadata.get("ollama_request_sequence")),
             ("Ollama initial request", metadata.get("ollama_initial_request")),
             ("Ollama HTTP status", metadata.get("ollama_http_status")),
+            ("Ollama HTTP detail", metadata.get("ollama_http_detail")),
             ("Ollama call phase", metadata.get("ollama_call_phase")),
+            ("Ollama preparation detail", metadata.get("ollama_preparation_reason")),
+            ("Ollama failure detail", metadata.get("ollama_failure_detail")),
+            ("Final prompt token estimate", metadata.get("estimated_final_prompt_units")),
+            ("Requested output tokens", metadata.get("requested_output_units")),
+            ("Requested num_ctx", metadata.get("requested_num_ctx")),
+            ("Model max context", metadata.get("model_max_context")),
+            ("Context budget decision", metadata.get("context_budget_decision")),
+            ("Context safety margin", metadata.get("context_budget_safety_units")),
+            (
+                "Execution deadline grace",
+                metadata.get("execution_deadline_grace_seconds"),
+            ),
+            (
+                "Execution deadline budget",
+                metadata.get("execution_deadline_budget_seconds"),
+            ),
+            ("Model resident before", metadata.get("model_resident_before")),
+            ("Model warmup required", metadata.get("model_warmup_required")),
+            ("Model warmup reason", metadata.get("model_warmup_reason")),
+            ("Model warmup result", metadata.get("model_warmup_result")),
+            ("Model resident after", metadata.get("model_resident_after")),
+            (
+                "Warmup requested num_ctx",
+                metadata.get("model_warmup_requested_num_ctx"),
+            ),
+            (
+                "Post-warmup retry attempted",
+                metadata.get("post_warmup_retry_attempted"),
+            ),
+            (
+                "Post-warmup retry result",
+                metadata.get("post_warmup_retry_result"),
+            ),
             ("Language validation result", metadata.get("language_validation_result")),
             ("Language validation issues", metadata.get("language_validation_issues")),
             ("Language validation evidence", metadata.get("language_validation_evidence")),
             ("Hungarian fluency audit", metadata.get("hungarian_fluency_audit_result")),
+            ("Fluency audit transport", metadata.get("fluency_audit_transport")),
             ("Fluency audit evidence", metadata.get("fluency_audit_evidence")),
+            ("Fluency audit degraded", metadata.get("fluency_audit_degraded_reason")),
             ("Fluency audit failure", metadata.get("fluency_audit_failure_reason")),
             ("Fluency sentences audited", metadata.get("fluency_sentences_audited")),
             ("Fluency sentences failed", metadata.get("fluency_sentences_failed")),
@@ -2293,6 +2329,48 @@ class MainWindow(QMainWindow):
             ("Repair integrity result", metadata.get("repair_integrity_result")),
             ("Repair integrity issues", metadata.get("repair_integrity_issues")),
             ("Repair integrity evidence", metadata.get("repair_integrity_evidence")),
+            ("Factual guard force verify", metadata.get("factual_guard_force_verify")),
+            ("Factual guard repair", metadata.get("factual_guard_repair_status")),
+            (
+                "Factual guard initial unsupported",
+                metadata.get("factual_guard_initial_unsupported_literals"),
+            ),
+            (
+                "Factual guard remaining unsupported",
+                metadata.get("factual_guard_remaining_literals"),
+            ),
+            (
+                "Answer relation supported",
+                metadata.get("answer_relation_supported"),
+            ),
+            (
+                "Answer creator binding supported",
+                metadata.get("answer_creator_binding_supported"),
+            ),
+            (
+                "Repaired relation supported",
+                metadata.get("repaired_answer_relation_supported"),
+            ),
+            (
+                "Repaired creator binding supported",
+                metadata.get("repaired_answer_creator_binding_supported"),
+            ),
+            (
+                "Current-turn prompt anchors",
+                metadata.get("current_turn_prompt_anchors"),
+            ),
+            (
+                "Current-turn allowed anchors",
+                metadata.get("current_turn_allowed_anchors"),
+            ),
+            (
+                "Current-turn binding precheck",
+                metadata.get("current_turn_binding_precheck"),
+            ),
+            (
+                "Current-turn binding repair",
+                metadata.get("current_turn_binding_repair_result"),
+            ),
             (
                 "Profile",
                 diagnostic.get("request_kind")

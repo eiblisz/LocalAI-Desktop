@@ -32,6 +32,19 @@ def test_grounded_guard_detects_unsupported_year_and_name():
     assert "Other Person" in unsupported
 
 
+def test_grounded_guard_accepts_hungarian_case_suffix_on_supported_entity():
+    authority = (
+        "AUTHORIZED EVIDENCE: A Kisfaludy Társaság pályázatot hirdetett."
+    )
+
+    unsupported = unsupported_grounded_literals(
+        "A Kisfaludy Társaságnál meghirdetett pályázat fontos volt.",
+        authority,
+    )
+
+    assert unsupported == ()
+
+
 def test_grounded_guard_accepts_supported_factual_literals():
     authority = (
         "AUTHORIZED EVIDENCE: Example Author készítette 1912-ben. "
@@ -79,6 +92,45 @@ def test_grounded_guard_repairs_false_premise_once():
 
     assert result == "A Silver Story szerzője Correct Author, 1912."
     assert client.calls == 1
+
+
+def test_grounded_guard_records_remaining_unsupported_literals_on_failure():
+    class Trace:
+        def __init__(self):
+            self.metadata = {}
+
+        def begin(self, _name):
+            pass
+
+        def end(self, _name, **kwargs):
+            self.metadata.update(kwargs)
+
+        def add_metadata(self, **kwargs):
+            self.metadata.update(kwargs)
+
+    authority = "AUTHORIZED EVIDENCE: Correct Author, 1912."
+    client = RepairClient("Other Person 1956-ban írta.")
+    trace = Trace()
+
+    with pytest.raises(GroundedFactualGuardError):
+        guard_grounded_answer(
+            client,
+            "qwen-test",
+            "Mikor írták?",
+            "Wrong Author 1956-ban írta.",
+            authority,
+            trace=trace,
+            force_verify=True,
+        )
+
+    assert trace.metadata["factual_guard_force_verify"] is True
+    assert "Other Person" in trace.metadata[
+        "factual_guard_remaining_unsupported_literals"
+    ]
+    assert "1956" in trace.metadata[
+        "factual_guard_remaining_unsupported_literals"
+    ]
+    assert trace.metadata["factual_guard_repair_status"] == "unsupported_literals"
 
 
 def test_grounded_guard_fails_closed_after_bad_repair():

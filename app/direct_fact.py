@@ -20,6 +20,40 @@ def _fold(value):
     return canonical_match_text(_clean(value))
 
 
+def _hungarian_object_search_surface(value):
+    """Return a conservative search-only lemma for a Hungarian object surface.
+
+    This is used only after the grammar has already identified the object of
+    "mikor írta <subject> a/az <object>?". It never changes the user-visible
+    text or factual authority. The goal is to avoid sending an attached
+    accusative suffix into web search (for example "Toldit" -> "Toldi" or
+    "Silver Storyt" -> "Silver Story").
+    """
+    text = _clean(value)
+    if not text:
+        return text
+    parts = text.split()
+    token = parts[-1]
+    folded = _fold(token)
+
+    # Generic object nouns are not title candidates and are handled elsewhere.
+    # For title-like objects, prefer the smallest safe accusative removal.
+    replacement = token
+    if len(token) >= 4 and folded.endswith(("at", "et", "ot", "öt")):
+        stem = token[:-2]
+        # Only remove a linking vowel suffix when the resulting stem remains a
+        # plausible word surface. This covers forms such as "Hamletet".
+        if len(stem) >= 3:
+            replacement = stem
+    elif len(token) >= 3 and folded.endswith("t"):
+        replacement = token[:-1]
+
+    if replacement and replacement != token:
+        parts[-1] = replacement
+        return " ".join(parts)
+    return text
+
+
 def _marked_title(prompt):
     """Extract a title explicitly marked by quotes or title wording, if present."""
     raw = _clean(prompt)
@@ -56,7 +90,38 @@ def _marked_title(prompt):
                 candidate = article_parts[-1].strip()
             if 2 <= len(candidate) <= 120:
                 return candidate
+
+    # Natural Hungarian direct-fact questions often omit "című", for example
+    # "Mikor írta <person> a <Work>?"  Keep the alleged person out of search
+    # authority by extracting only the post-article object when it is visibly
+    # title-like.  We intentionally keep Hungarian inflection intact instead of
+    # guessing a lemma; search providers can normalize it, while the host avoids
+    # inventing entity spelling.
+    implicit = re.match(
+        r"^\s*mikor\s+[ií]rta\s+(.+?)\s+(?:a|az)\s+(.+?)\s*[?!.]*$",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    if implicit:
+        alleged_subject = _clean(implicit.group(1))
+        candidate = _clean(implicit.group(2)).rstrip("?!.").strip()
+        subject_tokens = re.findall(r"[^\W_]+", alleged_subject, flags=re.UNICODE)
+        generic_objects = {
+            "verset", "muvet", "konyvet", "regenyt", "dalt", "tortenetet",
+        }
+        if (
+            2 <= len(candidate) <= 120
+            and candidate[:1].isupper()
+            and any(token[:1].isupper() for token in subject_tokens)
+            and _fold(candidate) not in generic_objects
+        ):
+            return _hungarian_object_search_surface(candidate)
     return ""
+
+
+def direct_fact_title_surface(prompt):
+    """Return a structurally identified work/title surface from the request."""
+    return _marked_title(prompt)
 
 
 def requested_fact_relation(prompt):
@@ -113,8 +178,15 @@ def derive_premise_neutral_query(prompt, requested_fact="general"):
         return clean, "validated_original"
 
     relation = requested_fact_relation(clean)
+    hungarian_creation_query = bool(
+        re.search(r"\b(?:mikor|irta|irja|cimu|verset|muvet)\b", _fold(clean))
+    )
     temporal_suffixes = {
-        "creation": "composition writing date year",
+        "creation": (
+            "szerző keletkezés megírás éve"
+            if hungarian_creation_query
+            else "literary work author composition writing date year"
+        ),
         "formation": "formation founding date year",
         "birth": "birth date year",
         "event": "event date year",
@@ -140,8 +212,15 @@ def targeted_fact_refinement_query(prompt, requested_fact="general"):
     if not title or str(requested_fact or "") != "temporal":
         return ""
 
+    hungarian_creation_query = bool(
+        re.search(r"\b(?:mikor|irta|irja|cimu|verset|muvet)\b", _fold(clean))
+    )
     suffixes = {
-        "creation": "original composition year",
+        "creation": (
+            "szerző eredeti keletkezés éve"
+            if hungarian_creation_query
+            else "literary work author original composition year"
+        ),
         "formation": "formation year",
         "birth": "birth year",
         "event": "event date",
@@ -180,6 +259,91 @@ def _temporal_relation_supported(text, relation):
     return True if not expected else any(marker in folded for marker in expected)
 
 
+_DATE_RE = re.compile(
+    r"(?<!\d)(?:1[0-9]{3}|20[0-9]{2})(?!\d)"
+    r"|\b\d{4}-\d{2}-\d{2}\b"
+    r"|\b\d{1,2}[./]\d{1,2}[./](?:19|20)\d{2}\b"
+)
+
+_CREATION_DATE_MARKERS = (
+    "irta", "megirta", "keletkez", "keszult", "wrote", "written",
+    "authored", "composed", "created", "schrieb", "verfasste",
+)
+
+_PUBLICATION_DATE_MARKERS = (
+    "jelent meg", "megjelent", "kiadas", "kiadva", "publikal",
+    "adta ki", "adtak ki", "kiadta", "kiadtak", "kiadott",
+    "published", "publication", "edition", "released",
+    "erschien", "veroffentlicht", "ausgabe",
+)
+
+
+def _nearest_marker_distance(text, pivot_start, pivot_end, markers):
+    best = None
+    for marker in markers:
+        start = 0
+        while True:
+            index = text.find(marker, start)
+            if index < 0:
+                break
+            marker_end = index + len(marker)
+            if marker_end <= pivot_start:
+                distance = pivot_start - marker_end
+            elif index >= pivot_end:
+                distance = index - pivot_end
+            else:
+                distance = 0
+            if best is None or distance < best:
+                best = distance
+            start = index + 1
+    return best
+
+
+def _creation_date_supported(text):
+    """Require a date to bind to creation rather than publication.
+
+    Search snippets often place a publication year beside an authorship note.
+    Evaluate each punctuation-bounded clause independently first; this prevents
+    "published in 1847, written for the competition" from promoting 1847 to a
+    composition year while still accepting "wrote it in 1912".
+    """
+    raw = str(text or "")
+    clauses = [
+        _fold(clause)
+        for clause in re.split(r"[.!?;,]+", raw)
+        if clause.strip()
+    ]
+    for clause in clauses:
+        for match in _DATE_RE.finditer(clause):
+            creation_distance = _nearest_marker_distance(
+                clause,
+                match.start(),
+                match.end(),
+                _CREATION_DATE_MARKERS,
+            )
+            publication_distance = _nearest_marker_distance(
+                clause,
+                match.start(),
+                match.end(),
+                _PUBLICATION_DATE_MARKERS,
+            )
+            if creation_distance is None:
+                continue
+            if (
+                publication_distance is not None
+                and publication_distance < creation_distance
+            ):
+                continue
+            if creation_distance <= 80:
+                return True
+    return False
+
+
+def answer_contains_temporal_literal(text):
+    """Return whether user-visible text contains an explicit date/year literal."""
+    return bool(_DATE_RE.search(str(text or "")))
+
+
 def requested_fact_supported(payload, requested_fact="general", request_text=""):
     """Whether provider snippets/page text contain a usable fact-shaped signal."""
     text = _evidence_text(payload)
@@ -216,11 +380,94 @@ def requested_fact_supported(payload, requested_fact="general", request_text="")
             str(item.get("page_text") or ""),
             str(item.get("pre_extracted_context") or ""),
         ))
-        if re.search(pattern, item_text) and _temporal_relation_supported(
-            item_text,
-            relation,
-        ):
+        if not re.search(pattern, item_text):
+            continue
+        if relation == "creation":
+            if _creation_date_supported(item_text):
+                return True
+            continue
+        if _temporal_relation_supported(item_text, relation):
             return True
+    return False
+
+
+_NAME_TOKEN_RE = r"[A-ZÁÉÍÓÖŐÚÜŰ][A-Za-zÁÉÍÓÖŐÚÜŰáéíóöőúüű-]{1,}"
+_NAME_SPAN_RE = rf"{_NAME_TOKEN_RE}(?:\s+{_NAME_TOKEN_RE}){{1,2}}"
+
+
+def _hungarian_alleged_creator(prompt):
+    match = re.match(
+        r"^\s*mikor\s+[ií]rta\s+(.+?)\s+(?:a|az)\s+",
+        _clean(prompt),
+        flags=re.IGNORECASE,
+    )
+    return _clean(match.group(1)) if match else ""
+
+
+def _creator_surfaces_from_text(text):
+    raw = str(text or "")
+    candidates = []
+    patterns = (
+        rf"(?P<person>{_NAME_SPAN_RE})\s+(?i:[ií]rta|meg[ií]rta|wrote|authored|composed|created)\b",
+        rf"(?i:\b(?:written|authored|composed|created)\s+by\s+)(?P<person>{_NAME_SPAN_RE})\b",
+        rf"(?i:\b(?:szerz[őo]je|szerz[őo]|author)\s*(?::|is|was)?\s*)(?P<person>{_NAME_SPAN_RE})\b",
+    )
+    seen = set()
+    for pattern in patterns:
+        for match in re.finditer(pattern, raw):
+            person = _clean(match.group("person"))
+            folded = _fold(person)
+            if folded and folded not in seen:
+                seen.add(folded)
+                candidates.append(person)
+    return candidates
+
+
+def supported_creator_surfaces(payload):
+    candidates = []
+    seen = set()
+    for item in dict(payload or {}).get("results") or []:
+        item_text = "\n".join((
+            str(item.get("title") or ""),
+            str(item.get("snippet") or ""),
+            str(item.get("page_text") or ""),
+            str(item.get("pre_extracted_context") or ""),
+        ))
+        for person in _creator_surfaces_from_text(item_text):
+            folded = _fold(person)
+            if folded and folded not in seen:
+                seen.add(folded)
+                candidates.append(person)
+    return tuple(candidates)
+
+
+def creation_answer_conflicts_with_evidence(answer, request_text, payload):
+    """Detect affirmation of a false creator premise contradicted by evidence."""
+    alleged = _hungarian_alleged_creator(request_text)
+    if not alleged:
+        return False
+
+    # For a creator/date question, an unnegated answer that repeats the
+    # user's alleged creator in the creation relation is verification-worthy
+    # unless the evidence parser cleanly supports that creator and no competing
+    # creator surface. The premise itself is never authority; missing or mixed
+    # creator extraction therefore fails toward verification, not acceptance.
+    alleged_folded = _fold(alleged)
+    creators = supported_creator_surfaces(payload)
+    creator_folds = {_fold(person) for person in creators if _fold(person)}
+    alleged_uniquely_supported = bool(creator_folds) and (
+        creator_folds == {alleged_folded}
+    )
+    answer_text = str(answer or "")
+    for clause in re.split(r"[.!?;,]+", answer_text):
+        folded = _fold(clause)
+        if not folded or alleged_folded not in folded:
+            continue
+        if not any(marker in folded for marker in _CREATION_DATE_MARKERS):
+            continue
+        if re.search(r"\b(?:nem|not|nicht)\b", folded):
+            continue
+        return not alleged_uniquely_supported
     return False
 
 

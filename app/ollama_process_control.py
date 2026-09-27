@@ -115,7 +115,8 @@ $direct = Get-CimInstance Win32_Process | Where-Object {
 
 $connectionPids = @(
     Get-NetTCPConnection -RemotePort 11434 -State Established -ErrorAction SilentlyContinue |
-        Select-Object -ExpandProperty OwningProcess -Unique
+        Select-Object -ExpandProperty OwningProcess -Unique |
+        Where-Object { [int]$_ -ne [int]$PID }
 )
 $connected = foreach ($pidValue in $connectionPids) {
     Get-CimInstance Win32_Process -Filter "ProcessId=$pidValue" -ErrorAction SilentlyContinue |
@@ -123,7 +124,13 @@ $connected = foreach ($pidValue in $connectionPids) {
 }
 
 $targets = @($direct) + @($connected)
-$unique = @($targets | Where-Object { $_.ProcessId } | Sort-Object ProcessId -Unique)
+# The helper itself can own a short-lived local connection while querying the
+# socket table. It is a probe, never an external Ollama consumer.
+$unique = @(
+    $targets |
+        Where-Object { $_.ProcessId -and [int]$_.ProcessId -ne [int]$PID } |
+        Sort-Object ProcessId -Unique
+)
 $unique | ConvertTo-Json -Compress
 """
     excluded = {

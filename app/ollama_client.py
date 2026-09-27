@@ -1,10 +1,13 @@
 import json
 import os
 import threading
+import time
 import uuid
+from math import ceil
 from typing import Callable
 
 import requests
+import psutil
 
 from .config import OLLAMA_BASE_URL, OLLAMA_NUM_PREDICT, OLLAMA_THINKING_ENABLED
 from .ollama_process_control import (
@@ -24,8 +27,117 @@ from .ollama_resource_coordinator import (
 from .vram_release import loaded_ollama_models, unload_ollama_model
 
 
+# Ollama's default runner window is 4096 tokens.  We only request a larger
+# window when the final, already-assembled chat payload needs it.  The steps
+# avoid an unnecessarily large KV cache while still giving a loaded model one
+# predictable next size when grounded context would otherwise overflow.
+_DEFAULT_NUM_CTX = 4096
+_CONTEXT_SAFETY_FLOOR = 192
+_CONTEXT_SAFETY_MAX = 512
+_MESSAGE_TEMPLATE_OVERHEAD = 16
+_IMAGE_CONTEXT_ALLOWANCE = 256
+_MODEL_WARMUP_KEEP_ALIVE = "5m"
+_MODEL_WARMUP_POLL_ATTEMPTS = 4
+_MODEL_WARMUP_POLL_DELAY = 0.15
+
+
 class IncompleteGenerationError(RuntimeError):
     pass
+
+
+def _positive_int(value):
+    try:
+        result = int(value)
+    except (TypeError, ValueError):
+        return None
+    return result if result > 0 else None
+
+
+def _text_token_estimate(value):
+    """Stable, conservative local estimate; this is not a tokenizer contract."""
+    text = str(value or "")
+    return max(1, ceil(len(text) / 4)) if text else 0
+
+
+def _final_message_token_estimate(messages):
+    """Estimate the final API payload, including role/template overhead.
+
+    This intentionally runs at the Ollama boundary, after workers have added
+    evidence, grounded system instructions, and conversation messages.  Image
+    bytes are not text tokens, but a bounded per-image allowance preserves a
+    safety margin for multimodal templates without serializing image data.
+    """
+    total = 0
+    for message in list(messages or []):
+        if not isinstance(message, dict):
+            total += _text_token_estimate(message) + _MESSAGE_TEMPLATE_OVERHEAD
+            continue
+        content = message.get("content", "")
+        if isinstance(content, str):
+            total += _text_token_estimate(content)
+        elif content:
+            try:
+                total += _text_token_estimate(
+                    json.dumps(content, ensure_ascii=False, sort_keys=True)
+                )
+            except (TypeError, ValueError):
+                total += _text_token_estimate(content)
+        total += _MESSAGE_TEMPLATE_OVERHEAD
+        images = message.get("images") or []
+        if isinstance(images, (list, tuple)):
+            total += _IMAGE_CONTEXT_ALLOWANCE * len(images)
+    return total
+
+
+def _context_length_from_show_payload(payload):
+    """Extract a model-declared context maximum without model-name rules."""
+    if not isinstance(payload, dict):
+        return None
+    candidates = []
+    pending = [payload]
+    while pending:
+        current = pending.pop()
+        if not isinstance(current, dict):
+            continue
+        for key, value in current.items():
+            normalized = str(key or "").strip().lower().replace("-", "_")
+            if normalized.endswith("context_length") or normalized in {
+                "context_length",
+                "context_window",
+                "num_ctx",
+            }:
+                parsed = _positive_int(value)
+                if parsed:
+                    candidates.append(parsed)
+            elif isinstance(value, dict):
+                pending.append(value)
+    return max(candidates) if candidates else None
+
+
+def _ollama_http_error_detail(response, limit=500):
+    """Return only Ollama's bounded error message, never the request payload."""
+    if response is None:
+        return ""
+    detail = ""
+    try:
+        payload = response.json()
+        if isinstance(payload, dict):
+            for key in ("error", "detail", "message"):
+                value = payload.get(key)
+                if isinstance(value, str) and value.strip():
+                    detail = value.strip()
+                    break
+    except Exception:
+        detail = ""
+    if not detail:
+        try:
+            detail = str(getattr(response, "text", "") or "").strip()
+        except Exception:
+            detail = ""
+    detail = " ".join(detail.split())
+    if len(detail) > int(limit):
+        detail = detail[: int(limit) - 3].rstrip() + "..."
+    return detail
 
 
 def _tag_ollama_failure(
@@ -35,6 +147,7 @@ def _tag_ollama_failure(
     classification,
     request_sequence=None,
     call_phase=None,
+    preparation_reason=None,
 ):
     """Attach safe, machine-readable context without replacing the root error."""
     try:
@@ -45,10 +158,55 @@ def _tag_ollama_failure(
             exc.localai_ollama_initial_request = int(request_sequence) == 1
         if call_phase:
             exc.localai_ollama_call_phase = str(call_phase)
+        if preparation_reason:
+            detail = " ".join(str(preparation_reason).split())
+            exc.localai_ollama_preparation_reason = detail[:500]
+        generic_detail = " ".join(str(exc or "").split())
+        if generic_detail:
+            exc.localai_ollama_failure_detail = (
+                f"{type(exc).__name__}: {generic_detail}"[:500]
+            )
         response = getattr(exc, "response", None)
         status = getattr(response, "status_code", None)
         if status is not None:
             exc.localai_ollama_http_status = int(status)
+        http_detail = _ollama_http_error_detail(response)
+        if http_detail:
+            exc.localai_ollama_http_detail = http_detail
+    except Exception:
+        pass
+    return exc
+
+
+def _context_budget_metadata(
+    *,
+    estimated_prompt_tokens,
+    output_tokens,
+    requested_num_ctx,
+    model_max_context,
+    decision,
+    safety_tokens,
+):
+    metadata = {
+        # RequestTrace deliberately excludes metadata keys containing "token"
+        # so these use its established "units" naming while UI labels remain
+        # explicit about their token-estimate meaning.
+        "estimated_final_prompt_units": int(estimated_prompt_tokens),
+        "requested_output_units": int(output_tokens),
+        "requested_num_ctx": int(requested_num_ctx),
+        "context_budget_decision": str(decision or ""),
+        "context_budget_safety_units": int(safety_tokens),
+    }
+    if model_max_context:
+        metadata["model_max_context"] = int(model_max_context)
+    return metadata
+
+
+def _tag_context_budget(exc, metadata):
+    """Preserve the exact context decision on a later Ollama failure."""
+    try:
+        for key, value in dict(metadata or {}).items():
+            setattr(exc, f"localai_{key}", value)
     except Exception:
         pass
     return exc
@@ -91,7 +249,27 @@ def ollama_failure_metadata(exc):
         ("localai_ollama_request_sequence", "ollama_request_sequence"),
         ("localai_ollama_initial_request", "ollama_initial_request"),
         ("localai_ollama_http_status", "ollama_http_status"),
+        ("localai_ollama_http_detail", "ollama_http_detail"),
         ("localai_ollama_call_phase", "ollama_call_phase"),
+        ("localai_ollama_preparation_reason", "ollama_preparation_reason"),
+        ("localai_ollama_failure_detail", "ollama_failure_detail"),
+        ("localai_estimated_final_prompt_units", "estimated_final_prompt_units"),
+        ("localai_requested_output_units", "requested_output_units"),
+        ("localai_requested_num_ctx", "requested_num_ctx"),
+        ("localai_model_max_context", "model_max_context"),
+        ("localai_context_budget_decision", "context_budget_decision"),
+        ("localai_context_budget_safety_units", "context_budget_safety_units"),
+        ("localai_model_resident_before", "model_resident_before"),
+        ("localai_model_warmup_required", "model_warmup_required"),
+        ("localai_model_warmup_reason", "model_warmup_reason"),
+        ("localai_model_warmup_result", "model_warmup_result"),
+        ("localai_model_resident_after", "model_resident_after"),
+        (
+            "localai_model_warmup_requested_num_ctx",
+            "model_warmup_requested_num_ctx",
+        ),
+        ("localai_post_warmup_retry_attempted", "post_warmup_retry_attempted"),
+        ("localai_post_warmup_retry_result", "post_warmup_retry_result"),
     ):
         value = getattr(exc, attribute, None)
         if value is not None:
@@ -133,6 +311,14 @@ class OllamaClient:
         self.resource_store = resource_store or ResourceLeaseStore()
         self._request_sequence_lock = threading.Lock()
         self._request_sequence = 0
+        self._model_context_lock = threading.Lock()
+        # ``/api/show`` is static model metadata. Cache known limits for this
+        # client lifetime; a transient metadata failure remains retryable.
+        self._model_context_max_cache = {}
+        # Best-effort client-local record of context windows that were
+        # explicitly preflighted or completed successfully. Presence is still
+        # re-checked through /api/ps before trusting this cache.
+        self._prepared_runtime_context = {}
 
     def _next_request_sequence(self):
         with self._request_sequence_lock:
@@ -152,6 +338,213 @@ class OllamaClient:
         payload = response.json()
         return [item["name"] for item in payload.get("models", []) if item.get("name")]
 
+    def _model_max_context(self, model):
+        """Return the declared context maximum from cached Ollama metadata."""
+        key = str(model or "").strip().casefold()
+        if not key:
+            return None
+        with self._model_context_lock:
+            if key in self._model_context_max_cache:
+                return self._model_context_max_cache[key]
+        maximum = None
+        try:
+            response = requests.post(
+                f"{self.base_url}/api/show",
+                json={"model": str(model).strip()},
+                timeout=5.0,
+            )
+            response.raise_for_status()
+            maximum = _context_length_from_show_payload(response.json())
+        except (requests.RequestException, TypeError, ValueError, AttributeError):
+            maximum = None
+        if maximum is not None:
+            with self._model_context_lock:
+                self._model_context_max_cache[key] = maximum
+        return maximum
+
+    def _context_budget(self, model, messages, output_budget):
+        """Choose the smallest safe Ollama context for the final chat payload."""
+        prompt_tokens = _final_message_token_estimate(messages)
+        safety_tokens = max(
+            _CONTEXT_SAFETY_FLOOR,
+            min(
+                _CONTEXT_SAFETY_MAX,
+                ceil((prompt_tokens + int(output_budget)) * 0.07),
+            ),
+        )
+        required_tokens = prompt_tokens + int(output_budget) + safety_tokens
+        if required_tokens <= _DEFAULT_NUM_CTX:
+            # Do not send num_ctx when the request already fits the runner's
+            # ordinary 4096-token window. This preserves the resident model's
+            # existing context and avoids an unnecessary configuration change.
+            return (
+                _context_budget_metadata(
+                    estimated_prompt_tokens=prompt_tokens,
+                    output_tokens=output_budget,
+                    requested_num_ctx=_DEFAULT_NUM_CTX,
+                    model_max_context=None,
+                    decision="fits_default_context",
+                    safety_tokens=safety_tokens,
+                ),
+                False,
+            )
+
+        model_max_context = self._model_max_context(model)
+        if model_max_context is None:
+            # Without a declared bound, preserve the current safe default. A
+            # speculative larger KV cache could exceed an unknown model limit.
+            requested_num_ctx = _DEFAULT_NUM_CTX
+            decision = "model_max_context_unavailable_preserved_default"
+        else:
+            requested_num_ctx = _DEFAULT_NUM_CTX
+            while (
+                requested_num_ctx < required_tokens
+                and requested_num_ctx < model_max_context
+            ):
+                requested_num_ctx *= 2
+            requested_num_ctx = min(requested_num_ctx, model_max_context)
+            decision = (
+                "raised_to_next_context_step"
+                if requested_num_ctx >= required_tokens
+                else "model_max_context_insufficient"
+            )
+
+        return (
+            _context_budget_metadata(
+                estimated_prompt_tokens=prompt_tokens,
+                output_tokens=output_budget,
+                requested_num_ctx=requested_num_ctx,
+                model_max_context=model_max_context,
+                decision=decision,
+                safety_tokens=safety_tokens,
+            ),
+            requested_num_ctx != _DEFAULT_NUM_CTX,
+        )
+
+    @staticmethod
+    def _notify_context_budget(callback, metadata):
+        if callback is None:
+            return
+        try:
+            callback(dict(metadata or {}))
+        except Exception:
+            # Diagnostics must never block a local inference request.
+            pass
+
+    def _remember_prepared_context(self, model, num_ctx):
+        key = str(model or "").strip().casefold()
+        value = _positive_int(num_ctx)
+        if not key or not value:
+            return
+        with self._model_context_lock:
+            previous = _positive_int(self._prepared_runtime_context.get(key)) or 0
+            self._prepared_runtime_context[key] = max(previous, value)
+
+    def _known_prepared_context(self, model):
+        key = str(model or "").strip().casefold()
+        if not key:
+            return None
+        with self._model_context_lock:
+            return _positive_int(self._prepared_runtime_context.get(key))
+
+    def _ensure_model_ready(
+        self,
+        model,
+        *,
+        requested_num_ctx,
+        apply_num_ctx,
+        timeout,
+    ):
+        """Preflight a cold/context-changing runner before user generation.
+
+        Ollama normally loads models lazily on the first generation request.
+        On some model/template combinations that makes the user's first
+        /api/chat call double as the runner load/context-resize transition.
+        A load-only /api/generate request makes that transition explicit and
+        keeps the real user request on an already-ready runner.
+
+        This never sends keep_alive=0, never kills a process, and never calls
+        the host's unload path. Ollama remains responsible for its own normal
+        residency decisions.
+        """
+        target = str(model or "").strip()
+        metadata = {
+            "model_resident_before": False,
+            "model_warmup_required": False,
+            "model_warmup_reason": "",
+            "model_warmup_result": "not_needed",
+            "model_resident_after": False,
+            "model_warmup_requested_num_ctx": int(requested_num_ctx),
+            "post_warmup_retry_attempted": False,
+            "post_warmup_retry_result": "not_needed",
+        }
+        loaded_before = loaded_ollama_models(
+            self,
+            timeout=min(max(float(timeout), 1.0), 2.5),
+        )
+        resident_before = target in loaded_before
+        metadata["model_resident_before"] = bool(resident_before)
+
+        known_context = self._known_prepared_context(target)
+        context_preflight_needed = bool(
+            apply_num_ctx
+            and (
+                known_context is None
+                or int(known_context) < int(requested_num_ctx)
+            )
+        )
+        warmup_required = (not resident_before) or context_preflight_needed
+        metadata["model_warmup_required"] = bool(warmup_required)
+        if not warmup_required:
+            metadata["model_resident_after"] = True
+            return metadata
+
+        # Warmup itself is intentionally non-destructive: it never unloads,
+        # kills, or restarts Ollama. Unknown established HTTP sockets therefore
+        # must not block an ordinary model load. Ownership checks remain on the
+        # explicit unload/release paths below.
+        metadata["model_warmup_reason"] = (
+            "cold_model"
+            if not resident_before
+            else "context_preflight"
+        )
+        payload = {
+            "model": target,
+            "prompt": "",
+            "stream": False,
+            "keep_alive": _MODEL_WARMUP_KEEP_ALIVE,
+        }
+        if apply_num_ctx:
+            payload["options"] = {"num_ctx": int(requested_num_ctx)}
+
+        response = requests.post(
+            f"{self.base_url}/api/generate",
+            json=payload,
+            timeout=min(max(float(timeout), 10.0), 120.0),
+        )
+        response.raise_for_status()
+        self._remember_prepared_context(target, requested_num_ctx)
+
+        resident_after = False
+        for attempt in range(_MODEL_WARMUP_POLL_ATTEMPTS):
+            try:
+                resident_after = target in loaded_ollama_models(
+                    self,
+                    timeout=min(max(float(timeout), 1.0), 2.5),
+                )
+            except requests.RequestException:
+                resident_after = False
+            if resident_after:
+                break
+            if attempt + 1 < _MODEL_WARMUP_POLL_ATTEMPTS:
+                time.sleep(_MODEL_WARMUP_POLL_DELAY)
+
+        metadata["model_resident_after"] = bool(resident_after)
+        metadata["model_warmup_result"] = (
+            "ready" if resident_after else "submitted_unconfirmed"
+        )
+        return metadata
+
     @staticmethod
     def _busy_message(model, ownership):
         owner = str((ownership or {}).get("owner") or OWNER_UNKNOWN)
@@ -167,11 +560,31 @@ class OllamaClient:
         except Exception:
             return None
 
+    def _local_process_family_pids(self):
+        """Return this runtime PID plus its launcher/ancestor process IDs.
+
+        On Windows the Desktop is commonly launched from PowerShell and a venv
+        Python redirector may sit between the shell and the real interpreter.
+        Those launcher processes can retain idle HTTP keep-alive sockets to
+        Ollama from operator acceptance probes. They are part of the same local
+        operator session, not independent Ollama consumers.
+        """
+        pids = {os.getpid()}
+        try:
+            process = psutil.Process(os.getpid())
+            for parent in process.parents():
+                pid = getattr(parent, "pid", None)
+                if isinstance(pid, int) and pid > 0:
+                    pids.add(pid)
+        except Exception:
+            pass
+        return sorted(pids)
+
     def _external_consumers(self):
         try:
             return list_external_ollama_consumers(
                 timeout=3.0,
-                exclude_pids=[os.getpid()],
+                exclude_pids=self._local_process_family_pids(),
             )
         except Exception:
             return None
@@ -232,21 +645,25 @@ class OllamaClient:
             detail=detail,
         )
 
-    def prepare_model(self, model: str, timeout: float = 6.0) -> list[str]:
+    def prepare_model(
+        self,
+        model: str,
+        timeout: float = 6.0,
+        *,
+        allow_model_release: bool = True,
+    ) -> list[str]:
         """
         Gracefully unload only a provably self-owned idle stale model.
 
-        Unknown or foreign ownership is fail-closed. This method never kills a
+        A resident target and an empty resident set require no destructive
+        switch, so ordinary inference may continue without consulting external
+        consumer ownership. Unknown or foreign ownership is fail-closed only
+        before unloading a different resident model. This method never kills a
         runner or restarts the shared Ollama server.
         """
         target = str(model or "").strip()
         if not target:
             raise ValueError("A target Ollama model is required.")
-
-        # Check external consumers before trusting /api/ps. A manual
-        # "ollama run" session may be visible as a client even while its model
-        # is not momentarily reported as resident.
-        self._assert_external_switch_safe(target)
 
         try:
             loaded = loaded_ollama_models(
@@ -259,9 +676,26 @@ class OllamaClient:
                 "for shared-resource safety."
             ) from exc
 
+        # The selected model is already resident. Calling /api/chat uses that
+        # model directly and does not unload, switch, kill, or restart shared
+        # state. In particular, stale leases or an unrelated visible consumer
+        # must not turn this no-op into a preparation failure.
+        if target in loaded:
+            return []
+
         stale = [name for name in loaded if name and name != target]
         if not stale:
             return []
+
+        # Sending an ordinary Desktop/Discord request must never become an
+        # implicit model-unload operation. Ollama can load the requested target
+        # itself; explicit VRAM release retains the stricter ownership path.
+        if not allow_model_release:
+            return []
+
+        # Only a real resident-model replacement can be destructive. Check
+        # visible consumers immediately before any ownership-based unload.
+        self._assert_external_switch_safe(target)
 
         runners = self._runner_processes()
         if runners == []:
@@ -425,6 +859,7 @@ class OllamaClient:
         control=None,
         num_predict=None,
         call_phase=None,
+        context_budget_callback=None,
     ) -> str:
         call_phase = str(call_phase or "model_inference")
         request_sequence = self._next_request_sequence()
@@ -432,26 +867,63 @@ class OllamaClient:
             control.claim_model_call()
             timeout = control.request_timeout(timeout)
 
+        output_budget = (
+            OLLAMA_NUM_PREDICT
+            if num_predict is None
+            else max(1, int(num_predict))
+        )
+        context_budget, apply_num_ctx = self._context_budget(
+            model,
+            messages,
+            output_budget,
+        )
         if self.auto_prepare_model:
             try:
-                self.prepare_model(model)
+                self.prepare_model(model, allow_model_release=False)
             except Exception as exc:
+                self._notify_context_budget(
+                    context_budget_callback,
+                    context_budget,
+                )
+                _tag_context_budget(exc, context_budget)
                 raise _tag_ollama_failure(
                     exc,
                     stage="model_preparation",
                     classification="model_prepare_failed",
                     request_sequence=request_sequence,
                     call_phase=call_phase,
+                    preparation_reason=exc,
                 )
+            try:
+                readiness = self._ensure_model_ready(
+                    model,
+                    requested_num_ctx=context_budget["requested_num_ctx"],
+                    apply_num_ctx=apply_num_ctx,
+                    timeout=timeout,
+                )
+                context_budget.update(readiness)
+            except Exception as exc:
+                self._notify_context_budget(
+                    context_budget_callback,
+                    context_budget,
+                )
+                _tag_context_budget(exc, context_budget)
+                raise _tag_ollama_failure(
+                    exc,
+                    stage="model_preparation",
+                    classification="model_warmup_failed",
+                    request_sequence=request_sequence,
+                    call_phase=call_phase,
+                    preparation_reason=exc,
+                )
+        self._notify_context_budget(context_budget_callback, context_budget)
 
         request_id = uuid.uuid4().hex
         self._set_request_state(model, request_id, STATE_MODEL_LOADING)
-        output_budget = (
-            OLLAMA_NUM_PREDICT
-            if num_predict is None
-            else max(1, int(num_predict))
-        )
         structured_response = response_format is not None
+        options = {"num_predict": output_budget}
+        if apply_num_ctx:
+            options["num_ctx"] = context_budget["requested_num_ctx"]
         payload = {
             "model": model,
             "messages": messages,
@@ -462,13 +934,13 @@ class OllamaClient:
             # marker, the JSON contract below can safely accept that content;
             # the caller still performs its stricter semantic validation.
             "stream": bool(control is not None),
-            # Recent Ollama thinking-capable models, including the preferred
-            # Gemma model, otherwise spend tokens on hidden reasoning before
-            # they emit a visible answer.  The explicit request is harmless
-            # for ordinary models and can be opt-in overridden by the operator.
-            "think": OLLAMA_THINKING_ENABLED,
-            "options": {"num_predict": output_budget},
+            "options": options,
         }
+        # The think parameter is not accepted by every model template. Some
+        # ordinary models reject even an explicit false value with HTTP 400.
+        # Only send it when the operator deliberately enables thinking.
+        if OLLAMA_THINKING_ENABLED:
+            payload["think"] = True
         if response_format is not None:
             if not isinstance(response_format, (str, dict)):
                 raise TypeError("response_format must be a string, object, or None.")
@@ -483,8 +955,55 @@ class OllamaClient:
                     timeout=timeout,
                 )
                 response.raise_for_status()
-                item = response.json()
-                result = item.get("message", {}).get("content", "")
+                try:
+                    item = response.json()
+                    if not isinstance(item, dict):
+                        raise TypeError(
+                            "Ollama /api/chat returned a non-object JSON response."
+                        )
+                    message = item.get("message")
+                    if not isinstance(message, dict):
+                        raise TypeError(
+                            "Ollama /api/chat returned an invalid message object."
+                        )
+                    result = message.get("content", "")
+                except Exception:
+                    retry_allowed = bool(
+                        context_budget.get("model_warmup_required")
+                        and context_budget.get("model_warmup_result") == "ready"
+                    )
+                    if not retry_allowed:
+                        raise
+                    context_budget["post_warmup_retry_attempted"] = True
+                    context_budget["post_warmup_retry_result"] = "retrying"
+                    self._notify_context_budget(
+                        context_budget_callback,
+                        context_budget,
+                    )
+                    retry_response = requests.post(
+                        f"{self.base_url}/api/chat",
+                        json=payload,
+                        timeout=timeout,
+                    )
+                    retry_response.raise_for_status()
+                    item = retry_response.json()
+                    if not isinstance(item, dict):
+                        context_budget["post_warmup_retry_result"] = "failed"
+                        raise TypeError(
+                            "Ollama /api/chat retry returned a non-object JSON response."
+                        )
+                    message = item.get("message")
+                    if not isinstance(message, dict):
+                        context_budget["post_warmup_retry_result"] = "failed"
+                        raise TypeError(
+                            "Ollama /api/chat retry returned an invalid message object."
+                        )
+                    result = message.get("content", "")
+                    context_budget["post_warmup_retry_result"] = "success"
+                    self._notify_context_budget(
+                        context_budget_callback,
+                        context_budget,
+                    )
             else:
                 parts = []
                 item = {}
@@ -553,6 +1072,7 @@ class OllamaClient:
                     request_sequence=request_sequence,
                     call_phase=call_phase,
                 )
+            _tag_context_budget(exc, context_budget)
             self._set_request_state(
                 model,
                 request_id,
@@ -562,6 +1082,10 @@ class OllamaClient:
             )
             raise
         else:
+            self._remember_prepared_context(
+                model,
+                context_budget["requested_num_ctx"],
+            )
             self._set_request_state(
                 model,
                 request_id,
@@ -580,6 +1104,7 @@ class OllamaClient:
         control=None,
         num_predict=None,
         call_phase=None,
+        context_budget_callback=None,
     ) -> None:
         call_phase = str(call_phase or "model_inference")
         request_sequence = self._next_request_sequence()
@@ -587,32 +1112,70 @@ class OllamaClient:
             control.claim_model_call()
             timeout = control.request_timeout(timeout)
 
+        output_budget = (
+            OLLAMA_NUM_PREDICT
+            if num_predict is None
+            else max(1, int(num_predict))
+        )
+        context_budget, apply_num_ctx = self._context_budget(
+            model,
+            messages,
+            output_budget,
+        )
         if self.auto_prepare_model:
             try:
-                self.prepare_model(model)
+                self.prepare_model(model, allow_model_release=False)
             except Exception as exc:
+                self._notify_context_budget(
+                    context_budget_callback,
+                    context_budget,
+                )
+                _tag_context_budget(exc, context_budget)
                 raise _tag_ollama_failure(
                     exc,
                     stage="model_preparation",
                     classification="model_prepare_failed",
                     request_sequence=request_sequence,
                     call_phase=call_phase,
+                    preparation_reason=exc,
                 )
+            try:
+                readiness = self._ensure_model_ready(
+                    model,
+                    requested_num_ctx=context_budget["requested_num_ctx"],
+                    apply_num_ctx=apply_num_ctx,
+                    timeout=timeout,
+                )
+                context_budget.update(readiness)
+            except Exception as exc:
+                self._notify_context_budget(
+                    context_budget_callback,
+                    context_budget,
+                )
+                _tag_context_budget(exc, context_budget)
+                raise _tag_ollama_failure(
+                    exc,
+                    stage="model_preparation",
+                    classification="model_warmup_failed",
+                    request_sequence=request_sequence,
+                    call_phase=call_phase,
+                    preparation_reason=exc,
+                )
+        self._notify_context_budget(context_budget_callback, context_budget)
 
         request_id = uuid.uuid4().hex
         self._set_request_state(model, request_id, STATE_MODEL_LOADING)
-        output_budget = (
-            OLLAMA_NUM_PREDICT
-            if num_predict is None
-            else max(1, int(num_predict))
-        )
+        options = {"num_predict": output_budget}
+        if apply_num_ctx:
+            options["num_ctx"] = context_budget["requested_num_ctx"]
         payload = {
             "model": model,
             "messages": messages,
             "stream": True,
-            "think": OLLAMA_THINKING_ENABLED,
-            "options": {"num_predict": output_budget},
+            "options": options,
         }
+        if OLLAMA_THINKING_ENABLED:
+            payload["think"] = True
         final_item = {}
         done_reason = ""
         stopped = False
@@ -695,6 +1258,7 @@ class OllamaClient:
                     request_sequence=request_sequence,
                     call_phase=call_phase,
                 )
+            _tag_context_budget(exc, context_budget)
             self._set_request_state(
                 model,
                 request_id,
@@ -704,6 +1268,10 @@ class OllamaClient:
             )
             raise
         else:
+            self._remember_prepared_context(
+                model,
+                context_budget["requested_num_ctx"],
+            )
             self._set_request_state(
                 model,
                 request_id,
@@ -721,4 +1289,5 @@ class OllamaClient:
                 "prompt_eval_duration": final_item.get("prompt_eval_duration"),
                 "eval_duration": final_item.get("eval_duration"),
                 "total_duration": final_item.get("total_duration"),
+                "context_budget": context_budget,
             }

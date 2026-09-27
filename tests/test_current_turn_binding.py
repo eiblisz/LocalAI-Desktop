@@ -32,6 +32,38 @@ def test_grounded_answer_keeps_current_entity_binding():
     ) is True
 
 
+def test_false_premise_correction_can_bind_to_prompt_work_title_anchor():
+    client = RepairClient("unused")
+
+    result = guard_current_turn_binding(
+        client,
+        "qwen-test",
+        "Mikor írta Wrong Author a Silver Storyt?",
+        "A Silver Story 1912-ben keletkezett.",
+        "AUTHORIZED EVIDENCE: Silver Story 1912-ben keletkezett.",
+        allowed_entity_anchors=("Silver Story",),
+    )
+
+    assert result == "A Silver Story 1912-ben keletkezett."
+    assert client.calls == 0
+
+
+def test_false_premise_correction_can_bind_to_authorized_creator():
+    client = RepairClient("unused")
+
+    result = guard_current_turn_binding(
+        client,
+        "qwen-test",
+        "Mikor írta Wrong Author a Silver Storyt?",
+        "Correct Author írta 1912-ben.",
+        "AUTHORIZED EVIDENCE: Correct Author wrote Silver Story in 1912.",
+        allowed_entity_anchors=("Correct Author",),
+    )
+
+    assert result == "Correct Author írta 1912-ben."
+    assert client.calls == 0
+
+
 def test_adjacent_topic_without_current_entity_is_rejected_for_repair():
     client = RepairClient(
         "Arany János nem írta a János vitézt; a mű Petőfi Sándor alkotása."

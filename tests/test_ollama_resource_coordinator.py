@@ -1,4 +1,6 @@
 import os
+from datetime import datetime
+from types import SimpleNamespace
 from app.ollama_resource_coordinator import (
     OWNER_EINSTEIN,
     OWNER_LOCALAI_DESKTOP,
@@ -213,6 +215,42 @@ def test_dead_owner_is_reconciled_to_stale(tmp_path, monkeypatch):
 
     assert leases[0]["state"] == STATE_STALE
     assert "owner process no longer exists" in leases[0]["detail"]
+
+
+def test_reused_owner_pid_is_reconciled_to_stale_without_process_control(
+    tmp_path,
+    monkeypatch,
+):
+    store = ResourceLeaseStore(tmp_path / "leases-reused-pid.json")
+    lease_time = datetime(2026, 9, 26, 12, 0, 0)
+    process_time = datetime(2026, 9, 26, 12, 5, 0)
+
+    monkeypatch.setattr(
+        ResourceLeaseStore,
+        "_now",
+        staticmethod(lambda: lease_time.isoformat(timespec="seconds")),
+    )
+    store.upsert(
+        owner=OWNER_LOCALAI_DESKTOP,
+        owner_id="desktop:old-owner",
+        model="eurollm:9b-q4",
+        state=STATE_IDLE,
+        owner_pid=4242,
+        model_pid=303,
+    )
+    monkeypatch.setattr(
+        "app.ollama_resource_coordinator.psutil.pid_exists",
+        lambda pid: pid == 4242,
+    )
+    monkeypatch.setattr(
+        "app.ollama_resource_coordinator.psutil.Process",
+        lambda pid: SimpleNamespace(create_time=lambda: process_time.timestamp()),
+    )
+
+    leases = store.list_leases()
+
+    assert leases[0]["state"] == STATE_STALE
+    assert "PID was reused" in leases[0]["detail"]
 
 
 

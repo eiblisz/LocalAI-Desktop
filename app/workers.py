@@ -29,12 +29,19 @@ from .evidence_verifier import (
 from .followup_resolution import resolve_contextual_followup
 from .current_turn_binding import guard_current_turn_binding
 from .direct_fact import (
+    answer_contains_temporal_literal,
+    creation_answer_conflicts_with_evidence,
     derive_premise_neutral_query,
     deterministic_hungarian_fact_fallback,
+    direct_fact_title_surface,
     requested_fact_supported,
+    supported_creator_surfaces,
     targeted_fact_refinement_query,
 )
-from .grounded_factual_guard import guard_grounded_answer
+from .grounded_factual_guard import (
+    GroundedFactualGuardError,
+    guard_grounded_answer,
+)
 from .generation_policy import (
     SYNTHESIS_HYBRID,
     SYNTHESIS_LOCAL,
@@ -421,6 +428,7 @@ class ChatWebWorker(QObject):
         self.execution_control = ExecutionControl.for_request_profile(
             self.request_profile
         )
+        self._cold_start_deadline_grace_applied = False
         self.compact_market_quote = bool(compact_market_quote)
         self.trace = trace
         if self.trace is not None:
@@ -499,7 +507,12 @@ class ChatWebWorker(QObject):
             except TypeError as exc:
                 unsupported = next(
                     (
-                        name for name in ("num_predict", "call_phase")
+                        name
+                        for name in (
+                            "num_predict",
+                            "call_phase",
+                            "context_budget_callback",
+                        )
                         if name in str(exc) and name in kwargs
                     ),
                     "",
@@ -521,7 +534,12 @@ class ChatWebWorker(QObject):
             except TypeError as exc:
                 unsupported = next(
                     (
-                        name for name in ("num_predict", "call_phase")
+                        name
+                        for name in (
+                            "num_predict",
+                            "call_phase",
+                            "context_budget_callback",
+                        )
                         if name in str(exc) and name in kwargs
                     ),
                     "",
@@ -529,6 +547,27 @@ class ChatWebWorker(QObject):
                 if not unsupported:
                     raise
                 kwargs.pop(unsupported)
+
+    def _record_context_budget(self, metadata):
+        values = dict(metadata or {})
+        if (
+            not self._cold_start_deadline_grace_applied
+            and self.request_profile.kind == TASK_DIRECT_FACT
+            and values.get("model_warmup_required") is True
+            and values.get("model_warmup_reason") == "cold_model"
+            and values.get("model_warmup_result") == "ready"
+        ):
+            grace = self.execution_control.budget.add_deadline_grace(
+                45.0,
+                max_total_grace=45.0,
+            )
+            self._cold_start_deadline_grace_applied = True
+            values["execution_deadline_grace_seconds"] = grace
+            values["execution_deadline_budget_seconds"] = (
+                float(self.execution_control.budget.timeout_seconds) + grace
+            )
+        if self.trace is not None:
+            self.trace.add_metadata(**values)
 
     def _search_payload(self, query, *, max_results, fetch_pages):
         self.execution_control.claim_search()
@@ -1784,6 +1823,11 @@ class ChatWebWorker(QObject):
                 and not self._wants_detailed_web_answer()
                 and not has_authoritative_current_fact
                 and not self.compact_market_quote
+                and evidence_sufficiency in {
+                    "snippet_supported",
+                    "page_supported",
+                    "targeted_search_supported",
+                }
             )
             factual_authority_text = (
                 compact_evidence_bundle(
@@ -1813,9 +1857,18 @@ class ChatWebWorker(QObject):
                 ),
             }
 
+            if base_history:
+                grounded_system = {
+                    "role": "system",
+                    "content": (
+                        str(base_history[0].get("content") or "").rstrip()
+                        + "\n\n"
+                        + str(grounded_system.get("content") or "").lstrip()
+                    ),
+                }
+
             stream_messages = (
-                base_history
-                + [grounded_system]
+                [grounded_system]
                 + conversation_history
                 + [grounded_user]
             )
@@ -1862,6 +1915,7 @@ class ChatWebWorker(QObject):
                 answer = self._chat_once(
                     model=self.model,
                     num_predict=self.output_budget,
+                    context_budget_callback=self._record_context_budget,
                     messages=[
                         {
                             "role": "system",
@@ -1897,6 +1951,7 @@ class ChatWebWorker(QObject):
                     on_token=answer_parts.append,
                     should_stop=self._stop_event.is_set,
                     num_predict=self.output_budget,
+                    context_budget_callback=self._record_context_budget,
                 )
                 answer = "".join(answer_parts).strip()
 
@@ -1936,6 +1991,40 @@ class ChatWebWorker(QObject):
             )
             answer = self._compact_grounded_answer(answer)
             answer = self._compact_market_quote_answer(answer)
+            combined_fact_payload = {
+                "results": [
+                    item
+                    for factual_payload in factual_payloads
+                    for item in (factual_payload.get("results") or [])
+                ],
+            }
+            relation_mismatch_requires_verify = False
+            creator_mismatch_requires_verify = False
+            if (
+                is_factual_risk_request(self.user_prompt)
+                and self.request_profile.requested_fact == "temporal"
+            ):
+                relation_mismatch_requires_verify = not requested_fact_supported(
+                    {"results": [{"snippet": answer}]},
+                    self.request_profile.requested_fact,
+                    self.user_prompt,
+                )
+                creator_mismatch_requires_verify = (
+                    creation_answer_conflicts_with_evidence(
+                        answer,
+                        self.user_prompt,
+                        combined_fact_payload,
+                    )
+                )
+                if self.trace is not None:
+                    self.trace.add_metadata(
+                        answer_relation_supported=(
+                            not relation_mismatch_requires_verify
+                        ),
+                        answer_creator_binding_supported=(
+                            not creator_mismatch_requires_verify
+                        ),
+                    )
             if self.trace is not None:
                 self.trace.begin("factual_validation")
             answer = guard_grounded_answer(
@@ -1948,7 +2037,11 @@ class ChatWebWorker(QObject):
                 force_verify=(
                     is_factual_risk_request(self.user_prompt)
                     and not has_authoritative_current_fact
-                    and not single_pass_factual
+                    and (
+                        not single_pass_factual
+                        or relation_mismatch_requires_verify
+                        or creator_mismatch_requires_verify
+                    )
                 ),
                 language_instruction=self._conversation_language_instruction(),
                 output_budget=self.output_budget,
@@ -1957,10 +2050,54 @@ class ChatWebWorker(QObject):
                 self.trace.end("factual_validation")
             if (
                 is_factual_risk_request(self.user_prompt)
+                and self.request_profile.requested_fact == "temporal"
+                and not has_authoritative_current_fact
+            ):
+                repaired_relation_supported = requested_fact_supported(
+                    {"results": [{"snippet": answer}]},
+                    self.request_profile.requested_fact,
+                    self.user_prompt,
+                )
+                repaired_creator_supported = not creation_answer_conflicts_with_evidence(
+                    answer,
+                    self.user_prompt,
+                    combined_fact_payload,
+                )
+                if self.trace is not None:
+                    self.trace.add_metadata(
+                        repaired_answer_relation_supported=repaired_relation_supported,
+                        repaired_answer_creator_binding_supported=repaired_creator_supported,
+                    )
+                if (
+                    answer_contains_temporal_literal(answer)
+                    and (
+                        not repaired_relation_supported
+                        or not repaired_creator_supported
+                    )
+                ):
+                    raise GroundedFactualGuardError(
+                        "Grounded factual repair did not preserve the requested "
+                        "creator/date relation."
+                    )
+            if (
+                is_factual_risk_request(self.user_prompt)
                 and not has_authoritative_current_fact
             ):
                 if self.trace is not None:
                     self.trace.begin("context_validation")
+                allowed_correction_anchors = []
+                if self.request_profile.requested_fact == "temporal":
+                    allowed_correction_anchors.extend(
+                        supported_creator_surfaces(combined_fact_payload)
+                    )
+                    work_title_anchor = direct_fact_title_surface(
+                        self.user_prompt
+                    )
+                    if work_title_anchor:
+                        allowed_correction_anchors.append(work_title_anchor)
+                allowed_correction_anchors = tuple(
+                    dict.fromkeys(allowed_correction_anchors)
+                )
                 answer = guard_current_turn_binding(
                     self.client,
                     self.model,
@@ -1969,6 +2106,7 @@ class ChatWebWorker(QObject):
                     factual_authority_text,
                     trace=self.trace,
                     language_instruction=self._conversation_language_instruction(),
+                    allowed_entity_anchors=allowed_correction_anchors,
                 )
                 if self.trace is not None:
                     self.trace.end("context_validation")
