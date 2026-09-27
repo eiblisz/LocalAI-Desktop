@@ -288,6 +288,20 @@ def test_direct_fact_web_policy_uses_factual_strict_sampling():
     assert 256 <= policy.output_budget <= 384
 
 
+def test_first_album_selection_web_policy_uses_factual_strict_sampling():
+    prompt = "Melyik nagylemez volt az első a sampleband zenekarnak?"
+    policy = build_generation_policy(
+        prompt,
+        profile=classify_request(prompt),
+        use_web=True,
+    )
+
+    assert policy.sampling_profile == SAMPLING_FACTUAL_STRICT
+    assert policy.temperature == 0.0
+    assert policy.seed == 42
+    assert 256 <= policy.output_budget <= 384
+
+
 def test_non_factual_web_policy_keeps_default_sampling():
     prompt = "Mutasd be röviden a sampleband történetét."
     policy = build_generation_policy(
