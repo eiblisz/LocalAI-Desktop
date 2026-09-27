@@ -447,13 +447,17 @@ def creation_answer_conflicts_with_evidence(answer, request_text, payload):
     if not alleged:
         return False
 
-    # For a creator/date question, any unnegated answer that repeats the
-    # user's alleged creator in the creation relation must be verified against
-    # evidence. The premise itself is never authority. This is deliberately
-    # independent of creator extraction quality: noisy snippets may fail to
-    # yield a clean alternative name, but that must not let an unverified
-    # premise slip through as a PASS.
+    # For a creator/date question, an unnegated answer that repeats the
+    # user's alleged creator in the creation relation is verification-worthy
+    # unless the evidence parser cleanly supports that creator and no competing
+    # creator surface. The premise itself is never authority; missing or mixed
+    # creator extraction therefore fails toward verification, not acceptance.
     alleged_folded = _fold(alleged)
+    creators = supported_creator_surfaces(payload)
+    creator_folds = {_fold(person) for person in creators if _fold(person)}
+    alleged_uniquely_supported = bool(creator_folds) and (
+        creator_folds == {alleged_folded}
+    )
     answer_text = str(answer or "")
     for clause in re.split(r"[.!?;,]+", answer_text):
         folded = _fold(clause)
@@ -463,7 +467,7 @@ def creation_answer_conflicts_with_evidence(answer, request_text, payload):
             continue
         if re.search(r"\b(?:nem|not|nicht)\b", folded):
             continue
-        return True
+        return not alleged_uniquely_supported
     return False
 
 
