@@ -287,6 +287,24 @@ def test_debut_release_rejects_unrelated_year_even_when_result_mentions_band():
     ) is False
 
 
+def test_debut_release_accepts_short_paraphrase_between_first_and_album():
+    prompt = "Mikor adta ki az első nagylemezét a sampleband együttes?"
+    repaired_answer = {
+        "results": [{
+            "snippet": (
+                "A sampleband első, saját nevét viselő albuma "
+                "1984-ben jelent meg."
+            ),
+        }],
+    }
+
+    assert requested_fact_supported(
+        repaired_answer,
+        "temporal",
+        prompt,
+    ) is True
+
+
 
 @pytest.mark.parametrize(
     ("prompt", "expected_subject"),
