@@ -845,7 +845,19 @@ def anchor_resolved_direct_fact_answer(
     if len(sentences) <= 1:
         return core
 
-    supporting = " ".join(sentences[1:]).strip()
+    supporting_sentences = []
+    for sentence in sentences[1:]:
+        # Do not preserve a second model sentence that merely restates the same
+        # resolved debut/release relation. Keep genuinely additional context.
+        if (
+            str(fact.get("relation") or "") == "release"
+            and _is_debut_release_request(sentence)
+            and requested_fact_relation(sentence) == "release"
+        ):
+            continue
+        supporting_sentences.append(sentence)
+
+    supporting = " ".join(supporting_sentences).strip()
     return (core + (" " + supporting if supporting else "")).strip()
 
 
