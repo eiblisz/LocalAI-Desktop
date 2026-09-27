@@ -1,6 +1,7 @@
 from app.direct_fact import (
     creation_answer_conflicts_with_evidence,
     derive_premise_neutral_query,
+    supported_creator_surfaces,
     deterministic_hungarian_fact_fallback,
     targeted_fact_refinement_query,
     requested_fact_supported,
@@ -143,6 +144,16 @@ def test_creation_request_accepts_creation_year_when_publication_year_is_also_pr
         "temporal",
         prompt,
     ) is True
+
+
+def test_supported_creator_surface_does_not_absorb_following_lowercase_words():
+    evidence = {
+        "results": [{
+            "snippet": "Silver Story was written by Correct Author in 1912.",
+        }],
+    }
+
+    assert supported_creator_surfaces(evidence) == ("Correct Author",)
 
 
 def test_creation_answer_rejects_affirmed_false_creator_premise():
