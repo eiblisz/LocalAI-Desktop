@@ -119,6 +119,11 @@ def _marked_title(prompt):
     return ""
 
 
+def direct_fact_title_surface(prompt):
+    """Return a structurally identified work/title surface from the request."""
+    return _marked_title(prompt)
+
+
 def requested_fact_relation(prompt):
     """Classify the relation behind a requested fact without extracting entities."""
     semantic_relation = analyze_question(prompt).relation
@@ -442,22 +447,13 @@ def creation_answer_conflicts_with_evidence(answer, request_text, payload):
     if not alleged:
         return False
 
-    creators = supported_creator_surfaces(payload)
-    if not creators:
-        return False
-
+    # For a creator/date question, any unnegated answer that repeats the
+    # user's alleged creator in the creation relation must be verified against
+    # evidence. The premise itself is never authority. This is deliberately
+    # independent of creator extraction quality: noisy snippets may fail to
+    # yield a clean alternative name, but that must not let an unverified
+    # premise slip through as a PASS.
     alleged_folded = _fold(alleged)
-    alternative_creators = tuple(
-        person for person in creators
-        if _fold(person) != alleged_folded
-    )
-    # Search snippets can echo the user's false premise as well as the
-    # evidence-supported creator. Seeing the alleged name somewhere in noisy
-    # evidence must therefore not validate it when a different creator surface
-    # is also present. Ambiguous/mixed creator evidence is verification-worthy.
-    if not alternative_creators:
-        return False
-
     answer_text = str(answer or "")
     for clause in re.split(r"[.!?;,]+", answer_text):
         folded = _fold(clause)
