@@ -482,16 +482,28 @@ def test_prepare_model_blocks_when_external_consumer_is_visible(
 
 
 def test_auto_prepare_model_is_opt_in_for_chat_once(monkeypatch):
-    captured = {"prepared": []}
+    captured = {"prepared": [], "readiness": []}
 
     def fake_prepare(self, model, timeout=6.0, *, allow_model_release=True):
         captured["prepared"].append((model, allow_model_release))
         return []
 
+    def fake_ready(self, model, **kwargs):
+        captured["readiness"].append((model, kwargs))
+        return {
+            "model_resident_before": True,
+            "model_warmup_required": False,
+            "model_warmup_reason": "",
+            "model_warmup_result": "not_needed",
+            "model_resident_after": True,
+            "model_warmup_requested_num_ctx": kwargs["requested_num_ctx"],
+        }
+
     def fake_post(_url, **_kwargs):
         return _Response()
 
     monkeypatch.setattr(OllamaClient, "prepare_model", fake_prepare)
+    monkeypatch.setattr(OllamaClient, "_ensure_model_ready", fake_ready)
     monkeypatch.setattr("app.ollama_client.requests.post", fake_post)
 
     OllamaClient(auto_prepare_model=False).chat_once(
@@ -499,12 +511,14 @@ def test_auto_prepare_model_is_opt_in_for_chat_once(monkeypatch):
         messages=[{"role": "user", "content": "test"}],
     )
     assert captured["prepared"] == []
+    assert captured["readiness"] == []
 
     OllamaClient(auto_prepare_model=True).chat_once(
         model="qwen-test",
         messages=[{"role": "user", "content": "test"}],
     )
     assert captured["prepared"] == [("qwen-test", False)]
+    assert captured["readiness"][0][0] == "qwen-test"
 
 
 
@@ -693,6 +707,121 @@ def test_automatic_prepare_never_unloads_a_different_resident_model(
     assert captured["url"].endswith("/api/chat")
     assert captured["json"]["model"] == target
 
+
+
+def test_cold_model_is_warmed_before_user_chat(monkeypatch):
+    target = "eurollm:9b-q4"
+    loaded_states = iter([
+        ["gemma4:26b"],  # prepare_model
+        ["gemma4:26b"],  # readiness preflight
+        [target],         # post-warmup readiness poll
+    ])
+    posts = []
+    decisions = []
+
+    monkeypatch.setattr(
+        "app.ollama_client.loaded_ollama_models",
+        lambda _client, timeout: next(loaded_states),
+    )
+
+    def fake_post(url, **kwargs):
+        posts.append((url, kwargs.get("json")))
+        return _Response()
+
+    monkeypatch.setattr("app.ollama_client.requests.post", fake_post)
+
+    result = OllamaClient(auto_prepare_model=True).chat_once(
+        model=target,
+        messages=[{"role": "user", "content": "Rövid kérdés."}],
+        context_budget_callback=decisions.append,
+    )
+
+    assert result == "ok"
+    assert posts[0][0].endswith("/api/generate")
+    assert posts[0][1] == {
+        "model": target,
+        "prompt": "",
+        "stream": False,
+        "keep_alive": "5m",
+    }
+    assert posts[1][0].endswith("/api/chat")
+    assert decisions[-1]["model_resident_before"] is False
+    assert decisions[-1]["model_warmup_required"] is True
+    assert decisions[-1]["model_warmup_reason"] == "cold_model"
+    assert decisions[-1]["model_warmup_result"] == "ready"
+    assert decisions[-1]["model_resident_after"] is True
+
+
+def test_large_resident_model_preflights_requested_context(monkeypatch):
+    target = "eurollm:9b-q4"
+    posts = []
+    decisions = []
+
+    monkeypatch.setattr(
+        "app.ollama_client.loaded_ollama_models",
+        lambda _client, timeout: [target],
+    )
+
+    def fake_post(url, **kwargs):
+        if url.endswith("/api/show"):
+            return _ShowResponse(32768)
+        posts.append((url, kwargs.get("json")))
+        return _Response()
+
+    monkeypatch.setattr("app.ollama_client.requests.post", fake_post)
+
+    result = OllamaClient(auto_prepare_model=True).chat_once(
+        model=target,
+        messages=[{"role": "user", "content": "evidence " * 1800}],
+        num_predict=1024,
+        context_budget_callback=decisions.append,
+    )
+
+    assert result == "ok"
+    assert posts[0][0].endswith("/api/generate")
+    assert posts[0][1]["options"]["num_ctx"] == 8192
+    assert posts[1][0].endswith("/api/chat")
+    assert posts[1][1]["options"]["num_ctx"] == 8192
+    assert decisions[-1]["model_resident_before"] is True
+    assert decisions[-1]["model_warmup_reason"] == "context_preflight"
+    assert decisions[-1]["model_warmup_result"] == "ready"
+
+
+def test_cold_model_warmup_http_failure_is_classified_separately(monkeypatch):
+    class BadWarmupResponse:
+        status_code = 400
+        text = ""
+
+        def json(self):
+            return {}
+
+        def raise_for_status(self):
+            error = requests.HTTPError("Bad Request")
+            error.response = self
+            raise error
+
+    monkeypatch.setattr(
+        "app.ollama_client.loaded_ollama_models",
+        lambda _client, timeout: [],
+    )
+
+    def fake_post(url, **kwargs):
+        if url.endswith("/api/generate"):
+            return BadWarmupResponse()
+        raise AssertionError("user /api/chat must not run after failed warmup")
+
+    monkeypatch.setattr("app.ollama_client.requests.post", fake_post)
+
+    with pytest.raises(requests.HTTPError) as exc:
+        OllamaClient(auto_prepare_model=True).chat_once(
+            model="eurollm:9b-q4",
+            messages=[{"role": "user", "content": "test"}],
+        )
+
+    metadata = ollama_failure_metadata(exc.value)
+    assert metadata["ollama_failure_stage"] == "model_preparation"
+    assert metadata["ollama_failure_classification"] == "model_warmup_failed"
+    assert metadata["ollama_http_status"] == 400
 
 
 def test_controlled_chat_once_uses_streaming_and_honors_budget(monkeypatch):
