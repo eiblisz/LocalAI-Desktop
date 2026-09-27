@@ -762,9 +762,96 @@ def creation_answer_conflicts_with_evidence(answer, request_text, payload):
     return False
 
 
+def _deescape_evidence_surface(value):
+    """Remove common Markdown escaping from a short evidence display surface."""
+    return re.sub(
+        r"\\([\\`*_{}\[\]()#+\-.!|>])",
+        r"\1",
+        str(value or ""),
+    )
+
+
+def _split_answer_sentences(text):
+    """Split normal prose without breaking dotted acronyms such as W.A.S.P."""
+    value = _clean(text)
+    if not value:
+        return ()
+    parts = re.split(
+        r"(?<=[.!?])\s+(?=[A-ZÁÉÍÓÖŐÚÜŰ0-9\"“„«])",
+        value,
+    )
+    return tuple(part.strip() for part in parts if part.strip())
+
+
+def render_resolved_direct_fact(fact, requested_fact="general", *, language="hu"):
+    """Render the host-resolved core fact without invoking a model."""
+    fact = dict(fact or {})
+    subject = _deescape_evidence_surface(fact.get("subject")).strip()
+    title = _deescape_evidence_surface(fact.get("title")).strip()
+    year = str(fact.get("year") or "").strip()
+    requested_fact = str(requested_fact or "general")
+    if not subject or not title:
+        return ""
+
+    if requested_fact == "selection":
+        if language == "de":
+            answer = f"Das erste Album von {subject} war {title}."
+            if year:
+                answer += f" Es erschien {year}."
+            return answer
+        if language == "en":
+            answer = f"The first album by {subject} was {title}."
+            if year:
+                answer += f" It was released in {year}."
+            return answer
+        answer = f"A {subject} első nagylemeze a {title} című album volt."
+        if year:
+            answer += f" Az album {year}-ben jelent meg."
+        return answer
+
+    if requested_fact == "temporal" and year:
+        if language == "de":
+            return f"Das Debütalbum von {subject} erschien {year}."
+        if language == "en":
+            return f"The debut album by {subject} was released in {year}."
+        return f"A {subject} debütáló albuma {year}-ben jelent meg."
+
+    return ""
+
+
+def anchor_resolved_direct_fact_answer(
+    draft,
+    fact,
+    requested_fact="general",
+    *,
+    language="hu",
+):
+    """Replace only the model's leading core-fact sentence with host authority.
+
+    Direct-fact prompts require the requested fact in the first sentence. Once
+    the host has resolved that core relation deterministically, the model must
+    not be allowed to override it. Later sentences are preserved so useful,
+    evidence-grounded context can still survive normal factual validation.
+    """
+    core = render_resolved_direct_fact(
+        fact,
+        requested_fact,
+        language=language,
+    )
+    if not core:
+        return str(draft or "").strip()
+
+    sentences = list(_split_answer_sentences(draft))
+    if len(sentences) <= 1:
+        return core
+
+    supporting = " ".join(sentences[1:]).strip()
+    return (core + (" " + supporting if supporting else "")).strip()
+
+
 def _subject_display_surface(text, subject):
     """Return the evidence spelling of *subject* when it can be matched safely."""
-    raw = str(text or "")
+    raw = _deescape_evidence_surface(text)
     folded_subject = _fold(subject)
     if not folded_subject:
         return ""
@@ -813,7 +900,7 @@ def _debut_title_candidates_from_item(item, request_text):
     candidates = []
 
     def add(value):
-        title = _clean(value).strip(" .,:;!?-–—")
+        title = _clean(_deescape_evidence_surface(value)).strip(" .,:;!?-–—")
         folded = _fold(title)
         if (
             not title
@@ -997,33 +1084,11 @@ def deterministic_direct_fact_fallback(
     if not fact:
         return ""
 
-    subject = str(fact.get("subject") or "").strip()
-    title = str(fact.get("title") or "").strip()
-    year = str(fact.get("year") or "").strip()
-    if requested_fact == "selection" and title:
-        if language == "de":
-            answer = f"Das erste Album von {subject} war {title}."
-            if year:
-                answer += f" Es erschien {year}."
-            return answer
-        if language == "en":
-            answer = f"The first album by {subject} was {title}."
-            if year:
-                answer += f" It was released in {year}."
-            return answer
-        answer = f"A {subject} első nagylemeze a {title} című album volt."
-        if year:
-            answer += f" Az album {year}-ben jelent meg."
-        return answer
-
-    if requested_fact == "temporal" and year:
-        if language == "de":
-            return f"Das Debütalbum von {subject} erschien {year}."
-        if language == "en":
-            return f"The debut album by {subject} was released in {year}."
-        return f"A {subject} debütáló albuma {year}-ben jelent meg."
-
-    return ""
+    return render_resolved_direct_fact(
+        fact,
+        requested_fact,
+        language=language,
+    )
 
 
 def deterministic_hungarian_fact_fallback(authority_text, requested_fact="general"):
