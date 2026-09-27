@@ -156,6 +156,22 @@ def test_supported_creator_surface_does_not_absorb_following_lowercase_words():
     assert supported_creator_surfaces(evidence) == ("Correct Author",)
 
 
+def test_creation_answer_rejects_false_creator_even_when_noisy_evidence_mentions_both():
+    prompt = "Mikor írta Wrong Author a Silver Storyt?"
+    evidence = {
+        "results": [
+            {"snippet": "Wrong Author wrote about the Silver Story question."},
+            {"snippet": "Silver Story was written by Correct Author in 1912."},
+        ],
+    }
+
+    assert creation_answer_conflicts_with_evidence(
+        "Wrong Author (Correct Author) a Silver Storyt 1912-ben írta.",
+        prompt,
+        evidence,
+    ) is True
+
+
 def test_creation_answer_rejects_affirmed_false_creator_premise():
     prompt = "Mikor írta Wrong Author a Silver Storyt?"
     evidence = {
