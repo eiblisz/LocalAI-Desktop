@@ -2332,6 +2332,22 @@ class MainWindow(QMainWindow):
                 metadata.get("factual_guard_remaining_literals"),
             ),
             (
+                "Answer relation supported",
+                metadata.get("answer_relation_supported"),
+            ),
+            (
+                "Answer creator binding supported",
+                metadata.get("answer_creator_binding_supported"),
+            ),
+            (
+                "Repaired relation supported",
+                metadata.get("repaired_answer_relation_supported"),
+            ),
+            (
+                "Repaired creator binding supported",
+                metadata.get("repaired_answer_creator_binding_supported"),
+            ),
+            (
                 "Current-turn prompt anchors",
                 metadata.get("current_turn_prompt_anchors"),
             ),
