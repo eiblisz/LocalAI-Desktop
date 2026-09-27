@@ -351,3 +351,28 @@ def test_debut_release_evidence_acceptance_is_case_and_wording_invariant(prompt)
         evidence,
     ) is False
 
+
+
+def test_first_album_selection_builds_premise_neutral_entity_query():
+    prompt = "Melyik nagylemez volt az első a sampleband zenekarnak?"
+    query, strategy = derive_premise_neutral_query(prompt, "selection")
+
+    assert query == "sampleband debut first album discography"
+    assert strategy == "premise_neutral_entity_release_relation"
+
+
+def test_first_album_selection_requires_subject_bound_debut_evidence():
+    prompt = "Melyik nagylemez volt az első a sampleband zenekarnak?"
+    good = {
+        "results": [{
+            "snippet": "S.A.M.P.L.E.B.A.N.D. released its self-titled debut album in 1984.",
+        }],
+    }
+    unrelated = {
+        "results": [{
+            "snippet": "Another Band released its debut album in 1984.",
+        }],
+    }
+
+    assert requested_fact_supported(good, "selection", prompt) is True
+    assert requested_fact_supported(unrelated, "selection", prompt) is False
