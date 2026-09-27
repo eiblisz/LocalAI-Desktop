@@ -12,6 +12,7 @@ from .config import OLLAMA_NUM_PREDICT
 from .request_semantics import (
     TASK_ANALYSIS,
     TASK_DEEP_RESEARCH,
+    TASK_DIRECT_FACT,
     TASK_ENTITY_OVERVIEW,
     TASK_EXPLANATION,
     TASK_GENERAL,
@@ -169,7 +170,7 @@ def build_generation_policy(
     strict_factual = bool(
         use_web
         and not conversation_local
-        and getattr(profile, "kind", "") == "direct_fact"
+        and getattr(profile, "kind", "") == TASK_DIRECT_FACT
     )
     output_budget = output_budget_for_response_length(response_length)
     if strict_factual and response_length != LENGTH_LONG:
