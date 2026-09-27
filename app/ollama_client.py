@@ -488,6 +488,13 @@ class OllamaClient:
             metadata["model_resident_after"] = True
             return metadata
 
+        # A cold target while a different model is resident is a genuine
+        # shared-runtime transition. Verify that no external consumer owns the
+        # current workload before asking Ollama to load another model. This
+        # does not unload or kill anything; it only blocks unsafe contention.
+        if not resident_before and loaded_before:
+            self._assert_external_switch_safe(target)
+
         metadata["model_warmup_reason"] = (
             "cold_model"
             if not resident_before
