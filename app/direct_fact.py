@@ -174,6 +174,9 @@ def _debut_release_surface_supported(text):
         r"(?:album\w*|nagylemez\w*|lemez\w*)\b",
         r"\b(?:first|debut)\b(?:\s+\w+){0,4}\s+"
         r"(?:album\w*|record\w*)\b",
+        r"\b(?:album\w*|nagylemez\w*|lemez\w*)\b"
+        r"(?:\s+\w+){0,3}\s+(?:elso|debutalo)\b",
+        r"\b(?:album\w*|record\w*)\b(?:\s+\w+){0,3}\s+first\b",
         r"\b(?:erste|erstes|debut\w*)\b(?:\s+\w+){0,4}\s+album\w*\b",
     )
     return any(re.search(pattern, folded) for pattern in patterns)
