@@ -30,5 +30,5 @@ def test_work_type_context_expands_c_dot_without_general_typo_translation():
         requested_fact="temporal",
     )
 
-    assert query == "Ének literary work author composition writing date year"
+    assert query == "Ének szerző keletkezés megírás éve"
     assert strategy == "premise_neutral_title_relation"
