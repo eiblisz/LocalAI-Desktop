@@ -499,8 +499,9 @@ def test_fluency_audit_contract_failure_degrades_without_discarding_clean_answer
 
     assert result == draft
     snapshot = trace.snapshot()
-    assert snapshot["metadata"]["hungarian_fluency_audit_result"] == "degraded"
-    assert "valid JSON" in snapshot["metadata"]["fluency_audit_failure_reason"]
+    assert snapshot["metadata"]["hungarian_fluency_audit_result"] == "deterministic_only"
+    assert snapshot["metadata"]["fluency_audit_transport"] == "deterministic_only"
+    assert "valid JSON" in snapshot["metadata"]["fluency_audit_degraded_reason"]
 
 
 @pytest.mark.parametrize("suspicious, replacement, reason", [
@@ -898,8 +899,12 @@ def test_sentence_audit_omission_degrades_without_discarding_complete_answer():
 
     assert result == draft
     snapshot = trace.snapshot()
-    assert snapshot["metadata"]["hungarian_fluency_audit_result"] == "degraded"
-    assert "must judge every response sentence" in snapshot["metadata"]["fluency_audit_failure_reason"]
+    assert snapshot["metadata"]["hungarian_fluency_audit_result"] == "deterministic_only"
+    assert snapshot["metadata"]["fluency_audit_transport"] == "deterministic_only"
+    assert (
+        "must judge every response sentence"
+        in snapshot["metadata"]["fluency_audit_degraded_reason"]
+    )
 
 
 def test_clean_long_hungarian_answer_passes_without_editorial_repair():
