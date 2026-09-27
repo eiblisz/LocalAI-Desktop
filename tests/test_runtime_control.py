@@ -44,6 +44,15 @@ def test_execution_budget_deadline_fails_closed():
         budget.check()
 
 
+def test_execution_budget_can_add_bounded_deadline_grace():
+    budget = ExecutionBudget(timeout_seconds=45, max_model_calls=2)
+
+    assert budget.add_deadline_grace(30, max_total_grace=45) == 30
+    assert budget.add_deadline_grace(30, max_total_grace=45) == 45
+    assert budget.deadline_grace_seconds == 45
+    assert budget.deadline >= budget.started_at + 90
+
+
 def test_request_timeout_is_bounded_by_remaining_deadline():
     budget = ExecutionBudget(timeout_seconds=30, max_model_calls=2)
 
