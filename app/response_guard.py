@@ -644,7 +644,12 @@ def _run_hungarian_fluency_audit(
     try:
         raw_audit = _chat_once_compat(client, dict(call_kwargs))
     except Exception as exc:
-        if _http_status_from_exception(exc) != 400:
+        fallback_eligible = (
+            _http_status_from_exception(exc) == 400
+            or "output-token limit" in str(exc).casefold()
+            or "output token limit" in str(exc).casefold()
+        )
+        if not fallback_eligible:
             if trace is not None:
                 trace.end(
                     "hungarian_fluency_audit",
