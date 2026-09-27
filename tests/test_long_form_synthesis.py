@@ -125,6 +125,17 @@ def test_case_13_desktop_and_discord_share_contract_policy():
     assert desktop.constraints.output_budget == discord.constraints.output_budget
 
 
+def test_direct_fact_contract_exposes_route_aware_runtime_budget():
+    prompt = "melyik nagylemez volt az elso a sampleband zenekarnak?"
+    contract = _contract(prompt)
+
+    assert contract.route == ROUTE_WEB
+    assert contract.synthesis_policy.sampling_profile == SAMPLING_FACTUAL_STRICT
+    assert contract.runtime_output_budget == contract.synthesis_policy.output_budget
+    assert contract.runtime_output_budget == 384
+    assert contract.runtime_output_budget <= contract.constraints.output_budget
+
+
 def test_case_14_short_normal_query_does_not_inflate_budget():
     policy = build_generation_policy(
         "Magyarázd el röviden, mi az a token.",
