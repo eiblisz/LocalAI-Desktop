@@ -2226,6 +2226,8 @@ class ChatWebWorker(QObject):
                                 deterministic_direct_fact_fallback="used",
                                 repaired_answer_release_named_literals_supported=True,
                                 repaired_answer_release_named_literal_mismatches="",
+                                factual_guard_remaining_unsupported_literals="",
+                                factual_guard_remaining_literals="",
                             )
                     else:
                         raise GroundedFactualGuardError(
