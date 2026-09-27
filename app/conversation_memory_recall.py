@@ -27,7 +27,8 @@ _NON_FACT_TOKENS = _QUESTION_MARKERS | {
     "beszelgetes", "beszelgetesben", "beszelgetesnek", "chat", "chatben",
     "szal", "szalban", "kontextus", "conversation", "this", "current",
     "masik", "masikban", "ablak", "ablakban", "other", "another",
-    "our", "here", "the", "an", "and", "in", "of", "to", "is", "was",
+    "our", "here", "the", "an", "and", "in", "of", "to",
+    "is", "was", "are", "were", "van", "volt",
     "do", "you", "remember", "recall", "about", "gesprach", "verlauf",
 }
 
