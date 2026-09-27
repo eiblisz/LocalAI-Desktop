@@ -32,6 +32,22 @@ def test_grounded_answer_keeps_current_entity_binding():
     ) is True
 
 
+def test_false_premise_correction_can_bind_to_prompt_work_title_anchor():
+    client = RepairClient("unused")
+
+    result = guard_current_turn_binding(
+        client,
+        "qwen-test",
+        "Mikor írta Wrong Author a Silver Storyt?",
+        "A Silver Story 1912-ben keletkezett.",
+        "AUTHORIZED EVIDENCE: Silver Story 1912-ben keletkezett.",
+        allowed_entity_anchors=("Silver Story",),
+    )
+
+    assert result == "A Silver Story 1912-ben keletkezett."
+    assert client.calls == 0
+
+
 def test_false_premise_correction_can_bind_to_authorized_creator():
     client = RepairClient("unused")
 
