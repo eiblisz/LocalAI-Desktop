@@ -143,15 +143,35 @@ def _release_subject_surface(prompt):
     return ""
 
 
-def _is_debut_release_request(prompt):
-    folded = _fold(prompt)
+def _debut_release_surface_supported(text):
+    """Recognize first/debut-album wording without requiring adjacent words."""
+    folded = _fold(text)
     debut_markers = (
         "elso album", "elso nagylemez", "elso lemez",
         "debut album", "debut studio album", "debutalo album",
         "debutlemez", "debutalbum", "first album", "first studio album",
         "erstes album",
     )
-    return any(marker in folded for marker in debut_markers)
+    if any(marker in folded for marker in debut_markers):
+        return True
+
+    # Model/evidence paraphrases may insert a short modifier phrase between
+    # "first/debut" and the album noun, for example:
+    # "elso sajat nevet viselo albuma" or "first self titled studio album".
+    # Keep the window deliberately small so unrelated earlier "first" mentions
+    # do not satisfy the requested debut-release relation.
+    patterns = (
+        r"\b(?:elso|debutalo)\b(?:\s+\w+){0,4}\s+"
+        r"(?:album\w*|nagylemez\w*|lemez\w*)\b",
+        r"\b(?:first|debut)\b(?:\s+\w+){0,4}\s+"
+        r"(?:album\w*|record\w*)\b",
+        r"\b(?:erste|erstes|debut\w*)\b(?:\s+\w+){0,4}\s+album\w*\b",
+    )
+    return any(re.search(pattern, folded) for pattern in patterns)
+
+
+def _is_debut_release_request(prompt):
+    return _debut_release_surface_supported(prompt)
 
 
 def _subject_supported_in_text(text, subject):
@@ -180,13 +200,7 @@ def _debut_release_item_supported(text, request_text):
     subject = _release_subject_surface(request_text)
     if subject and not _subject_supported_in_text(text, subject):
         return False
-    folded = _fold(text)
-    debut_markers = (
-        "debut album", "debut studio album", "first album", "first studio album",
-        "elso album", "elso nagylemez", "debutalo album", "debutalbum",
-        "erstes album",
-    )
-    return any(marker in folded for marker in debut_markers)
+    return _debut_release_surface_supported(text)
 
 
 def direct_fact_title_surface(prompt):
