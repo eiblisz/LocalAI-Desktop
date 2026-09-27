@@ -286,8 +286,57 @@ def test_fluency_audit_falls_back_to_plain_json_after_schema_http_400():
     assert len(client.calls) == 2
     assert isinstance(client.calls[0]["response_format"], dict)
     assert "response_format" not in client.calls[1]
-    assert client.calls[1]["num_predict"] == 192
+    assert client.calls[1]["num_predict"] == 96
     assert trace.snapshot()["metadata"]["fluency_audit_transport"] == "plain_json_fallback"
+
+
+def test_fluency_audit_disables_repeated_incompatible_model_transport():
+    prompt = "Válaszolj magyarul."
+    draft = "Ez egy jó mondat."
+
+    class IncompatibleAuditClient:
+        supports_hungarian_fluency_audit = True
+
+        def __init__(self):
+            self.calls = 0
+
+        def chat_once(self, model, messages, **kwargs):
+            self.calls += 1
+            if kwargs.get("response_format") is not None:
+                raise RuntimeError(
+                    "Ollama stopped at the configured output-token limit; "
+                    "the incomplete response was rejected."
+                )
+            return "{not valid json"
+
+    client = IncompatibleAuditClient()
+    first_trace = RequestTrace("desktop")
+    assert guard_response(
+        client,
+        "gemma4:26b",
+        prompt,
+        draft,
+        constraints=build_task_constraints(prompt),
+        trace=first_trace,
+    ) == draft
+    assert client.calls == 2
+    first = first_trace.snapshot()["metadata"]
+    assert first["hungarian_fluency_audit_result"] == "deterministic_only"
+    assert first["fluency_audit_transport"] == "deterministic_only"
+
+    second_trace = RequestTrace("desktop")
+    assert guard_response(
+        client,
+        "gemma4:26b",
+        prompt,
+        draft,
+        constraints=build_task_constraints(prompt),
+        trace=second_trace,
+    ) == draft
+    assert client.calls == 2
+    second = second_trace.snapshot()["metadata"]
+    assert second["hungarian_fluency_audit_result"] == "deterministic_only"
+    assert second["fluency_audit_transport"] == "deterministic_only"
 
 
 def test_fluency_audit_reconciles_pass_status_with_reasoned_exact_finding():
