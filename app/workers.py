@@ -30,6 +30,7 @@ from .followup_resolution import resolve_contextual_followup
 from .current_turn_binding import guard_current_turn_binding
 from .direct_fact import (
     answer_contains_temporal_literal,
+    answer_temporal_literals_supported_by_evidence,
     creation_answer_conflicts_with_evidence,
     derive_premise_neutral_query,
     deterministic_hungarian_fact_fallback,
@@ -2000,6 +2001,7 @@ class ChatWebWorker(QObject):
             }
             relation_mismatch_requires_verify = False
             creator_mismatch_requires_verify = False
+            temporal_literal_mismatch_requires_verify = False
             if (
                 is_factual_risk_request(self.user_prompt)
                 and self.request_profile.requested_fact == "temporal"
@@ -2016,6 +2018,13 @@ class ChatWebWorker(QObject):
                         combined_fact_payload,
                     )
                 )
+                temporal_literal_mismatch_requires_verify = not (
+                    answer_temporal_literals_supported_by_evidence(
+                        answer,
+                        self.user_prompt,
+                        combined_fact_payload,
+                    )
+                )
                 if self.trace is not None:
                     self.trace.add_metadata(
                         answer_relation_supported=(
@@ -2023,6 +2032,9 @@ class ChatWebWorker(QObject):
                         ),
                         answer_creator_binding_supported=(
                             not creator_mismatch_requires_verify
+                        ),
+                        answer_temporal_literals_supported=(
+                            not temporal_literal_mismatch_requires_verify
                         ),
                     )
             if self.trace is not None:
@@ -2041,6 +2053,7 @@ class ChatWebWorker(QObject):
                         not single_pass_factual
                         or relation_mismatch_requires_verify
                         or creator_mismatch_requires_verify
+                        or temporal_literal_mismatch_requires_verify
                     )
                 ),
                 language_instruction=self._conversation_language_instruction(),
@@ -2063,16 +2076,27 @@ class ChatWebWorker(QObject):
                     self.user_prompt,
                     combined_fact_payload,
                 )
+                repaired_temporal_literals_supported = (
+                    answer_temporal_literals_supported_by_evidence(
+                        answer,
+                        self.user_prompt,
+                        combined_fact_payload,
+                    )
+                )
                 if self.trace is not None:
                     self.trace.add_metadata(
                         repaired_answer_relation_supported=repaired_relation_supported,
                         repaired_answer_creator_binding_supported=repaired_creator_supported,
+                        repaired_answer_temporal_literals_supported=(
+                            repaired_temporal_literals_supported
+                        ),
                     )
                 if (
                     answer_contains_temporal_literal(answer)
                     and (
                         not repaired_relation_supported
                         or not repaired_creator_supported
+                        or not repaired_temporal_literals_supported
                     )
                 ):
                     raise GroundedFactualGuardError(
