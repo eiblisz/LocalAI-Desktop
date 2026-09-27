@@ -32,6 +32,19 @@ def test_grounded_guard_detects_unsupported_year_and_name():
     assert "Other Person" in unsupported
 
 
+def test_grounded_guard_accepts_hungarian_case_suffix_on_supported_entity():
+    authority = (
+        "AUTHORIZED EVIDENCE: A Kisfaludy Társaság pályázatot hirdetett."
+    )
+
+    unsupported = unsupported_grounded_literals(
+        "A Kisfaludy Társaságnál meghirdetett pályázat fontos volt.",
+        authority,
+    )
+
+    assert unsupported == ()
+
+
 def test_grounded_guard_accepts_supported_factual_literals():
     authority = (
         "AUTHORIZED EVIDENCE: Example Author készítette 1912-ben. "
