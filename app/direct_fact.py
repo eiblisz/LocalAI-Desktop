@@ -447,7 +447,15 @@ def creation_answer_conflicts_with_evidence(answer, request_text, payload):
         return False
 
     alleged_folded = _fold(alleged)
-    if any(_fold(person) == alleged_folded for person in creators):
+    alternative_creators = tuple(
+        person for person in creators
+        if _fold(person) != alleged_folded
+    )
+    # Search snippets can echo the user's false premise as well as the
+    # evidence-supported creator. Seeing the alleged name somewhere in noisy
+    # evidence must therefore not validate it when a different creator surface
+    # is also present. Ambiguous/mixed creator evidence is verification-worthy.
+    if not alternative_creators:
         return False
 
     answer_text = str(answer or "")
