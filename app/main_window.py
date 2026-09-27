@@ -2329,6 +2329,22 @@ class MainWindow(QMainWindow):
             ("Repair integrity result", metadata.get("repair_integrity_result")),
             ("Repair integrity issues", metadata.get("repair_integrity_issues")),
             ("Repair integrity evidence", metadata.get("repair_integrity_evidence")),
+            (
+                "Host-resolved core fact preseed",
+                metadata.get("host_resolved_direct_fact_preseed"),
+            ),
+            (
+                "Host-resolved core fact title",
+                metadata.get("host_resolved_direct_fact_title"),
+            ),
+            (
+                "Host-resolved core fact year",
+                metadata.get("host_resolved_direct_fact_year"),
+            ),
+            (
+                "Deterministic direct-fact fallback",
+                metadata.get("deterministic_direct_fact_fallback"),
+            ),
             ("Factual guard force verify", metadata.get("factual_guard_force_verify")),
             ("Factual guard repair", metadata.get("factual_guard_repair_status")),
             (
