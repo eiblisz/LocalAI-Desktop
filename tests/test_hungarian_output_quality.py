@@ -237,7 +237,41 @@ def test_fluency_audit_accepts_schema_bound_status_and_findings_contract():
     )
 
     assert result == draft.replace("működéskére", "működésre")
-    assert client.audit_format == "json"
+    assert client.audit_format is None
+
+
+def test_fluency_audit_transport_omits_native_ollama_format():
+    prompt = "Válaszolj magyarul."
+    draft = "Ez egy jó mondat."
+
+    class PlainJsonAuditClient:
+        supports_hungarian_fluency_audit = True
+
+        def __init__(self):
+            self.kwargs = None
+
+        def chat_once(self, model, messages, **kwargs):
+            if "Hungarian fluency classifier" in messages[0]["content"]:
+                self.kwargs = dict(kwargs)
+                return json.dumps({
+                    "status": ["pass"],
+                    "findings": [],
+                })
+            raise AssertionError("unexpected repair call")
+
+    client = PlainJsonAuditClient()
+    result = guard_response(
+        client,
+        "eurollm:9b-q4",
+        prompt,
+        draft,
+        constraints=build_task_constraints(prompt),
+    )
+
+    assert result == draft
+    assert client.kwargs is not None
+    assert "response_format" not in client.kwargs
+    assert client.kwargs["call_phase"] == "hungarian_fluency_audit"
 
 
 def test_fluency_audit_reconciles_pass_status_with_reasoned_exact_finding():
