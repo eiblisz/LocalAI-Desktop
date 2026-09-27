@@ -3274,3 +3274,118 @@ def test_factual_strict_worker_cannot_be_widened_by_generic_constraint_budget():
     assert worker.output_budget == 384
     assert worker.temperature == 0.0
     assert worker.seed == 42
+
+
+def test_selection_guard_failure_recovers_with_host_resolved_fact(monkeypatch):
+    from app.request_trace import RequestTrace
+
+    prompt = "melyik nagylemez volt az elso a wasp zenekarnak?"
+
+    class WrongSelectionClient:
+        def __init__(self):
+            self.stream_calls = []
+
+        def chat_once(self, model, messages, timeout=600.0, **kwargs):
+            callback = kwargs.get("context_budget_callback")
+            if callback:
+                callback({
+                    "estimated_final_prompt_units": 700,
+                    "requested_output_units": kwargs.get("num_predict", 1024),
+                    "requested_num_ctx": 4096,
+                    "model_max_context": 32768,
+                    "context_budget_decision": "fits_default_context",
+                    "context_budget_safety_units": 192,
+                })
+            return "The Last Command volt az első nagylemez."
+
+        def chat_stream(self, *args, **kwargs):
+            self.stream_calls.append((args, kwargs))
+            raise AssertionError("direct factual selection must use single pass")
+
+    def fake_search(query, max_results=6, fetch_pages=True):
+        return {
+            "provider": "Brave Search API",
+            "query": query,
+            "retrieved_at": "2026-09-27T00:00:00",
+            "provider_chain_errors": [],
+            "results": [{
+                "title": "W.A.S.P. (album) - Wikipedia",
+                "url": "https://example.com/wasp",
+                "snippet": (
+                    "W.A.S.P. is the debut studio album by American heavy metal "
+                    "band W.A.S.P., released in 1984."
+                ),
+                "page_text": (
+                    "W.A.S.P. is the debut studio album by American heavy metal "
+                    "band W.A.S.P., released in 1984."
+                ),
+            }],
+        }
+
+    monkeypatch.setattr(workers, "search_web", fake_search)
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: ["https://example.com/wasp"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_entries",
+        lambda payload, limit=6: [{
+            "title": "W.A.S.P. (album) - Wikipedia",
+            "url": "https://example.com/wasp",
+        }],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: (
+            "W.A.S.P. is the debut studio album by American heavy metal "
+            "band W.A.S.P., released in 1984."
+        ),
+    )
+    monkeypatch.setattr(
+        workers,
+        "guard_grounded_answer",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            workers.GroundedFactualGuardError(
+                "Grounded answer still contains unsupported factual literals: "
+                "The Last Command"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        workers,
+        "guard_current_turn_binding",
+        lambda client, model, prompt, answer, authority, **kwargs: answer,
+    )
+
+    trace = RequestTrace("test")
+    tokens = []
+    errors = []
+    client = WrongSelectionClient()
+    worker = workers.ChatWebWorker(
+        client,
+        "eurollm-test",
+        [{"role": "system", "content": "Base system"}],
+        prompt,
+        trace=trace,
+        output_budget=1024,
+    )
+    worker.token.connect(tokens.append)
+    worker.failed.connect(errors.append)
+    worker.run()
+
+    assert errors == []
+    assert client.stream_calls == []
+    assert worker.output_budget == 384
+    assert tokens
+    final = "".join(tokens)
+    assert "The Last Command" not in final
+    assert "W.A.S.P" in final
+    assert "1984" in final
+    snapshot = trace.snapshot()
+    assert snapshot["metadata"]["deterministic_direct_fact_fallback"] == "used"
+    assert snapshot["metadata"]["factual_guard_repair_status"] == (
+        "host_resolved_direct_fact_fallback"
+    )
