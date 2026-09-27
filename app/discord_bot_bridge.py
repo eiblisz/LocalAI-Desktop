@@ -51,7 +51,7 @@ from .document_tools import (
     build_excel_messages,
     build_summary_messages,
 )
-from .language_policy import response_language_instruction
+from .language_policy import detect_user_language, response_language_instruction
 from .memory_answers import direct_user_memory_answer
 from .memory_runtime import remember_explicit_request, semantic_memory_context_lines
 from .memory_scope import is_durable_memory_query, is_other_window_request
@@ -688,6 +688,27 @@ class DiscordBotBridge(QObject):
             )
         return recall
 
+    @staticmethod
+    def _cross_window_ambiguity_answer(query):
+        language = detect_user_language(query)
+        if language == "hu":
+            return (
+                "Több eltérő, releváns értéket találtam más beszélgetésekben, "
+                "ezért nem választok közülük találomra. Pontosítsd, melyik "
+                "beszélgetésre vagy projektre gondolsz."
+            )
+        if language == "de":
+            return (
+                "Ich habe in anderen Unterhaltungen mehrere unterschiedliche "
+                "relevante Werte gefunden und wähle keinen davon willkürlich aus. "
+                "Bitte präzisiere, welche Unterhaltung oder welches Projekt du meinst."
+            )
+        return (
+            "I found multiple different relevant values in other conversations, "
+            "so I will not choose one arbitrarily. Please specify which conversation "
+            "or project you mean."
+        )
+
     def _direct_cross_window_memory_recall(self, query, chat_id, *, trace=None):
         """Return one exact value from other-window indexed user state when unambiguous."""
         if self.memory_store is None:
@@ -707,7 +728,7 @@ class DiscordBotBridge(QObject):
         related = self.memory_store.search_window_memories(
             query,
             exclude_chat_id=str(chat_id or ""),
-            limit=2,
+            limit=10,
         )
         if trace is not None:
             trace.end(
@@ -1448,6 +1469,11 @@ class DiscordBotBridge(QObject):
                     "language_validation",
                     direct_memory_language_valid=recall_valid,
                 )
+        cross_window_ambiguous = bool(
+            cross_window_recall is not None
+            and not cross_window_recall.is_direct_hit
+            and cross_window_recall.candidate_count > 1
+        )
         direct_answer = (
             conversation_recall.answer
             if direct_conversation_answer
@@ -1455,9 +1481,13 @@ class DiscordBotBridge(QObject):
                 cross_window_recall.answer
                 if direct_cross_window_answer
                 else (
-                    ""
-                    if conversation_local or is_other_window_request(prompt)
-                    else self._direct_compound_answer(prompt)
+                    self._cross_window_ambiguity_answer(prompt)
+                    if cross_window_ambiguous
+                    else (
+                        ""
+                        if conversation_local or is_other_window_request(prompt)
+                        else self._direct_compound_answer(prompt)
+                    )
                 )
             )
         )
@@ -1490,13 +1520,15 @@ class DiscordBotBridge(QObject):
                     "recent_raw_message_count": conversation_recall.recent_raw_message_count,
                     "direct_memory_fast_path": True,
                 }
-            elif direct_cross_window_answer:
+            elif direct_cross_window_answer or cross_window_ambiguous:
                 assistant_message["diagnostic"] = {
                     "memory_scope": "other_window",
                     "current_window_hit": False,
-                    "cross_window_hit": True,
+                    "cross_window_hit": bool(direct_cross_window_answer),
+                    "cross_window_ambiguous": bool(cross_window_ambiguous),
                     "global_memory_hit": False,
                     "retrieved_item_count": cross_window_recall.retrieved_item_count,
+                    "recall_candidate_count": cross_window_recall.candidate_count,
                     "recent_raw_message_count": 0,
                     "direct_memory_fast_path": True,
                 }
@@ -1506,10 +1538,15 @@ class DiscordBotBridge(QObject):
                 trace.end("persistence")
                 trace.add_metadata(
                     direct_memory_fast_path=bool(
-                        direct_conversation_answer or direct_cross_window_answer
+                        direct_conversation_answer
+                        or direct_cross_window_answer
+                        or cross_window_ambiguous
                     ),
+                    cross_window_ambiguous=bool(cross_window_ambiguous),
                     ollama_skipped=bool(
-                        direct_conversation_answer or direct_cross_window_answer
+                        direct_conversation_answer
+                        or direct_cross_window_answer
+                        or cross_window_ambiguous
                     ),
                 )
             return direct_answer, str(chat.get("id", ""))
