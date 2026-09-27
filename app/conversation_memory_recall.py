@@ -23,7 +23,7 @@ _QUESTION_MARKERS = {
 }
 
 _NON_FACT_TOKENS = _QUESTION_MARKERS | {
-    "a", "az", "es", "ebben", "ezen", "ennek", "itt", "aktualis",
+    "a", "az", "egy", "es", "ebben", "ezen", "ennek", "itt", "aktualis",
     "beszelgetes", "beszelgetesben", "beszelgetesnek", "chat", "chatben",
     "szal", "szalban", "kontextus", "conversation", "this", "current",
     "masik", "masikban", "ablak", "ablakban", "other", "another",
