@@ -246,6 +246,7 @@ def guard_grounded_answer(
             factual_guard_force_verify=bool(force_verify),
             factual_guard_initial_unsupported_literals=", ".join(unsupported[:6]),
             factual_guard_remaining_unsupported_literals="",
+            factual_guard_remaining_literals="",
             factual_guard_repair_status=(
                 "pending" if (unsupported or force_verify) else "not_needed"
             ),
@@ -347,6 +348,7 @@ def guard_grounded_answer(
     if trace is not None:
         trace.add_metadata(
             factual_guard_remaining_unsupported_literals=", ".join(remaining[:6]),
+            factual_guard_remaining_literals=", ".join(remaining[:6]),
         )
     if remaining:
         sanitized = _strip_unsupported_source_attributions(repair, remaining)
@@ -359,6 +361,7 @@ def guard_grounded_answer(
                 trace.add_metadata(
                     factual_guard_repair_status="pass_after_source_cleanup",
                     factual_guard_remaining_unsupported_literals="",
+                    factual_guard_remaining_literals="",
                 )
             return sanitized
         remaining = sanitized_remaining or remaining
@@ -367,6 +370,7 @@ def guard_grounded_answer(
         if trace is not None:
             trace.add_metadata(
                 factual_guard_repair_status="unsupported_literals",
+                factual_guard_remaining_unsupported_literals=", ".join(remaining[:6]),
                 factual_guard_remaining_literals=", ".join(remaining[:6]),
             )
         raise GroundedFactualGuardError(
@@ -376,6 +380,7 @@ def guard_grounded_answer(
     if trace is not None:
         trace.add_metadata(
             factual_guard_repair_status="pass",
+            factual_guard_remaining_unsupported_literals="",
             factual_guard_remaining_literals="",
         )
     return repair
