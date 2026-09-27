@@ -2594,7 +2594,7 @@ def test_direct_fact_fetches_one_page_only_when_snippets_lack_requested_date(
 
     class Client:
         def chat_once(self, model, messages, timeout=600.0, **kwargs):
-            return "A Silver Story című művet Correct Author írta, és 1912-ben jelent meg."
+            return "A Silver Story című művet Correct Author 1912-ben írta."
 
     monkeypatch.setattr(
         workers,
