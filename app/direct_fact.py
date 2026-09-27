@@ -763,12 +763,14 @@ def creation_answer_conflicts_with_evidence(answer, request_text, payload):
 
 
 def _deescape_evidence_surface(value):
-    """Remove common Markdown escaping from a short evidence display surface."""
-    return re.sub(
-        r"\\([\\`*_{}\[\]()#+\-.!|>])",
-        r"\1",
-        str(value or ""),
-    )
+    """Remove repeated Markdown escaping from a short evidence display surface."""
+    text = str(value or "")
+    slash = chr(92)
+    for char in "`*_{}[]()#+-.!|>":
+        escaped = slash + char
+        while escaped in text:
+            text = text.replace(escaped, char)
+    return text
 
 
 def _split_answer_sentences(text):
