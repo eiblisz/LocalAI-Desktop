@@ -762,6 +762,235 @@ def creation_answer_conflicts_with_evidence(answer, request_text, payload):
     return False
 
 
+def _subject_display_surface(text, subject):
+    """Return the evidence spelling of *subject* when it can be matched safely."""
+    raw = str(text or "")
+    folded_subject = _fold(subject)
+    if not folded_subject:
+        return ""
+
+    # Normal token-spaced form first.
+    canonical_tokens = folded_subject.split()
+    if canonical_tokens:
+        token_pattern = r"(?i)(?<!\w)" + r"\s+".join(
+            re.escape(token) for token in canonical_tokens
+        ) + r"(?!\w)"
+        match = re.search(token_pattern, raw)
+        if match:
+            return _clean(match.group(0)).strip(" ,;:")
+
+    # Punctuated compact forms such as WASP / W.A.S.P.
+    raw_subject = re.sub(r"[^A-Za-z0-9]", "", str(subject or ""))
+    if 2 <= len(raw_subject) <= 32 and re.fullmatch(r"[A-Za-z0-9]+", raw_subject):
+        compact_pattern = (
+            r"(?i)(?<![A-Za-z0-9])"
+            + r"[^A-Za-z0-9]*".join(re.escape(ch) for ch in raw_subject)
+            + r"(?:\.)?(?![A-Za-z0-9])"
+        )
+        match = re.search(compact_pattern, raw)
+        if match:
+            surface = match.group(0).strip(" ,;:")
+            if surface.endswith(".") and surface.count(".") <= 1:
+                surface = surface[:-1]
+            return surface
+    return ""
+
+
+def _debut_title_candidates_from_item(item, request_text):
+    """Extract conservative debut-album title candidates from one bound result."""
+    fields = [
+        str(item.get("snippet") or ""),
+        str(item.get("page_text") or ""),
+        str(item.get("pre_extracted_context") or ""),
+        str(item.get("title") or ""),
+    ]
+    item_text = "\n".join(fields)
+    subject = _release_subject_surface(request_text)
+    if not subject or not _debut_release_item_supported(item_text, request_text):
+        return ()
+
+    subject_surface = _subject_display_surface(item_text, subject) or _clean(subject)
+    candidates = []
+
+    def add(value):
+        title = _clean(value).strip(" .,:;!?-–—")
+        folded = _fold(title)
+        if (
+            not title
+            or len(title) > 120
+            or not folded
+            or folded in {
+                "discography", "album", "debut album", "first album",
+                "debut studio album", "first studio album",
+            }
+        ):
+            return
+        if all(_fold(existing) != folded for existing in candidates):
+            candidates.append(title)
+
+    folded_item = _fold(item_text)
+    self_titled_markers = (
+        "self titled", "selftitled", "eponymous",
+        "sajat nevet viselo", "sajat cimu", "sajat nevu",
+    )
+    if any(marker in folded_item for marker in self_titled_markers):
+        add(subject_surface)
+
+    # Encyclopedic result shape:
+    # "Kill 'Em All is the debut studio album by ... Metallica"
+    # or "W.A.S.P. is the debut studio album by ... W.A.S.P."
+    title_pattern = re.compile(
+        r"(?im)^\s*(?P<title>[^\n.!?]{2,120}?)\s+"
+        r"(?:is|was|ist|war)\s+(?:the\s+|das\s+|die\s+)?"
+        r"(?:debut|first|erste\w*)\s+(?:studio\s+)?album\b"
+    )
+    for field in fields[:3]:
+        for match in title_pattern.finditer(field):
+            add(match.group("title"))
+
+    # Result-title fallback is allowed only when the same result body explicitly
+    # says it is the requested subject's debut/first album.
+    result_title = _clean(item.get("title"))
+    body = "\n".join(fields[:3])
+    if result_title and _debut_release_item_supported(body, request_text):
+        cleaned_title = re.sub(
+            r"\s*[-|:]\s*(?:wikipedia|discogs|allmusic|musicbrainz).*$",
+            "",
+            result_title,
+            flags=re.IGNORECASE,
+        )
+        cleaned_title = re.sub(
+            r"\s*\((?:album|studio album|debut album)\)\s*$",
+            "",
+            cleaned_title,
+            flags=re.IGNORECASE,
+        )
+        # Generic discography/source headings are not album titles.
+        if not re.search(
+            r"(?i)\b(?:discograph\w*|releases?|albums?|songs?|tracks?)\b",
+            cleaned_title,
+        ):
+            add(cleaned_title)
+
+    return tuple(candidates)
+
+
+def _release_year_candidates_from_item(item, request_text):
+    fields = [
+        str(item.get("snippet") or ""),
+        str(item.get("page_text") or ""),
+        str(item.get("pre_extracted_context") or ""),
+    ]
+    years = []
+    for field in fields:
+        for clause in re.split(r"[.!?;\n]+", field):
+            if not _debut_release_surface_supported(clause):
+                continue
+            if not _temporal_relation_supported(clause, "release"):
+                continue
+            for year in re.findall(
+                r"(?<!\d)(?:1[0-9]{3}|20[0-9]{2})(?!\d)",
+                clause,
+            ):
+                if year not in years:
+                    years.append(year)
+    return tuple(years)
+
+
+def resolve_debut_release_fact(payload, request_text):
+    """Resolve one unambiguous debut-release fact from structured evidence.
+
+    The resolver is deliberately host-side and entity-neutral. It only accepts
+    results already bound to the requested subject + debut/first-album relation.
+    Conflicting album titles fail closed instead of asking the model to choose.
+    """
+    if requested_fact_relation(request_text) != "release":
+        return {}
+    if not _is_debut_release_request(request_text):
+        return {}
+
+    subject = _release_subject_surface(request_text)
+    if not subject:
+        return {}
+
+    titles = []
+    years = []
+    subject_surfaces = []
+    for item in dict(payload or {}).get("results") or []:
+        item_text = "\n".join((
+            str(item.get("title") or ""),
+            str(item.get("snippet") or ""),
+            str(item.get("page_text") or ""),
+            str(item.get("pre_extracted_context") or ""),
+        ))
+        if not _debut_release_item_supported(item_text, request_text):
+            continue
+
+        surface = _subject_display_surface(item_text, subject)
+        if surface and all(_fold(value) != _fold(surface) for value in subject_surfaces):
+            subject_surfaces.append(surface)
+
+        for title in _debut_title_candidates_from_item(item, request_text):
+            if all(_fold(value) != _fold(title) for value in titles):
+                titles.append(title)
+
+        for year in _release_year_candidates_from_item(item, request_text):
+            if year not in years:
+                years.append(year)
+
+    if len(titles) != 1:
+        return {}
+
+    return {
+        "subject": subject_surfaces[0] if subject_surfaces else _clean(subject),
+        "title": titles[0],
+        "year": years[0] if len(years) == 1 else "",
+        "relation": "release",
+    }
+
+
+def deterministic_direct_fact_fallback(
+    payload,
+    request_text,
+    requested_fact="general",
+    *,
+    language="hu",
+):
+    """Render a host-resolved direct fact only after generative grounding fails."""
+    requested_fact = str(requested_fact or "general")
+    fact = resolve_debut_release_fact(payload, request_text)
+    if not fact:
+        return ""
+
+    subject = str(fact.get("subject") or "").strip()
+    title = str(fact.get("title") or "").strip()
+    year = str(fact.get("year") or "").strip()
+    if requested_fact == "selection" and title:
+        if language == "de":
+            answer = f"Das erste Album von {subject} war {title}."
+            if year:
+                answer += f" Es erschien {year}."
+            return answer
+        if language == "en":
+            answer = f"The first album by {subject} was {title}."
+            if year:
+                answer += f" It was released in {year}."
+            return answer
+        answer = f"A {subject} első nagylemeze a {title} című album volt."
+        if year:
+            answer += f" Az album {year}-ben jelent meg."
+        return answer
+
+    if requested_fact == "temporal" and year:
+        if language == "de":
+            return f"Das Debütalbum von {subject} erschien {year}."
+        if language == "en":
+            return f"The debut album by {subject} was released in {year}."
+        return f"A {subject} debütáló albuma {year}-ben jelent meg."
+
+    return ""
+
+
 def deterministic_hungarian_fact_fallback(authority_text, requested_fact="general"):
     """Return a minimal Hungarian fallback only for an explicit supported literal.
 
