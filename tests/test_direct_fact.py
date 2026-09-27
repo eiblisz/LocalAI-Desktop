@@ -1,6 +1,7 @@
 import pytest
 
 from app.direct_fact import (
+    anchor_resolved_direct_fact_answer,
     answer_temporal_literals_supported_by_evidence,
     creation_answer_conflicts_with_evidence,
     derive_premise_neutral_query,
@@ -487,3 +488,31 @@ def test_host_resolves_first_album_from_artist_overview_without_using_band_page_
     assert fact["title"] == "W.A.S.P."
     assert "(band)" not in fact["title"]
     assert fact["year"] == "1984"
+
+
+def test_host_anchor_replaces_wrong_core_sentence_and_preserves_supporting_context():
+    fact = {
+        "subject": "W\\.A.S.P.",
+        "title": "W\\.A.S.P.",
+        "year": "1984",
+        "relation": "release",
+    }
+    draft = (
+        "The Last Command volt az első nagylemez. "
+        "A zenekar az 1980-as években vált ismertté."
+    )
+
+    anchored = anchor_resolved_direct_fact_answer(
+        draft,
+        fact,
+        "selection",
+        language="hu",
+    )
+
+    assert anchored.startswith(
+        "A W.A.S.P. első nagylemeze a W.A.S.P. című album volt."
+    )
+    assert "1984" in anchored
+    assert "The Last Command" not in anchored
+    assert "A zenekar az 1980-as években vált ismertté." in anchored
+    assert "\\." not in anchored
