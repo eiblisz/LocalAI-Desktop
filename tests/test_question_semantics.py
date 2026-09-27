@@ -1,3 +1,5 @@
+import pytest
+
 from app.question_semantics import analyze_question
 from app.request_semantics import TASK_DIRECT_FACT, classify_request
 from app.direct_fact import derive_premise_neutral_query
@@ -42,4 +44,21 @@ def test_hungarian_active_release_question_has_release_relation():
     assert semantics.requested_fact == "temporal"
     assert semantics.relation == "release"
     assert semantics.premise_check_required is True
+
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Mikor adta ki az első nagylemezét a sampleband együttes?",
+        "Mikor adta ki az első nagylemezét a SAMPLEBAND együttes?",
+        "Mikor jelent meg a sampleband együttes első albuma?",
+        "Mikor adta ki a debütáló albumát a sampleband zenekar?",
+        "When did sampleband release its first album?",
+    ],
+)
+def test_debut_release_variants_share_temporal_release_semantics(prompt):
+    semantics = analyze_question(prompt)
+    assert semantics.requested_fact == "temporal"
+    assert semantics.relation == "release"
 
