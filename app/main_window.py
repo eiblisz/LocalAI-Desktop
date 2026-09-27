@@ -2321,6 +2321,22 @@ class MainWindow(QMainWindow):
                 metadata.get("factual_guard_remaining_literals"),
             ),
             (
+                "Current-turn prompt anchors",
+                metadata.get("current_turn_prompt_anchors"),
+            ),
+            (
+                "Current-turn allowed anchors",
+                metadata.get("current_turn_allowed_anchors"),
+            ),
+            (
+                "Current-turn binding precheck",
+                metadata.get("current_turn_binding_precheck"),
+            ),
+            (
+                "Current-turn binding repair",
+                metadata.get("current_turn_binding_repair_result"),
+            ),
+            (
                 "Profile",
                 diagnostic.get("request_kind")
                 or metadata.get("request_kind")
