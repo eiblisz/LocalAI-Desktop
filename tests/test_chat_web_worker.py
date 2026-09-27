@@ -2398,7 +2398,7 @@ def test_direct_factual_insufficient_relation_evidence_forces_guarded_path(
     assert client.once_calls == []
     assert search_calls == [
         ("Silver Story literary work author composition writing date year", 0),
-        ("Silver Storyt original composition year", 0),
+        ("Silver Story literary work author original composition year", 0),
     ]
     assert tokens == [
         "Wrong Author nem a Silver Story szerzője; a forrás Correct Authort nevezi meg."
