@@ -1,4 +1,5 @@
 from app.direct_fact import (
+    answer_temporal_literals_supported_by_evidence,
     creation_answer_conflicts_with_evidence,
     derive_premise_neutral_query,
     direct_fact_title_surface,
@@ -233,3 +234,53 @@ def test_hungarian_fallback_only_repeats_a_supported_requested_literal():
 
     assert fallback == "A rendelkezésre álló források alapján a kért időpont: 1980."
     assert deterministic_hungarian_fact_fallback("No date here", "temporal") == ""
+
+
+def test_lowercase_band_debut_release_query_is_premise_neutral():
+    query, strategy = derive_premise_neutral_query(
+        "Mikor adta ki az első nagylemezét a wasp együttes?",
+        "temporal",
+    )
+
+    assert query == "wasp debut first album release date year"
+    assert strategy == "premise_neutral_entity_release_relation"
+
+
+def test_debut_release_evidence_binds_subject_relation_and_year_case_insensitively():
+    prompt = "Mikor adta ki az első nagylemezét a wasp együttes?"
+    evidence = {
+        "results": [{
+            "snippet": "W.A.S.P. released its self-titled debut album in 1984.",
+        }],
+    }
+
+    assert requested_fact_supported(evidence, "temporal", prompt) is True
+    assert answer_temporal_literals_supported_by_evidence(
+        "Az első nagylemez 1984-ben jelent meg.",
+        prompt,
+        evidence,
+    ) is True
+    assert answer_temporal_literals_supported_by_evidence(
+        "Az első nagylemez 1979-ben jelent meg.",
+        prompt,
+        evidence,
+    ) is False
+
+
+def test_debut_release_rejects_unrelated_year_even_when_result_mentions_band():
+    prompt = "Mikor adta ki az első nagylemezét a wasp együttes?"
+    evidence = {
+        "results": [{
+            "snippet": (
+                "W.A.S.P. released its self-titled debut album in 1984. "
+                "A separate retrospective mentions the year 1979."
+            ),
+        }],
+    }
+
+    assert answer_temporal_literals_supported_by_evidence(
+        "A debütáló album 1979-ben jelent meg.",
+        prompt,
+        evidence,
+    ) is False
+
