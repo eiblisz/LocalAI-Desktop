@@ -398,13 +398,13 @@ def _creator_surfaces_from_text(text):
     raw = str(text or "")
     candidates = []
     patterns = (
-        rf"(?P<person>{_NAME_SPAN_RE})\s+(?:[ií]rta|meg[ií]rta|wrote|authored|composed|created)\b",
-        rf"\b(?:written|authored|composed|created)\s+by\s+(?P<person>{_NAME_SPAN_RE})\b",
-        rf"\b(?:szerz[őo]je|szerz[őo]|author)\s*(?::|is|was)?\s*(?P<person>{_NAME_SPAN_RE})\b",
+        rf"(?P<person>{_NAME_SPAN_RE})\s+(?i:[ií]rta|meg[ií]rta|wrote|authored|composed|created)\b",
+        rf"(?i:\b(?:written|authored|composed|created)\s+by\s+)(?P<person>{_NAME_SPAN_RE})\b",
+        rf"(?i:\b(?:szerz[őo]je|szerz[őo]|author)\s*(?::|is|was)?\s*)(?P<person>{_NAME_SPAN_RE})\b",
     )
     seen = set()
     for pattern in patterns:
-        for match in re.finditer(pattern, raw, flags=re.IGNORECASE):
+        for match in re.finditer(pattern, raw):
             person = _clean(match.group("person"))
             folded = _fold(person)
             if folded and folded not in seen:
