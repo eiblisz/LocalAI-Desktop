@@ -2287,6 +2287,14 @@ class MainWindow(QMainWindow):
             ("Model max context", metadata.get("model_max_context")),
             ("Context budget decision", metadata.get("context_budget_decision")),
             ("Context safety margin", metadata.get("context_budget_safety_units")),
+            (
+                "Execution deadline grace",
+                metadata.get("execution_deadline_grace_seconds"),
+            ),
+            (
+                "Execution deadline budget",
+                metadata.get("execution_deadline_budget_seconds"),
+            ),
             ("Model resident before", metadata.get("model_resident_before")),
             ("Model warmup required", metadata.get("model_warmup_required")),
             ("Model warmup reason", metadata.get("model_warmup_reason")),
