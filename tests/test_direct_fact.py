@@ -1,4 +1,5 @@
 from app.direct_fact import (
+    creation_answer_conflicts_with_evidence,
     derive_premise_neutral_query,
     deterministic_hungarian_fact_fallback,
     targeted_fact_refinement_query,
@@ -142,6 +143,26 @@ def test_creation_request_accepts_creation_year_when_publication_year_is_also_pr
         "temporal",
         prompt,
     ) is True
+
+
+def test_creation_answer_rejects_affirmed_false_creator_premise():
+    prompt = "Mikor írta Wrong Author a Silver Storyt?"
+    evidence = {
+        "results": [{
+            "snippet": "Silver Story was written by Correct Author in 1912.",
+        }],
+    }
+
+    assert creation_answer_conflicts_with_evidence(
+        "Wrong Author (Correct Author) a Silver Storyt 1912-ben írta.",
+        prompt,
+        evidence,
+    ) is True
+    assert creation_answer_conflicts_with_evidence(
+        "Wrong Author nem írta a Silver Storyt; Correct Author írta 1912-ben.",
+        prompt,
+        evidence,
+    ) is False
 
 
 def test_hungarian_fallback_only_repeats_a_supported_requested_literal():
