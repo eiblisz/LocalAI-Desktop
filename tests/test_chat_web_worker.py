@@ -2966,3 +2966,125 @@ def test_entity_formation_question_uses_direct_fact_execution_budget():
     assert worker.request_profile.requested_fact == "temporal"
     assert worker.execution_control.budget.timeout_seconds == 45.0
     assert worker.execution_control.budget.max_search_calls == 2
+
+
+def test_debut_release_worker_forces_grounded_repair_for_invented_year_and_title(
+    monkeypatch,
+):
+    from app.request_trace import RequestTrace
+
+    prompt = "Mikor adta ki az első nagylemezét a sampleband együttes?"
+    search_calls = []
+    forced = []
+
+    class HallucinatingReleaseClient:
+        def __init__(self):
+            self.once_calls = []
+            self.stream_calls = []
+
+        def chat_once(self, model, messages, timeout=600.0, **kwargs):
+            self.once_calls.append((model, messages))
+            callback = kwargs.get("context_budget_callback")
+            if callback:
+                callback({
+                    "estimated_final_prompt_units": 700,
+                    "requested_output_units": 1024,
+                    "requested_num_ctx": 4096,
+                    "model_max_context": 32768,
+                    "context_budget_decision": "fits_default_context",
+                    "context_budget_safety_units": 192,
+                })
+            return (
+                'A sampleband "Mystery" című első nagylemeze '
+                "1979-ben jelent meg."
+            )
+
+        def chat_stream(self, *args, **kwargs):
+            self.stream_calls.append((args, kwargs))
+            raise AssertionError("direct factual release lookup must use single pass")
+
+    def fake_search(query, max_results=6, fetch_pages=True):
+        search_calls.append(query)
+        return {
+            "provider": "Brave Search API",
+            "query": query,
+            "retrieved_at": "2026-09-27T00:00:00",
+            "provider_chain_errors": [],
+            "results": [{
+                "title": "Sample Band discography",
+                "url": "https://example.com/sampleband",
+                "snippet": (
+                    "S.A.M.P.L.E.B.A.N.D. released its self-titled "
+                    "debut album in 1984."
+                ),
+                "page_text": (
+                    "S.A.M.P.L.E.B.A.N.D. released its self-titled "
+                    "debut album in 1984."
+                ),
+            }],
+        }
+
+    def capture_guard(client, model, user_prompt, answer, authority, **kwargs):
+        forced.append(kwargs.get("force_verify"))
+        assert "1984" in authority
+        assert "1979" not in authority
+        return "A sampleband első, saját nevét viselő albuma 1984-ben jelent meg."
+
+    monkeypatch.setattr(workers, "search_web", fake_search)
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: ["https://example.com/sampleband"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_entries",
+        lambda payload, limit=6: [{
+            "title": "Sample Band discography",
+            "url": "https://example.com/sampleband",
+        }],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: (
+            "S.A.M.P.L.E.B.A.N.D. released its self-titled debut album in 1984."
+        ),
+    )
+    monkeypatch.setattr(workers, "guard_grounded_answer", capture_guard)
+    monkeypatch.setattr(
+        workers,
+        "guard_current_turn_binding",
+        lambda client, model, prompt, answer, authority, **kwargs: answer,
+    )
+
+    trace = RequestTrace("test")
+    tokens = []
+    errors = []
+    client = HallucinatingReleaseClient()
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        prompt,
+        trace=trace,
+    )
+    worker.token.connect(tokens.append)
+    worker.failed.connect(errors.append)
+    worker.run()
+
+    assert errors == []
+    assert search_calls == ["sampleband debut first album release date year"]
+    assert forced == [True]
+    assert client.stream_calls == []
+    assert tokens == [
+        "A sampleband első, saját nevét viselő albuma 1984-ben jelent meg."
+    ]
+    snapshot = trace.snapshot()
+    assert snapshot["metadata"]["query_strategy"] == (
+        "premise_neutral_entity_release_relation"
+    )
+    assert snapshot["metadata"]["answer_temporal_literals_supported"] is False
+    assert snapshot["metadata"]["repaired_answer_temporal_literals_supported"] is True
+
+
