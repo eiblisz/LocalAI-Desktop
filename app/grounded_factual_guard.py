@@ -307,6 +307,11 @@ def guard_grounded_answer(
 
     repair = _collapse_adjacent_proper_name_repetition(repair)
     remaining = unsupported_grounded_literals(repair, authority_text)
+    if trace is not None:
+        trace.add_metadata(
+            factual_guard_force_verify=bool(force_verify),
+            factual_guard_initial_unsupported_literals=", ".join(remaining[:6]),
+        )
     if remaining:
         sanitized = _strip_unsupported_source_attributions(repair, remaining)
         sanitized_remaining = unsupported_grounded_literals(
@@ -318,8 +323,18 @@ def guard_grounded_answer(
         remaining = sanitized_remaining or remaining
 
     if remaining:
+        if trace is not None:
+            trace.add_metadata(
+                factual_guard_repair_status="unsupported_literals",
+                factual_guard_remaining_literals=", ".join(remaining[:6]),
+            )
         raise GroundedFactualGuardError(
             "Grounded answer still contains unsupported factual literals: "
             + ", ".join(remaining[:6])
+        )
+    if trace is not None:
+        trace.add_metadata(
+            factual_guard_repair_status="pass",
+            factual_guard_remaining_literals="",
         )
     return repair
