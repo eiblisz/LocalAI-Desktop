@@ -62,6 +62,20 @@ class ActionContract:
         return self.plan.artifact_plans
 
     @property
+    def runtime_output_budget(self):
+        """Canonical route-aware generation budget for execution surfaces."""
+        policy_budget = getattr(self.synthesis_policy, "output_budget", None)
+        constraint_budget = getattr(self.constraints, "output_budget", 1024)
+        return max(
+            1,
+            int(
+                constraint_budget
+                if policy_budget is None
+                else policy_budget
+            ),
+        )
+
+    @property
     def routing_reason(self):
         """The deterministic, model-independent reason for this route."""
         return str(self.plan.reason or "")
