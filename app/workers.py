@@ -32,6 +32,7 @@ from .direct_fact import (
     answer_contains_temporal_literal,
     answer_temporal_literals_supported_by_evidence,
     creation_answer_conflicts_with_evidence,
+    anchor_resolved_direct_fact_answer,
     derive_premise_neutral_query,
     deterministic_direct_fact_fallback,
     deterministic_hungarian_fact_fallback,
@@ -2073,6 +2074,23 @@ class ChatWebWorker(QObject):
                 raise RuntimeError("The model returned an empty web answer.")
 
             answer = self._repair_response_language(answer)
+
+            if resolved_direct_fact:
+                anchored = anchor_resolved_direct_fact_answer(
+                    answer,
+                    resolved_direct_fact,
+                    self.request_profile.requested_fact,
+                    language=effective_response_language(
+                        self._response_language_source()
+                    ),
+                )
+                if anchored:
+                    answer = anchored
+                    if self.trace is not None:
+                        self.trace.add_metadata(
+                            host_resolved_core_fact_applied=True,
+                        )
+
             answer = self._enforce_authoritative_facts(
                 answer,
                 authoritative_facts,
