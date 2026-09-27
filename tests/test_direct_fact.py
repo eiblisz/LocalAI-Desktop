@@ -1,6 +1,7 @@
 from app.direct_fact import (
     creation_answer_conflicts_with_evidence,
     derive_premise_neutral_query,
+    direct_fact_title_surface,
     supported_creator_surfaces,
     deterministic_hungarian_fact_fallback,
     targeted_fact_refinement_query,
@@ -30,6 +31,12 @@ def test_unmarked_hungarian_work_object_produces_premise_neutral_query():
     assert query == "Silver Story szerző keletkezés megírás éve"
     assert "Wrong Author" not in query
     assert strategy == "premise_neutral_title_relation"
+
+
+def test_direct_fact_title_surface_returns_prompt_work_lemma():
+    assert direct_fact_title_surface(
+        "Mikor írta Wrong Author a Toldit?"
+    ) == "Toldi"
 
 
 def test_unmarked_hungarian_object_search_surface_strips_accusative_only_for_search():
@@ -170,6 +177,32 @@ def test_creation_answer_rejects_false_creator_even_when_noisy_evidence_mentions
         prompt,
         evidence,
     ) is True
+
+
+def test_creation_answer_requires_verification_when_creator_evidence_is_missing():
+    prompt = "Mikor írta Wrong Author a Silver Storyt?"
+    evidence = {"results": [{"snippet": "Silver Story keletkezési éve 1912."}]}
+
+    assert creation_answer_conflicts_with_evidence(
+        "Wrong Author 1912-ben írta a Silver Storyt.",
+        prompt,
+        evidence,
+    ) is True
+
+
+def test_creation_answer_accepts_affirmed_creator_when_evidence_uniquely_supports_it():
+    prompt = "Mikor írta Correct Author a Silver Storyt?"
+    evidence = {
+        "results": [{
+            "snippet": "Silver Story was written by Correct Author in 1912.",
+        }],
+    }
+
+    assert creation_answer_conflicts_with_evidence(
+        "Correct Author 1912-ben írta a Silver Storyt.",
+        prompt,
+        evidence,
+    ) is False
 
 
 def test_creation_answer_rejects_affirmed_false_creator_premise():
