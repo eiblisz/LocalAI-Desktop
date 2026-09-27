@@ -3257,3 +3257,20 @@ def test_first_album_selection_repairs_subject_unbound_extra_title_but_keeps_gro
     assert snapshot["metadata"][
         "repaired_answer_release_named_literals_supported"
     ] is True
+
+
+def test_factual_strict_worker_cannot_be_widened_by_generic_constraint_budget():
+    prompt = "melyik nagylemez volt az elso a sampleband zenekarnak?"
+    worker = workers.ChatWebWorker(
+        DummyWebClient(),
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        prompt,
+        output_budget=1024,
+    )
+
+    assert worker.request_profile.kind == "direct_fact"
+    assert worker.sampling_profile == "factual_strict"
+    assert worker.output_budget == 384
+    assert worker.temperature == 0.0
+    assert worker.seed == 42
