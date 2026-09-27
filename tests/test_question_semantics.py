@@ -62,3 +62,14 @@ def test_debut_release_variants_share_temporal_release_semantics(prompt):
     assert semantics.requested_fact == "temporal"
     assert semantics.relation == "release"
 
+
+
+def test_ordinal_first_album_selection_is_direct_fact_release_semantics():
+    prompt = "Melyik nagylemez volt az első a sampleband zenekarnak?"
+    semantics = analyze_question(prompt)
+    profile = classify_request(prompt)
+
+    assert semantics.requested_fact == "selection"
+    assert semantics.relation == "release"
+    assert semantics.premise_check_required is True
+    assert profile.kind == TASK_DIRECT_FACT
