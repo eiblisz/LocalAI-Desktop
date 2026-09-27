@@ -20,6 +20,40 @@ def _fold(value):
     return canonical_match_text(_clean(value))
 
 
+def _hungarian_object_search_surface(value):
+    """Return a conservative search-only lemma for a Hungarian object surface.
+
+    This is used only after the grammar has already identified the object of
+    "mikor írta <subject> a/az <object>?". It never changes the user-visible
+    text or factual authority. The goal is to avoid sending an attached
+    accusative suffix into web search (for example "Toldit" -> "Toldi" or
+    "Silver Storyt" -> "Silver Story").
+    """
+    text = _clean(value)
+    if not text:
+        return text
+    parts = text.split()
+    token = parts[-1]
+    folded = _fold(token)
+
+    # Generic object nouns are not title candidates and are handled elsewhere.
+    # For title-like objects, prefer the smallest safe accusative removal.
+    replacement = token
+    if len(token) >= 4 and folded.endswith(("at", "et", "ot", "öt")):
+        stem = token[:-2]
+        # Only remove a linking vowel suffix when the resulting stem remains a
+        # plausible word surface. This covers forms such as "Hamletet".
+        if len(stem) >= 3:
+            replacement = stem
+    elif len(token) >= 3 and folded.endswith("t"):
+        replacement = token[:-1]
+
+    if replacement and replacement != token:
+        parts[-1] = replacement
+        return " ".join(parts)
+    return text
+
+
 def _marked_title(prompt):
     """Extract a title explicitly marked by quotes or title wording, if present."""
     raw = _clean(prompt)
@@ -81,7 +115,7 @@ def _marked_title(prompt):
             and any(token[:1].isupper() for token in subject_tokens)
             and _fold(candidate) not in generic_objects
         ):
-            return candidate
+            return _hungarian_object_search_surface(candidate)
     return ""
 
 
@@ -140,7 +174,7 @@ def derive_premise_neutral_query(prompt, requested_fact="general"):
 
     relation = requested_fact_relation(clean)
     temporal_suffixes = {
-        "creation": "composition writing date year",
+        "creation": "literary work author composition writing date year",
         "formation": "formation founding date year",
         "birth": "birth date year",
         "event": "event date year",
@@ -167,7 +201,7 @@ def targeted_fact_refinement_query(prompt, requested_fact="general"):
         return ""
 
     suffixes = {
-        "creation": "original composition year",
+        "creation": "literary work author original composition year",
         "formation": "formation year",
         "birth": "birth year",
         "event": "event date",
