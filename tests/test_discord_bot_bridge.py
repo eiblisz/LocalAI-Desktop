@@ -15,6 +15,7 @@ from app.discord_bot_bridge import (
     validate_bot_token,
 )
 from app.memory_store import MemoryStore
+from app.window_memory import WindowMemoryService
 from app.request_trace import RequestTrace
 from app.storage import ChatStore
 
@@ -447,6 +448,110 @@ def test_remote_fresh_general_prompt_omits_unrelated_persistent_memory(tmp_path:
 
     assert "LONG-TERM MEMORY CONTEXT:" not in system
     assert "Use a blue interface." not in system
+
+
+def test_remote_other_conversation_query_loads_cross_window_memory(tmp_path: Path):
+    class FakeOllama:
+        def __init__(self):
+            self.messages = None
+
+        def chat_once(self, model, messages):
+            self.messages = messages
+            return "Kék Sárkány 7319."
+
+    memory_store = MemoryStore(tmp_path / "memory.sqlite3")
+    WindowMemoryService(memory_store).index_user_message(
+        "desktop-other-chat",
+        "A tesztprojekt kódneve Kék Sárkány 7319.",
+        source_message_count=1,
+    )
+    memory_store.remember_explicit(
+        category="PROJECT",
+        scope="USER",
+        subject="Unrelated project",
+        key="codename",
+        value="Piros Holló 1111",
+        source_chat_id="durable-other",
+        source_excerpt="Unrelated durable memory.",
+    )
+
+    ollama = FakeOllama()
+    bridge = DiscordBotBridge(
+        ollama_client=ollama,
+        chat_store=ChatStore(tmp_path / "chats"),
+        settings=DiscordBotSettings(
+            extension_id="ext-cross-window",
+            name="Prometheusz",
+            guild_id=111111111111111111,
+            channel_id=222222222222222222,
+            allowed_user_id=333333333333333333,
+            model="qwen3-coder:30b",
+        ),
+        token="T" * 40,
+        memory_store=memory_store,
+    )
+    chat = bridge._load_remote_chat()
+    chat["messages"].extend([
+        {"role": "user", "content": "Ebben a Discord chatben más témáról beszélünk."},
+        {"role": "assistant", "content": "Rendben."},
+    ])
+    bridge.chat_store.save(chat)
+
+    trace = RequestTrace("discord")
+    answer, _chat_id = bridge._answer_prompt(
+        "Mi volt egy másik beszélgetésben a tesztprojekt kódneve?",
+        allow_web_fallback=False,
+        trace=trace,
+    )
+
+    assert answer == "Kék Sárkány 7319."
+    system = ollama.messages[0]["content"]
+    assert "OTHER CONVERSATION AUTHORITY:" in system
+    assert "RELATED WINDOW MEMORY:" in system
+    assert "Kék Sárkány 7319" in system
+    assert "Piros Holló 1111" not in system
+    assert all(
+        "Ebben a Discord chatben más témáról beszélünk." not in item["content"]
+        for item in ollama.messages
+    )
+    metadata = trace.snapshot()["metadata"]
+    assert metadata["memory_scope"] == "other_window"
+    assert metadata["cross_window_requested"] is True
+    assert metadata["cross_window_hit"] is True
+    assert metadata["related_window_count"] == 1
+
+
+def test_remote_high_value_user_state_is_indexed_for_future_cross_window_recall(
+    tmp_path: Path,
+):
+    class FakeOllama:
+        def chat_once(self, model, messages):
+            return "Rendben."
+
+    memory_store = MemoryStore(tmp_path / "memory.sqlite3")
+    bridge = DiscordBotBridge(
+        ollama_client=FakeOllama(),
+        chat_store=ChatStore(tmp_path / "chats"),
+        settings=DiscordBotSettings(
+            extension_id="ext-index-discord-window",
+            name="Prometheusz",
+            guild_id=111111111111111111,
+            channel_id=222222222222222222,
+            allowed_user_id=333333333333333333,
+            model="qwen3-coder:30b",
+        ),
+        token="T" * 40,
+        memory_store=memory_store,
+    )
+
+    _answer, chat_id = bridge._answer_prompt(
+        "A tesztprojekt kódneve Zöld Sólyom 4421.",
+        allow_web_fallback=False,
+    )
+
+    window = memory_store.get_window_memory(chat_id)
+    assert window is not None
+    assert "Zöld Sólyom 4421" in window["indexed_state"]
 
 
 def test_remote_current_conversation_query_excludes_long_term_memory(tmp_path: Path):
