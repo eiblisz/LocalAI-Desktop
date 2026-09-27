@@ -29,6 +29,7 @@ from .evidence_verifier import (
 from .followup_resolution import resolve_contextual_followup
 from .current_turn_binding import guard_current_turn_binding
 from .direct_fact import (
+    answer_contains_temporal_literal,
     creation_answer_conflicts_with_evidence,
     derive_premise_neutral_query,
     deterministic_hungarian_fact_fallback,
@@ -2047,7 +2048,13 @@ class ChatWebWorker(QObject):
                         repaired_answer_relation_supported=repaired_relation_supported,
                         repaired_answer_creator_binding_supported=repaired_creator_supported,
                     )
-                if not repaired_relation_supported or not repaired_creator_supported:
+                if (
+                    answer_contains_temporal_literal(answer)
+                    and (
+                        not repaired_relation_supported
+                        or not repaired_creator_supported
+                    )
+                ):
                     raise GroundedFactualGuardError(
                         "Grounded factual repair did not preserve the requested "
                         "creator/date relation."
