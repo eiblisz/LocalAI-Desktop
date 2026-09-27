@@ -237,41 +237,57 @@ def test_fluency_audit_accepts_schema_bound_status_and_findings_contract():
     )
 
     assert result == draft.replace("működéskére", "működésre")
-    assert client.audit_format is None
+    assert isinstance(client.audit_format, dict)
+    assert client.audit_format["properties"]["status"]["minItems"] == 2
 
 
-def test_fluency_audit_transport_omits_native_ollama_format():
+def test_fluency_audit_falls_back_to_plain_json_after_schema_http_400():
     prompt = "Válaszolj magyarul."
     draft = "Ez egy jó mondat."
+
+    class Response:
+        status_code = 400
+        text = ""
+
+    class SchemaRejected(Exception):
+        def __init__(self):
+            super().__init__("400 Client Error: Bad Request")
+            self.response = Response()
 
     class PlainJsonAuditClient:
         supports_hungarian_fluency_audit = True
 
         def __init__(self):
-            self.kwargs = None
+            self.calls = []
 
         def chat_once(self, model, messages, **kwargs):
-            if "Hungarian fluency classifier" in messages[0]["content"]:
-                self.kwargs = dict(kwargs)
-                return json.dumps({
-                    "status": ["pass"],
-                    "findings": [],
-                })
-            raise AssertionError("unexpected repair call")
+            if "Hungarian fluency classifier" not in messages[0]["content"]:
+                raise AssertionError("unexpected repair call")
+            self.calls.append(dict(kwargs))
+            if kwargs.get("response_format") is not None:
+                raise SchemaRejected()
+            segments = _audit_segments(messages)
+            return json.dumps({
+                "judgments": [[item["id"], "pass"] for item in segments],
+            })
 
     client = PlainJsonAuditClient()
+    trace = RequestTrace("desktop")
     result = guard_response(
         client,
         "eurollm:9b-q4",
         prompt,
         draft,
         constraints=build_task_constraints(prompt),
+        trace=trace,
     )
 
     assert result == draft
-    assert client.kwargs is not None
-    assert "response_format" not in client.kwargs
-    assert client.kwargs["call_phase"] == "hungarian_fluency_audit"
+    assert len(client.calls) == 2
+    assert isinstance(client.calls[0]["response_format"], dict)
+    assert "response_format" not in client.calls[1]
+    assert client.calls[1]["num_predict"] == 192
+    assert trace.snapshot()["metadata"]["fluency_audit_transport"] == "plain_json_fallback"
 
 
 def test_fluency_audit_reconciles_pass_status_with_reasoned_exact_finding():
