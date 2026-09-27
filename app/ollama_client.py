@@ -161,6 +161,11 @@ def _tag_ollama_failure(
         if preparation_reason:
             detail = " ".join(str(preparation_reason).split())
             exc.localai_ollama_preparation_reason = detail[:500]
+        generic_detail = " ".join(str(exc or "").split())
+        if generic_detail:
+            exc.localai_ollama_failure_detail = (
+                f"{type(exc).__name__}: {generic_detail}"[:500]
+            )
         response = getattr(exc, "response", None)
         status = getattr(response, "status_code", None)
         if status is not None:
@@ -247,6 +252,7 @@ def ollama_failure_metadata(exc):
         ("localai_ollama_http_detail", "ollama_http_detail"),
         ("localai_ollama_call_phase", "ollama_call_phase"),
         ("localai_ollama_preparation_reason", "ollama_preparation_reason"),
+        ("localai_ollama_failure_detail", "ollama_failure_detail"),
         ("localai_estimated_final_prompt_units", "estimated_final_prompt_units"),
         ("localai_requested_output_units", "requested_output_units"),
         ("localai_requested_num_ctx", "requested_num_ctx"),
@@ -262,6 +268,8 @@ def ollama_failure_metadata(exc):
             "localai_model_warmup_requested_num_ctx",
             "model_warmup_requested_num_ctx",
         ),
+        ("localai_post_warmup_retry_attempted", "post_warmup_retry_attempted"),
+        ("localai_post_warmup_retry_result", "post_warmup_retry_result"),
     ):
         value = getattr(exc, attribute, None)
         if value is not None:
@@ -467,6 +475,8 @@ class OllamaClient:
             "model_warmup_result": "not_needed",
             "model_resident_after": False,
             "model_warmup_requested_num_ctx": int(requested_num_ctx),
+            "post_warmup_retry_attempted": False,
+            "post_warmup_retry_result": "not_needed",
         }
         loaded_before = loaded_ollama_models(
             self,
@@ -489,13 +499,10 @@ class OllamaClient:
             metadata["model_resident_after"] = True
             return metadata
 
-        # A cold target while a different model is resident is a genuine
-        # shared-runtime transition. Verify that no external consumer owns the
-        # current workload before asking Ollama to load another model. This
-        # does not unload or kill anything; it only blocks unsafe contention.
-        if not resident_before and loaded_before:
-            self._assert_external_switch_safe(target)
-
+        # Warmup itself is intentionally non-destructive: it never unloads,
+        # kills, or restarts Ollama. Unknown established HTTP sockets therefore
+        # must not block an ordinary model load. Ownership checks remain on the
+        # explicit unload/release paths below.
         metadata["model_warmup_reason"] = (
             "cold_model"
             if not resident_before
@@ -948,8 +955,55 @@ class OllamaClient:
                     timeout=timeout,
                 )
                 response.raise_for_status()
-                item = response.json()
-                result = item.get("message", {}).get("content", "")
+                try:
+                    item = response.json()
+                    if not isinstance(item, dict):
+                        raise TypeError(
+                            "Ollama /api/chat returned a non-object JSON response."
+                        )
+                    message = item.get("message") or {}
+                    if not isinstance(message, dict):
+                        raise TypeError(
+                            "Ollama /api/chat returned an invalid message object."
+                        )
+                    result = message.get("content", "")
+                except Exception:
+                    retry_allowed = bool(
+                        context_budget.get("model_warmup_required")
+                        and context_budget.get("model_warmup_result") == "ready"
+                    )
+                    if not retry_allowed:
+                        raise
+                    context_budget["post_warmup_retry_attempted"] = True
+                    context_budget["post_warmup_retry_result"] = "retrying"
+                    self._notify_context_budget(
+                        context_budget_callback,
+                        context_budget,
+                    )
+                    retry_response = requests.post(
+                        f"{self.base_url}/api/chat",
+                        json=payload,
+                        timeout=timeout,
+                    )
+                    retry_response.raise_for_status()
+                    item = retry_response.json()
+                    if not isinstance(item, dict):
+                        context_budget["post_warmup_retry_result"] = "failed"
+                        raise TypeError(
+                            "Ollama /api/chat retry returned a non-object JSON response."
+                        )
+                    message = item.get("message") or {}
+                    if not isinstance(message, dict):
+                        context_budget["post_warmup_retry_result"] = "failed"
+                        raise TypeError(
+                            "Ollama /api/chat retry returned an invalid message object."
+                        )
+                    result = message.get("content", "")
+                    context_budget["post_warmup_retry_result"] = "success"
+                    self._notify_context_budget(
+                        context_budget_callback,
+                        context_budget,
+                    )
             else:
                 parts = []
                 item = {}
