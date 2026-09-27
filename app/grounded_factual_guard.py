@@ -236,6 +236,8 @@ def guard_grounded_answer(
     force_verify=False,
     language_instruction="",
     output_budget=None,
+    temperature=None,
+    seed=None,
 ):
     draft = _collapse_adjacent_proper_name_repetition(str(answer or "").strip())
     unsupported = unsupported_grounded_literals(draft, authority_text)
@@ -305,13 +307,26 @@ def guard_grounded_answer(
     }
     if output_budget is not None:
         repair_kwargs["num_predict"] = int(output_budget)
-    try:
-        repair = client.chat_once(**repair_kwargs).strip()
-    except TypeError as exc:
-        if "num_predict" not in str(exc) or "num_predict" not in repair_kwargs:
-            raise
-        repair_kwargs.pop("num_predict")
-        repair = client.chat_once(**repair_kwargs).strip()
+    if temperature is not None:
+        repair_kwargs["temperature"] = float(temperature)
+    if seed is not None:
+        repair_kwargs["seed"] = int(seed)
+    while True:
+        try:
+            repair = client.chat_once(**repair_kwargs).strip()
+            break
+        except TypeError as exc:
+            unsupported = next(
+                (
+                    name
+                    for name in ("num_predict", "temperature", "seed")
+                    if name in str(exc) and name in repair_kwargs
+                ),
+                "",
+            )
+            if not unsupported:
+                raise
+            repair_kwargs.pop(unsupported)
 
     if trace is not None:
         trace.end("factual_guard_repair")
