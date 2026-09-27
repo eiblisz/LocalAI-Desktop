@@ -688,6 +688,62 @@ class DiscordBotBridge(QObject):
             )
         return recall
 
+    def _direct_cross_window_memory_recall(self, query, chat_id, *, trace=None):
+        """Return one exact value from other-window indexed user state when unambiguous."""
+        if self.memory_store is None:
+            return None
+        if trace is not None:
+            trace.begin("memory_scope_resolution")
+            trace.end(
+                "memory_scope_resolution",
+                memory_scope="other_window",
+                memory_reason="explicit_other_window_reference",
+                cross_window_requested=True,
+                global_memory_requested=False,
+            )
+            trace.mark_duration("current_raw_context_retrieval", 0)
+            trace.mark_duration("window_memory_retrieval", 0)
+            trace.begin("cross_window_retrieval")
+        related = self.memory_store.search_window_memories(
+            query,
+            exclude_chat_id=str(chat_id or ""),
+            limit=2,
+        )
+        if trace is not None:
+            trace.end(
+                "cross_window_retrieval",
+                cross_window_hit=bool(related),
+                cross_window_retrieved_count=len(related),
+            )
+            trace.mark_duration("global_memory_retrieval", 0)
+            trace.begin("direct_memory_recall")
+        indexed_state = "\n".join(
+            str(item.get("matched_state") or "").strip()
+            for item in related
+            if str(item.get("matched_state") or "").strip()
+        )
+        recall = resolve_current_conversation_recall(
+            query,
+            messages=(),
+            indexed_state=indexed_state,
+            summary="",
+        )
+        if trace is not None:
+            trace.end(
+                "direct_memory_recall",
+                current_window_hit=False,
+                cross_window_hit=recall.is_direct_hit,
+                global_memory_hit=False,
+                retrieved_item_count=len(related),
+                recall_candidate_count=recall.candidate_count,
+                recall_source=(
+                    "related_window_indexed_state"
+                    if recall.is_direct_hit
+                    else "none"
+                ),
+            )
+        return recall
+
     def _build_memory_context(self, query, limit=8):
         if self.memory_store is None:
             return ""
@@ -1353,27 +1409,56 @@ class DiscordBotBridge(QObject):
             if conversation_local
             else None
         )
+        cross_window_recall = (
+            self._direct_cross_window_memory_recall(
+                prompt,
+                str(chat.get("id", "") or ""),
+                trace=trace,
+            )
+            if (not conversation_local and is_other_window_request(prompt))
+            else None
+        )
         direct_conversation_answer = False
-        if conversation_recall is not None and conversation_recall.is_direct_hit:
+        direct_cross_window_answer = False
+        recall_to_validate = (
+            conversation_recall
+            if conversation_recall is not None and conversation_recall.is_direct_hit
+            else (
+                cross_window_recall
+                if cross_window_recall is not None and cross_window_recall.is_direct_hit
+                else None
+            )
+        )
+        if recall_to_validate is not None:
             if trace is not None:
                 trace.begin("language_validation")
-            direct_conversation_answer = is_safe_direct_recall(
+            recall_valid = is_safe_direct_recall(
                 prompt,
-                conversation_recall,
+                recall_to_validate,
                 constraints=constraints,
+            )
+            direct_conversation_answer = bool(
+                recall_valid and recall_to_validate is conversation_recall
+            )
+            direct_cross_window_answer = bool(
+                recall_valid and recall_to_validate is cross_window_recall
             )
             if trace is not None:
                 trace.end(
                     "language_validation",
-                    direct_memory_language_valid=direct_conversation_answer,
+                    direct_memory_language_valid=recall_valid,
                 )
         direct_answer = (
             conversation_recall.answer
             if direct_conversation_answer
             else (
-                ""
-                if conversation_local or is_other_window_request(prompt)
-                else self._direct_compound_answer(prompt)
+                cross_window_recall.answer
+                if direct_cross_window_answer
+                else (
+                    ""
+                    if conversation_local or is_other_window_request(prompt)
+                    else self._direct_compound_answer(prompt)
+                )
             )
         )
         if direct_answer:
@@ -1395,7 +1480,7 @@ class DiscordBotBridge(QObject):
                 "role": "assistant",
                 "content": direct_answer,
             }
-            if conversation_recall is not None:
+            if direct_conversation_answer:
                 assistant_message["diagnostic"] = {
                     "memory_scope": "current_window",
                     "current_window_hit": True,
@@ -1405,13 +1490,27 @@ class DiscordBotBridge(QObject):
                     "recent_raw_message_count": conversation_recall.recent_raw_message_count,
                     "direct_memory_fast_path": True,
                 }
+            elif direct_cross_window_answer:
+                assistant_message["diagnostic"] = {
+                    "memory_scope": "other_window",
+                    "current_window_hit": False,
+                    "cross_window_hit": True,
+                    "global_memory_hit": False,
+                    "retrieved_item_count": cross_window_recall.retrieved_item_count,
+                    "recent_raw_message_count": 0,
+                    "direct_memory_fast_path": True,
+                }
             chat["messages"].append(assistant_message)
             self.chat_store.save(chat)
             if trace is not None:
                 trace.end("persistence")
                 trace.add_metadata(
-                    direct_memory_fast_path=bool(conversation_recall),
-                    ollama_skipped=bool(conversation_recall),
+                    direct_memory_fast_path=bool(
+                        direct_conversation_answer or direct_cross_window_answer
+                    ),
+                    ollama_skipped=bool(
+                        direct_conversation_answer or direct_cross_window_answer
+                    ),
                 )
             return direct_answer, str(chat.get("id", ""))
 
