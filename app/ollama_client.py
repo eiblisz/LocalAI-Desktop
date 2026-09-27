@@ -961,7 +961,7 @@ class OllamaClient:
                         raise TypeError(
                             "Ollama /api/chat returned a non-object JSON response."
                         )
-                    message = item.get("message") or {}
+                    message = item.get("message")
                     if not isinstance(message, dict):
                         raise TypeError(
                             "Ollama /api/chat returned an invalid message object."
@@ -992,7 +992,7 @@ class OllamaClient:
                         raise TypeError(
                             "Ollama /api/chat retry returned a non-object JSON response."
                         )
-                    message = item.get("message") or {}
+                    message = item.get("message")
                     if not isinstance(message, dict):
                         context_budget["post_warmup_retry_result"] = "failed"
                         raise TypeError(
