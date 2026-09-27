@@ -2301,6 +2301,16 @@ class MainWindow(QMainWindow):
             ("Repair integrity result", metadata.get("repair_integrity_result")),
             ("Repair integrity issues", metadata.get("repair_integrity_issues")),
             ("Repair integrity evidence", metadata.get("repair_integrity_evidence")),
+            ("Factual guard force verify", metadata.get("factual_guard_force_verify")),
+            ("Factual guard repair", metadata.get("factual_guard_repair_status")),
+            (
+                "Factual guard initial unsupported",
+                metadata.get("factual_guard_initial_unsupported_literals"),
+            ),
+            (
+                "Factual guard remaining unsupported",
+                metadata.get("factual_guard_remaining_literals"),
+            ),
             (
                 "Profile",
                 diagnostic.get("request_kind")
