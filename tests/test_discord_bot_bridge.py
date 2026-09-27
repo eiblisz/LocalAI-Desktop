@@ -453,11 +453,11 @@ def test_remote_fresh_general_prompt_omits_unrelated_persistent_memory(tmp_path:
 def test_remote_other_conversation_query_loads_cross_window_memory(tmp_path: Path):
     class FakeOllama:
         def __init__(self):
-            self.messages = None
+            self.calls = 0
 
         def chat_once(self, model, messages):
-            self.messages = messages
-            return "Kék Sárkány 7319."
+            self.calls += 1
+            raise AssertionError("unambiguous cross-window recall must skip Ollama")
 
     memory_store = MemoryStore(tmp_path / "memory.sqlite3")
     WindowMemoryService(memory_store).index_user_message(
@@ -505,20 +505,129 @@ def test_remote_other_conversation_query_loads_cross_window_memory(tmp_path: Pat
     )
 
     assert answer == "Kék Sárkány 7319."
-    system = ollama.messages[0]["content"]
-    assert "OTHER CONVERSATION AUTHORITY:" in system
-    assert "RELATED WINDOW MEMORY:" in system
-    assert "Kék Sárkány 7319" in system
-    assert "Piros Holló 1111" not in system
-    assert all(
-        "Ebben a Discord chatben más témáról beszélünk." not in item["content"]
-        for item in ollama.messages
-    )
+    assert ollama.calls == 0
     metadata = trace.snapshot()["metadata"]
     assert metadata["memory_scope"] == "other_window"
     assert metadata["cross_window_requested"] is True
     assert metadata["cross_window_hit"] is True
-    assert metadata["related_window_count"] == 1
+    assert metadata["direct_memory_fast_path"] is True
+    assert metadata["ollama_skipped"] is True
+
+
+def test_remote_other_window_recall_falls_back_to_raw_user_chat_history(
+    tmp_path: Path,
+):
+    class NoModel:
+        def __init__(self):
+            self.calls = 0
+
+        def chat_once(self, model, messages):
+            self.calls += 1
+            raise AssertionError("raw user-history recall must skip Ollama")
+
+    store = ChatStore(tmp_path / "chats")
+    source = store.new_chat(model="gemma4:26b")
+    source["messages"].extend([
+        {
+            "role": "user",
+            "content": "A tesztprojekt kódneve Kék Sárkány 7319.",
+        },
+        {
+            "role": "assistant",
+            "content": (
+                "A tesztprojekt kódneve AlphaTest volt, és ez egy korai "
+                "fejlesztési projekt volt."
+            ),
+        },
+        {
+            "role": "assistant",
+            "content": "A másik ablakban a tesztprojekt kódneve Kisvillanás volt.",
+        },
+    ])
+    store.save(source)
+
+    model = NoModel()
+    bridge = DiscordBotBridge(
+        ollama_client=model,
+        chat_store=store,
+        settings=DiscordBotSettings(
+            extension_id="ext-raw-cross-window",
+            name="Prometheusz",
+            guild_id=111111111111111111,
+            channel_id=222222222222222222,
+            allowed_user_id=333333333333333333,
+            model="gemma4:26b",
+        ),
+        token="T" * 40,
+        memory_store=MemoryStore(tmp_path / "memory.sqlite3"),
+    )
+
+    trace = RequestTrace("discord")
+    answer, _chat_id = bridge._answer_prompt(
+        "Mi volt egy másik ablakban a tesztprojekt kódneve?",
+        allow_web_fallback=False,
+        trace=trace,
+    )
+
+    assert answer == "Kék Sárkány 7319."
+    assert "AlphaTest" not in answer
+    assert "Kisvillanás" not in answer
+    assert model.calls == 0
+    metadata = trace.snapshot()["metadata"]
+    assert metadata["cross_window_hit"] is True
+    assert metadata["recall_source"] == "raw_user_chat_history"
+    assert metadata["ollama_skipped"] is True
+
+
+def test_remote_other_window_recall_fails_closed_on_conflicting_user_values(
+    tmp_path: Path,
+):
+    class NoModel:
+        def chat_once(self, model, messages):
+            raise AssertionError("ambiguous cross-window recall must skip Ollama")
+
+    store = ChatStore(tmp_path / "chats")
+    first = store.new_chat()
+    first["messages"].append({
+        "role": "user",
+        "content": "A tesztprojekt kódneve Első Érték 1111.",
+    })
+    store.save(first)
+    second = store.new_chat()
+    second["messages"].append({
+        "role": "user",
+        "content": "A tesztprojekt kódneve Második Érték 2222.",
+    })
+    store.save(second)
+
+    bridge = DiscordBotBridge(
+        ollama_client=NoModel(),
+        chat_store=store,
+        settings=DiscordBotSettings(
+            extension_id="ext-ambiguous-cross-window",
+            name="Prometheusz",
+            guild_id=111111111111111111,
+            channel_id=222222222222222222,
+            allowed_user_id=333333333333333333,
+            model="gemma4:26b",
+        ),
+        token="T" * 40,
+        memory_store=MemoryStore(tmp_path / "memory.sqlite3"),
+    )
+
+    trace = RequestTrace("discord")
+    answer, _chat_id = bridge._answer_prompt(
+        "Mi volt egy másik ablakban a tesztprojekt kódneve?",
+        allow_web_fallback=False,
+        trace=trace,
+    )
+
+    assert "Több eltérő, releváns értéket találtam" in answer
+    assert "1111" not in answer
+    assert "2222" not in answer
+    metadata = trace.snapshot()["metadata"]
+    assert metadata["cross_window_ambiguous"] is True
+    assert metadata["ollama_skipped"] is True
 
 
 def test_remote_high_value_user_state_is_indexed_for_future_cross_window_recall(
