@@ -25,5 +25,6 @@ def test_safe_hungarian_case_suffixes_match_only_an_explicit_entity_base():
     assert is_safe_hungarian_entity_surface("Toldit", "Toldi")
     assert is_safe_hungarian_entity_surface("Pokolgépről", "Pokolgép")
     assert is_safe_hungarian_entity_surface("Petőfi Sándort", "Petőfi Sándor")
+    assert is_safe_hungarian_entity_surface("Kisfaludy Társaságnál", "Kisfaludy Társaság")
     assert not is_safe_hungarian_entity_surface("Petoffi", "Petőfi")
     assert not is_safe_hungarian_entity_surface("Petőfi János", "Petőfi")
