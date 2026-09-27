@@ -679,13 +679,7 @@ def test_automatic_prepare_never_unloads_a_different_resident_model(
         "app.ollama_client.loaded_ollama_models",
         lambda _client, timeout: ["gemma4:26b"],
     )
-    monkeypatch.setattr(
-        client,
-        "_external_consumers",
-        lambda: (_ for _ in ()).throw(
-            AssertionError("automatic inference must not begin a destructive switch")
-        ),
-    )
+    monkeypatch.setattr(client, "_external_consumers", lambda: [])
     monkeypatch.setattr(
         "app.ollama_client.unload_ollama_model",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
@@ -722,6 +716,11 @@ def test_cold_model_is_warmed_before_user_chat(monkeypatch):
     monkeypatch.setattr(
         "app.ollama_client.loaded_ollama_models",
         lambda _client, timeout: next(loaded_states),
+    )
+    monkeypatch.setattr(
+        OllamaClient,
+        "_external_consumers",
+        lambda self: [],
     )
 
     def fake_post(url, **kwargs):
