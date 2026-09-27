@@ -71,6 +71,8 @@ _MAX_REPAIR_SPAN_CHARS = 900
 _MAX_FLUENCY_FINDINGS = 8
 _MAX_FLUENCY_SPAN_CHARS = 280
 _MAX_FLUENCY_SPANS_PER_SENTENCE = 3
+_FLUENCY_AUDIT_SCHEMA_BUDGET = 256
+_FLUENCY_AUDIT_FALLBACK_BUDGET = 192
 _FLUENCY_REASON_CODES = frozenset({
     "malformed_morphology",
     "agreement_or_inflection",
@@ -336,6 +338,46 @@ def _fluency_audit_messages(segments):
     ]
 
 
+def _fluency_audit_fallback_messages(segments):
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are a Hungarian fluency classifier. Return ONLY one compact JSON "
+                "object with a judgments field and no explanation. judgments MUST contain "
+                "exactly one array per supplied segment in the same order. Use "
+                "[id, \"pass\"] for a clean segment. For a real fluency problem use "
+                "[id, reason, [\"exact span\"]], where reason is one of: "
+                "malformed_morphology, agreement_or_inflection, broken_phrase, "
+                "hybrid_or_pseudoword, duplicated_morphology, "
+                "semantic_language_corruption. Exact spans must be copied byte-for-byte "
+                "from that segment. Do not rewrite text. Do not flag proper names, URLs, "
+                "numbers, code, or ordinary English technical terms. Stop immediately "
+                "after the closing JSON brace."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "USER-VISIBLE RESPONSE SEGMENTS TO AUDIT:\n"
+                + json.dumps(
+                    [{"id": item["id"], "text": item["text"]} for item in segments],
+                    ensure_ascii=False,
+                )
+            ),
+        },
+    ]
+
+
+def _http_status_from_exception(exc):
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    try:
+        return int(status) if status is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _chat_once_compat(client, call_kwargs):
     """Call shared clients while allowing existing lightweight extension clients."""
     while True:
@@ -592,18 +634,56 @@ def _run_hungarian_fluency_audit(
     call_kwargs = {
         "model": model,
         "messages": _fluency_audit_messages(segments),
-        "num_predict": 512,
+        "num_predict": _FLUENCY_AUDIT_SCHEMA_BUDGET,
         "call_phase": "hungarian_fluency_audit",
-        # Deliberately omit Ollama's native format field. Some otherwise valid
-        # local model templates reject both JSON schemas and format="json" with
-        # HTTP 400. The prompt still requires strict JSON and the host parser
-        # below enforces the exact status/findings contract.
+        "response_format": _fluency_audit_response_schema(len(segments)),
     }
     if control is not None:
         call_kwargs["control"] = control
+    audit_transport = "schema"
+    try:
+        raw_audit = _chat_once_compat(client, dict(call_kwargs))
+    except Exception as exc:
+        if _http_status_from_exception(exc) != 400:
+            if trace is not None:
+                trace.end(
+                    "hungarian_fluency_audit",
+                    hungarian_fluency_audit_result="failed",
+                    fluency_audit_transport=audit_transport,
+                    fluency_audit_failure_reason=_bounded_response_evidence(
+                        str(exc), limit=220
+                    ),
+                )
+            raise
+        # Some local model templates reject Ollama's native format/schema
+        # field even though they can emit valid JSON when asked in plain chat.
+        # Fall back on the same model with a much smaller one-line judgments
+        # contract; do not switch models or touch shared VRAM state.
+        fallback_kwargs = {
+            "model": model,
+            "messages": _fluency_audit_fallback_messages(segments),
+            "num_predict": _FLUENCY_AUDIT_FALLBACK_BUDGET,
+            "call_phase": "hungarian_fluency_audit",
+        }
+        if control is not None:
+            fallback_kwargs["control"] = control
+        audit_transport = "plain_json_fallback"
+        try:
+            raw_audit = _chat_once_compat(client, fallback_kwargs)
+        except Exception as fallback_exc:
+            if trace is not None:
+                trace.end(
+                    "hungarian_fluency_audit",
+                    hungarian_fluency_audit_result="failed",
+                    fluency_audit_transport=audit_transport,
+                    fluency_audit_failure_reason=_bounded_response_evidence(
+                        str(fallback_exc), limit=220
+                    ),
+                )
+            raise
     try:
         audit = _parse_fluency_audit(
-            _chat_once_compat(client, call_kwargs),
+            raw_audit,
             response_text,
             segments,
         )
@@ -612,7 +692,10 @@ def _run_hungarian_fluency_audit(
             trace.end(
                 "hungarian_fluency_audit",
                 hungarian_fluency_audit_result="failed",
-                fluency_audit_failure_reason=_bounded_response_evidence(str(exc), limit=220),
+                fluency_audit_transport=audit_transport,
+                fluency_audit_failure_reason=_bounded_response_evidence(
+                    str(exc), limit=220
+                ),
             )
         raise
 
@@ -624,6 +707,7 @@ def _run_hungarian_fluency_audit(
                 if audit.sentences_unresolved
                 else ("repair_required" if audit.findings else "pass")
             ),
+            fluency_audit_transport=audit_transport,
             fluency_audit_evidence=json.dumps(
                 [item["text"] for item in audit.findings], ensure_ascii=False,
             ),
