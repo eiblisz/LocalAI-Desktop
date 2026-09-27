@@ -782,7 +782,9 @@ def test_cold_model_is_warmed_before_user_chat(monkeypatch):
     monkeypatch.setattr(
         OllamaClient,
         "_external_consumers",
-        lambda self: [],
+        lambda self: (_ for _ in ()).throw(
+            AssertionError("non-destructive warmup must not probe external consumers")
+        ),
     )
 
     def fake_post(url, **kwargs):
@@ -811,6 +813,56 @@ def test_cold_model_is_warmed_before_user_chat(monkeypatch):
     assert decisions[-1]["model_warmup_reason"] == "cold_model"
     assert decisions[-1]["model_warmup_result"] == "ready"
     assert decisions[-1]["model_resident_after"] is True
+
+
+def test_post_warmup_chat_retries_once_after_successful_http_parse_shape_failure(
+    monkeypatch,
+):
+    target = "eurollm:9b-q4"
+    loaded_states = iter([
+        [],       # prepare_model
+        [],       # readiness preflight
+        [target], # readiness poll
+    ])
+    posts = []
+    decisions = []
+
+    class InvalidShapeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"message": None}
+
+    responses = iter([
+        _Response(),            # warmup
+        InvalidShapeResponse(), # first user chat: HTTP 2xx, invalid payload shape
+        _Response(),            # bounded retry succeeds
+    ])
+
+    monkeypatch.setattr(
+        "app.ollama_client.loaded_ollama_models",
+        lambda _client, timeout: next(loaded_states),
+    )
+
+    def fake_post(url, **kwargs):
+        posts.append(url)
+        return next(responses)
+
+    monkeypatch.setattr("app.ollama_client.requests.post", fake_post)
+
+    result = OllamaClient(auto_prepare_model=True).chat_once(
+        model=target,
+        messages=[{"role": "user", "content": "test"}],
+        context_budget_callback=decisions.append,
+    )
+
+    assert result == "ok"
+    assert posts[0].endswith("/api/generate")
+    assert posts[1].endswith("/api/chat")
+    assert posts[2].endswith("/api/chat")
+    assert decisions[-1]["post_warmup_retry_attempted"] is True
+    assert decisions[-1]["post_warmup_retry_result"] == "success"
 
 
 def test_large_resident_model_preflights_requested_context(monkeypatch):
