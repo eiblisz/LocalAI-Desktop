@@ -2983,7 +2983,7 @@ def test_debut_release_worker_forces_grounded_repair_for_invented_year_and_title
             self.stream_calls = []
 
         def chat_once(self, model, messages, timeout=600.0, **kwargs):
-            self.once_calls.append((model, messages))
+            self.once_calls.append((model, messages, dict(kwargs)))
             callback = kwargs.get("context_budget_callback")
             if callback:
                 callback({
