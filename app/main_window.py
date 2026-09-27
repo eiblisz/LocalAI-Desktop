@@ -2338,6 +2338,10 @@ class MainWindow(QMainWindow):
                 metadata.get("host_resolved_direct_fact_title"),
             ),
             (
+                "Host-resolved core fact applied",
+                metadata.get("host_resolved_core_fact_applied"),
+            ),
+            (
                 "Host-resolved core fact year",
                 metadata.get("host_resolved_direct_fact_year"),
             ),
