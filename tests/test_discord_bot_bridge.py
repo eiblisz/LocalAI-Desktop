@@ -1675,7 +1675,7 @@ def test_discord_factual_web_path_uses_bounded_relevant_authority(tmp_path: Path
                 assert len(authority) < 9000
                 return (
                     "Wrong Author nem írta a Silver Story című művet; "
-                    "a mű Correct Author alkotása, és 1912-ben jelent meg."
+                    "Correct Author írta 1912-ben."
                 )
             if "Repair the grounded answer" in system:
                 authority = str(messages[-1].get("content") or "")
@@ -1685,7 +1685,7 @@ def test_discord_factual_web_path_uses_bounded_relevant_authority(tmp_path: Path
                 return (
                     "Wrong Author nem írta a Silver Story című művet; "
                     "a források Correct Authort nevezik meg alkotóként, "
-                    "és 1912-es megjelenést támasztanak alá."
+                    "és 1912-es keletkezést támasztanak alá."
                 )
             return "unused"
 
@@ -1717,12 +1717,10 @@ def test_discord_factual_web_path_uses_bounded_relevant_authority(tmp_path: Path
             "title": "Correct Author: Silver Story",
             "url": "https://example.com/silver-story",
             "snippet": (
-                "Silver Story is a work by Correct Author and was first "
-                "published in 1912."
+                "Correct Author wrote Silver Story in 1912."
             ),
             "page_text": (
-                "Silver Story is a work by Correct Author and was first "
-                "published in 1912."
+                "Correct Author wrote Silver Story in 1912."
             ),
         }
         return {
