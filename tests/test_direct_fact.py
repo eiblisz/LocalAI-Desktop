@@ -420,7 +420,7 @@ def test_host_resolves_self_titled_debut_selection_from_bound_evidence():
     prompt = "melyik nagylemez volt az elso a wasp zenekarnak?"
     evidence = {
         "results": [{
-            "title": "W.A.S.P. (album) - Wikipedia",
+            "title": "W.A.S.P. discography",
             "snippet": (
                 "W.A.S.P. is the debut studio album by American heavy metal "
                 "band W.A.S.P., released in 1984."
