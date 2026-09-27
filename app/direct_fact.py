@@ -501,13 +501,20 @@ def requested_fact_supported(payload, requested_fact="general", request_text="")
 
 
 def answer_temporal_literals_supported_by_evidence(answer, request_text, payload):
-    """Require each answer year to be supported by evidence for the requested relation."""
-    years = tuple(dict.fromkeys(re.findall(r"(?<!\d)(?:1[0-9]{3}|20[0-9]{2})(?!\d)", str(answer or ""))))
+    """Require each answer year to bind to the requested relation in evidence."""
+    years = tuple(dict.fromkeys(
+        re.findall(
+            r"(?<!\d)(?:1[0-9]{3}|20[0-9]{2})(?!\d)",
+            str(answer or ""),
+        )
+    ))
     if not years:
         return True
+
+    relation = requested_fact_relation(request_text)
     results = list(dict(payload or {}).get("results") or [])
     for year in years:
-        matching = []
+        supported = False
         for item in results:
             item_text = "\n".join((
                 str(item.get("title") or ""),
@@ -515,15 +522,34 @@ def answer_temporal_literals_supported_by_evidence(answer, request_text, payload
                 str(item.get("page_text") or ""),
                 str(item.get("pre_extracted_context") or ""),
             ))
-            if year in item_text:
-                matching.append(item)
-        if not matching:
-            return False
-        if not requested_fact_supported(
-            {"results": matching},
-            "temporal",
-            request_text,
-        ):
+            if year not in item_text:
+                continue
+            if relation == "release" and not _debut_release_item_supported(
+                item_text,
+                request_text,
+            ):
+                continue
+
+            clauses = [
+                clause.strip()
+                for clause in re.split(r"[.!?;,\n]+", item_text)
+                if clause.strip() and year in clause
+            ]
+            for clause in clauses:
+                if relation == "creation":
+                    if _creation_date_supported(clause):
+                        supported = True
+                        break
+                    continue
+                if relation == "general" or _temporal_relation_supported(
+                    clause,
+                    relation,
+                ):
+                    supported = True
+                    break
+            if supported:
+                break
+        if not supported:
             return False
     return True
 
