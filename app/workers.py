@@ -29,12 +29,16 @@ from .evidence_verifier import (
 from .followup_resolution import resolve_contextual_followup
 from .current_turn_binding import guard_current_turn_binding
 from .direct_fact import (
+    creation_answer_conflicts_with_evidence,
     derive_premise_neutral_query,
     deterministic_hungarian_fact_fallback,
     requested_fact_supported,
     targeted_fact_refinement_query,
 )
-from .grounded_factual_guard import guard_grounded_answer
+from .grounded_factual_guard import (
+    GroundedFactualGuardError,
+    guard_grounded_answer,
+)
 from .generation_policy import (
     SYNTHESIS_HYBRID,
     SYNTHESIS_LOCAL,
@@ -1966,7 +1970,15 @@ class ChatWebWorker(QObject):
             )
             answer = self._compact_grounded_answer(answer)
             answer = self._compact_market_quote_answer(answer)
+            combined_fact_payload = {
+                "results": [
+                    item
+                    for factual_payload in factual_payloads
+                    for item in (factual_payload.get("results") or [])
+                ],
+            }
             relation_mismatch_requires_verify = False
+            creator_mismatch_requires_verify = False
             if (
                 is_factual_risk_request(self.user_prompt)
                 and self.request_profile.requested_fact == "temporal"
@@ -1976,10 +1988,20 @@ class ChatWebWorker(QObject):
                     self.request_profile.requested_fact,
                     self.user_prompt,
                 )
+                creator_mismatch_requires_verify = (
+                    creation_answer_conflicts_with_evidence(
+                        answer,
+                        self.user_prompt,
+                        combined_fact_payload,
+                    )
+                )
                 if self.trace is not None:
                     self.trace.add_metadata(
                         answer_relation_supported=(
                             not relation_mismatch_requires_verify
+                        ),
+                        answer_creator_binding_supported=(
+                            not creator_mismatch_requires_verify
                         ),
                     )
             if self.trace is not None:
@@ -1997,6 +2019,7 @@ class ChatWebWorker(QObject):
                     and (
                         not single_pass_factual
                         or relation_mismatch_requires_verify
+                        or creator_mismatch_requires_verify
                     )
                 ),
                 language_instruction=self._conversation_language_instruction(),
@@ -2004,6 +2027,31 @@ class ChatWebWorker(QObject):
             )
             if self.trace is not None:
                 self.trace.end("factual_validation")
+            if (
+                is_factual_risk_request(self.user_prompt)
+                and self.request_profile.requested_fact == "temporal"
+                and not has_authoritative_current_fact
+            ):
+                repaired_relation_supported = requested_fact_supported(
+                    {"results": [{"snippet": answer}]},
+                    self.request_profile.requested_fact,
+                    self.user_prompt,
+                )
+                repaired_creator_supported = not creation_answer_conflicts_with_evidence(
+                    answer,
+                    self.user_prompt,
+                    combined_fact_payload,
+                )
+                if self.trace is not None:
+                    self.trace.add_metadata(
+                        repaired_answer_relation_supported=repaired_relation_supported,
+                        repaired_answer_creator_binding_supported=repaired_creator_supported,
+                    )
+                if not repaired_relation_supported or not repaired_creator_supported:
+                    raise GroundedFactualGuardError(
+                        "Grounded factual repair did not preserve the requested "
+                        "creator/date relation."
+                    )
             if (
                 is_factual_risk_request(self.user_prompt)
                 and not has_authoritative_current_fact
