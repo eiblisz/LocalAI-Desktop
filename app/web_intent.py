@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from .artifact_service import ArtifactPlanItem, infer_artifact_requests
 from .internal_authority import internal_project_authority_reason
 from .memory_extractor import is_explicit_memory_request
+from .question_semantics import analyze_question
 from .request_semantics import is_entity_identity_question
 from .text_normalization import canonical_match_text
 
@@ -86,6 +87,9 @@ def is_factual_risk_request(text):
         "mikor tortent",
         "mikor alakult",
         "mikor jott letre",
+        "mikor adta ki",
+        "mikor adtak ki",
+        "mikor jelent meg",
         "melyik évben",
         "melyik evben",
         "szerzője",
@@ -109,7 +113,12 @@ def is_factual_risk_request(text):
         "wann entstand",
         "wann wurde gegrundet",
     )
-    if not _contains_any(normalized, relation_markers):
+    semantic = analyze_question(raw)
+    ordinal_release_selection = bool(
+        semantic.requested_fact == "selection"
+        and semantic.relation in {"release", "publication"}
+    )
+    if not _contains_any(normalized, relation_markers) and not ordinal_release_selection:
         return False
 
     # A proper-name/title cue keeps generic educational questions local.
@@ -119,7 +128,31 @@ def is_factual_risk_request(text):
     )
     quoted_title = bool(re.search(r'["„”«»][^"„”«»]{2,}["„”«»]', raw))
     year_literal = bool(re.search(r"(?<!\d)(?:1[0-9]{3}|20[0-9]{2})(?!\d)", raw))
-    return bool(named_tokens or quoted_title or year_literal)
+
+    # Explicit entity-type grammar is authoritative even when the user types
+    # the entity in lowercase. Casing must not decide whether a concrete
+    # relation question receives factual-risk verification.
+    typed_entity = bool(
+        re.search(
+            r"(?i)\b(?:a|az)\s+[A-Za-z0-9.&'’_-]{2,}"
+            r"(?:\s+[A-Za-z0-9.&'’_-]{2,}){0,3}\s+"
+            r"(?:egy[uü]ttes|zenekar)"
+            r"(?:nak|nek|n[aá]l|r[oó]l|ban|ben|b[oő]l|t[oő]l)?\b",
+            raw,
+        )
+        or re.search(
+            r"(?i)\b[A-Za-z0-9.&'’_-]{2,}"
+            r"(?:\s+[A-Za-z0-9.&'’_-]{2,}){0,3}\s+band\b",
+            raw,
+        )
+        or re.search(
+            r"(?i)\bwhen\s+did\s+[A-Za-z0-9.&'’_-]{2,}"
+            r"(?:\s+[A-Za-z0-9.&'’_-]{2,}){0,3}\s+release\s+"
+            r"(?:its|their|the)?\s*(?:first|debut)\s+(?:studio\s+)?album\b",
+            raw,
+        )
+    )
+    return bool(named_tokens or quoted_title or year_literal or typed_entity)
 
 
 def _legacy_looks_like_web_request(text):

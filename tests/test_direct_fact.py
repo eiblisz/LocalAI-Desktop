@@ -1,11 +1,18 @@
+import pytest
+
 from app.direct_fact import (
+    anchor_resolved_direct_fact_answer,
+    answer_temporal_literals_supported_by_evidence,
     creation_answer_conflicts_with_evidence,
     derive_premise_neutral_query,
     direct_fact_title_surface,
     supported_creator_surfaces,
+    deterministic_direct_fact_fallback,
     deterministic_hungarian_fact_fallback,
+    resolve_debut_release_fact,
     targeted_fact_refinement_query,
     requested_fact_supported,
+    unsupported_release_named_literals,
 )
 
 
@@ -233,3 +240,279 @@ def test_hungarian_fallback_only_repeats_a_supported_requested_literal():
 
     assert fallback == "A rendelkezésre álló források alapján a kért időpont: 1980."
     assert deterministic_hungarian_fact_fallback("No date here", "temporal") == ""
+
+
+def test_lowercase_band_debut_release_query_is_premise_neutral():
+    query, strategy = derive_premise_neutral_query(
+        "Mikor adta ki az első nagylemezét a wasp együttes?",
+        "temporal",
+    )
+
+    assert query == "wasp debut first album release date year"
+    assert strategy == "premise_neutral_entity_release_relation"
+
+
+def test_debut_release_evidence_binds_subject_relation_and_year_case_insensitively():
+    prompt = "Mikor adta ki az első nagylemezét a wasp együttes?"
+    evidence = {
+        "results": [{
+            "snippet": "W.A.S.P. released its self-titled debut album in 1984.",
+        }],
+    }
+
+    assert requested_fact_supported(evidence, "temporal", prompt) is True
+    assert answer_temporal_literals_supported_by_evidence(
+        "Az első nagylemez 1984-ben jelent meg.",
+        prompt,
+        evidence,
+    ) is True
+    assert answer_temporal_literals_supported_by_evidence(
+        "Az első nagylemez 1979-ben jelent meg.",
+        prompt,
+        evidence,
+    ) is False
+
+
+def test_debut_release_rejects_unrelated_year_even_when_result_mentions_band():
+    prompt = "Mikor adta ki az első nagylemezét a wasp együttes?"
+    evidence = {
+        "results": [{
+            "snippet": (
+                "W.A.S.P. released its self-titled debut album in 1984. "
+                "A separate retrospective mentions the year 1979."
+            ),
+        }],
+    }
+
+    assert answer_temporal_literals_supported_by_evidence(
+        "A debütáló album 1979-ben jelent meg.",
+        prompt,
+        evidence,
+    ) is False
+
+
+def test_debut_release_accepts_short_paraphrase_between_first_and_album():
+    prompt = "Mikor adta ki az első nagylemezét a sampleband együttes?"
+    repaired_answer = {
+        "results": [{
+            "snippet": (
+                "A sampleband első, saját nevét viselő albuma "
+                "1984-ben jelent meg."
+            ),
+        }],
+    }
+
+    assert requested_fact_supported(
+        repaired_answer,
+        "temporal",
+        prompt,
+    ) is True
+
+
+
+@pytest.mark.parametrize(
+    ("prompt", "expected_subject"),
+    [
+        ("Mikor adta ki az első nagylemezét a sampleband együttes?", "sampleband"),
+        ("Mikor adta ki az első nagylemezét a SAMPLEBAND együttes?", "SAMPLEBAND"),
+        ("Mikor jelent meg a sampleband együttes első albuma?", "sampleband"),
+        ("Mikor adta ki a debütáló albumát a sampleband zenekar?", "sampleband"),
+        ("When did sampleband release its first album?", "sampleband"),
+    ],
+)
+def test_debut_release_variants_build_entity_bound_neutral_queries(prompt, expected_subject):
+    query, strategy = derive_premise_neutral_query(prompt, "temporal")
+
+    assert query == f"{expected_subject} debut first album release date year"
+    assert strategy == "premise_neutral_entity_release_relation"
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Mikor adta ki az első nagylemezét a sampleband együttes?",
+        "Mikor adta ki az első nagylemezét a SAMPLEBAND együttes?",
+        "Mikor jelent meg a sampleband együttes első albuma?",
+        "When did sampleband release its first album?",
+    ],
+)
+def test_debut_release_evidence_acceptance_is_case_and_wording_invariant(prompt):
+    evidence = {
+        "results": [{
+            "snippet": "S.A.M.P.L.E.B.A.N.D. released its debut album in 1984.",
+        }],
+    }
+
+    assert requested_fact_supported(evidence, "temporal", prompt) is True
+    assert answer_temporal_literals_supported_by_evidence(
+        "A debütáló album 1984-ben jelent meg.",
+        prompt,
+        evidence,
+    ) is True
+    assert answer_temporal_literals_supported_by_evidence(
+        "A debütáló album 1979-ben jelent meg.",
+        prompt,
+        evidence,
+    ) is False
+
+
+
+def test_first_album_selection_builds_premise_neutral_entity_query():
+    prompt = "Melyik nagylemez volt az első a sampleband zenekarnak?"
+    query, strategy = derive_premise_neutral_query(prompt, "selection")
+
+    assert query == "sampleband debut first album discography"
+    assert strategy == "premise_neutral_entity_release_relation"
+
+
+def test_first_album_selection_requires_subject_bound_debut_evidence():
+    prompt = "Melyik nagylemez volt az első a sampleband zenekarnak?"
+    good = {
+        "results": [{
+            "snippet": "S.A.M.P.L.E.B.A.N.D. released its self-titled debut album in 1984.",
+        }],
+    }
+    unrelated = {
+        "results": [{
+            "snippet": "Another Band released its debut album in 1984.",
+        }],
+    }
+
+    assert requested_fact_supported(good, "selection", prompt) is True
+    assert requested_fact_supported(unrelated, "selection", prompt) is False
+
+
+def test_release_extra_quoted_title_requires_same_result_subject_binding():
+    prompt = "Melyik nagylemez volt az első a sampleband zenekarnak?"
+    evidence = {
+        "results": [
+            {
+                "title": "Sample Band debut album",
+                "snippet": (
+                    "S.A.M.P.L.E.B.A.N.D. released its self-titled debut album "
+                    "in 1984. It includes the track \"Real Track\"."
+                ),
+            },
+            {
+                "title": "Other Band songs",
+                "snippet": 'Other Band recorded "Wrong Track".',
+            },
+        ],
+    }
+
+    assert unsupported_release_named_literals(
+        'A debütáló albumon szerepel a "Real Track".',
+        prompt,
+        evidence,
+    ) == ()
+    assert unsupported_release_named_literals(
+        'A debütáló albumon szerepel a "Wrong Track".',
+        prompt,
+        evidence,
+    ) == ("Wrong Track",)
+    assert unsupported_release_named_literals(
+        "A debütáló album egyik dala a Wrong Track.",
+        prompt,
+        evidence,
+    ) == ("Wrong Track",)
+
+
+def test_host_resolves_self_titled_debut_selection_from_bound_evidence():
+    prompt = "melyik nagylemez volt az elso a wasp zenekarnak?"
+    evidence = {
+        "results": [{
+            "title": "W.A.S.P. discography",
+            "snippet": (
+                "W.A.S.P. is the debut studio album by American heavy metal "
+                "band W.A.S.P., released in 1984."
+            ),
+        }],
+    }
+
+    fact = resolve_debut_release_fact(evidence, prompt)
+
+    assert fact["title"] == "W.A.S.P."
+    assert fact["subject"] == "W.A.S.P."
+    assert fact["year"] == "1984"
+
+    answer = deterministic_direct_fact_fallback(
+        evidence,
+        prompt,
+        "selection",
+        language="hu",
+    )
+    assert "első nagylemeze" in answer
+    assert "W.A.S.P" in answer
+    assert "1984" in answer
+
+
+def test_host_direct_fact_fallback_fails_closed_on_conflicting_debut_titles():
+    prompt = "Melyik nagylemez volt az első a sampleband zenekarnak?"
+    evidence = {
+        "results": [
+            {
+                "title": "Alpha",
+                "snippet": "Alpha is the debut studio album by Sampleband.",
+            },
+            {
+                "title": "Beta",
+                "snippet": "Beta is the debut studio album by Sampleband.",
+            },
+        ],
+    }
+
+    assert resolve_debut_release_fact(evidence, prompt) == {}
+    assert deterministic_direct_fact_fallback(
+        evidence,
+        prompt,
+        "selection",
+        language="hu",
+    ) == ""
+
+
+def test_host_resolves_first_album_from_artist_overview_without_using_band_page_title():
+    prompt = "melyik nagylemez volt az elso a wasp zenekarnak?"
+    evidence = {
+        "results": [{
+            "title": "W.A.S.P. (band)",
+            "snippet": (
+                "W.A.S.P. is an American heavy metal band. Their first two "
+                "full-length studio albums, W.A.S.P. (1984) and "
+                "The Last Command (1985), were certified gold."
+            ),
+        }],
+    }
+
+    fact = resolve_debut_release_fact(evidence, prompt)
+
+    assert fact["title"] == "W.A.S.P."
+    assert "(band)" not in fact["title"]
+    assert fact["year"] == "1984"
+
+
+def test_host_anchor_replaces_wrong_core_sentence_and_preserves_supporting_context():
+    fact = {
+        "subject": "W\\.A.S.P.",
+        "title": "W\\.A.S.P.",
+        "year": "1984",
+        "relation": "release",
+    }
+    draft = (
+        "The Last Command volt az első nagylemez. "
+        "A zenekar az 1980-as években vált ismertté."
+    )
+
+    anchored = anchor_resolved_direct_fact_answer(
+        draft,
+        fact,
+        "selection",
+        language="hu",
+    )
+
+    assert anchored.startswith(
+        "A W.A.S.P. első nagylemeze a W.A.S.P. című album volt."
+    )
+    assert "1984" in anchored
+    assert "The Last Command" not in anchored
+    assert "A zenekar az 1980-as években vált ismertté." in anchored
+    assert "\\." not in anchored

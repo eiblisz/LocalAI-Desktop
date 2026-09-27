@@ -320,6 +320,10 @@ def classify_request(text):
             }
             and semantic.relation not in {"comparison", "discovery"}
         )
+        or (
+            semantic.requested_fact == "selection"
+            and semantic.relation in {"release", "publication"}
+        )
     ):
         kind = TASK_DIRECT_FACT
         depth = "concise"

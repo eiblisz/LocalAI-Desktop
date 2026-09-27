@@ -2349,12 +2349,12 @@ def test_direct_factual_single_pass_repairs_wrong_temporal_relation(
             self.once_calls = []
 
         def chat_once(self, model, messages, timeout=600.0, **kwargs):
-            self.once_calls.append((model, messages))
+            self.once_calls.append((model, messages, dict(kwargs)))
             callback = kwargs.get("context_budget_callback")
             if callback:
                 callback({
                     "estimated_final_prompt_units": 700,
-                    "requested_output_units": 1024,
+                    "requested_output_units": kwargs.get("num_predict", 1024),
                     "requested_num_ctx": 4096,
                     "model_max_context": 32768,
                     "context_budget_decision": "fits_default_context",
@@ -2966,3 +2966,662 @@ def test_entity_formation_question_uses_direct_fact_execution_budget():
     assert worker.request_profile.requested_fact == "temporal"
     assert worker.execution_control.budget.timeout_seconds == 45.0
     assert worker.execution_control.budget.max_search_calls == 2
+
+
+def test_debut_release_worker_forces_grounded_repair_for_invented_year_and_title(
+    monkeypatch,
+):
+    from app.request_trace import RequestTrace
+
+    prompt = "Mikor adta ki az első nagylemezét a sampleband együttes?"
+    search_calls = []
+    forced = []
+
+    class HallucinatingReleaseClient:
+        def __init__(self):
+            self.once_calls = []
+            self.stream_calls = []
+
+        def chat_once(self, model, messages, timeout=600.0, **kwargs):
+            self.once_calls.append((model, messages, dict(kwargs)))
+            callback = kwargs.get("context_budget_callback")
+            if callback:
+                callback({
+                    "estimated_final_prompt_units": 700,
+                    "requested_output_units": 1024,
+                    "requested_num_ctx": 4096,
+                    "model_max_context": 32768,
+                    "context_budget_decision": "fits_default_context",
+                    "context_budget_safety_units": 192,
+                })
+            return (
+                'A sampleband "Mystery" című első nagylemeze '
+                "1979-ben jelent meg."
+            )
+
+        def chat_stream(self, *args, **kwargs):
+            self.stream_calls.append((args, kwargs))
+            raise AssertionError("direct factual release lookup must use single pass")
+
+    def fake_search(query, max_results=6, fetch_pages=True):
+        search_calls.append(query)
+        return {
+            "provider": "Brave Search API",
+            "query": query,
+            "retrieved_at": "2026-09-27T00:00:00",
+            "provider_chain_errors": [],
+            "results": [{
+                "title": "Sample Band discography",
+                "url": "https://example.com/sampleband",
+                "snippet": (
+                    "S.A.M.P.L.E.B.A.N.D. released its self-titled "
+                    "debut album in 1984."
+                ),
+                "page_text": (
+                    "S.A.M.P.L.E.B.A.N.D. released its self-titled "
+                    "debut album in 1984."
+                ),
+            }],
+        }
+
+    def capture_guard(client, model, user_prompt, answer, authority, **kwargs):
+        forced.append(kwargs.get("force_verify"))
+        assert "1984" in authority
+        assert "1979" not in authority
+        assert kwargs["output_budget"] == 384
+        assert kwargs["temperature"] == 0.0
+        assert kwargs["seed"] == 42
+        return "A sampleband első, saját nevét viselő albuma 1984-ben jelent meg."
+
+    monkeypatch.setattr(workers, "search_web", fake_search)
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: ["https://example.com/sampleband"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_entries",
+        lambda payload, limit=6: [{
+            "title": "Sample Band discography",
+            "url": "https://example.com/sampleband",
+        }],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: (
+            "S.A.M.P.L.E.B.A.N.D. released its self-titled debut album in 1984."
+        ),
+    )
+    monkeypatch.setattr(workers, "guard_grounded_answer", capture_guard)
+    monkeypatch.setattr(
+        workers,
+        "guard_current_turn_binding",
+        lambda client, model, prompt, answer, authority, **kwargs: answer,
+    )
+
+    trace = RequestTrace("test")
+    tokens = []
+    errors = []
+    client = HallucinatingReleaseClient()
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        prompt,
+        trace=trace,
+    )
+    worker.token.connect(tokens.append)
+    worker.failed.connect(errors.append)
+    worker.run()
+
+    assert errors == []
+    assert search_calls == ["sampleband debut first album release date year"]
+    assert forced == [False]
+    assert client.stream_calls == []
+    assert len(client.once_calls) == 1
+    _, _, primary_kwargs = client.once_calls[0]
+    assert primary_kwargs["num_predict"] == 384
+    assert primary_kwargs["temperature"] == 0.0
+    assert primary_kwargs["seed"] == 42
+    assert tokens == [
+        "A sampleband első, saját nevét viselő albuma 1984-ben jelent meg."
+    ]
+    snapshot = trace.snapshot()
+    assert snapshot["metadata"]["sampling_profile"] == "factual_strict"
+    assert snapshot["metadata"]["sampling_temperature"] == 0.0
+    assert snapshot["metadata"]["sampling_seed"] == 42
+    assert snapshot["metadata"]["output_budget"] == 384
+    assert snapshot["metadata"]["query_strategy"] == (
+        "premise_neutral_entity_release_relation"
+    )
+    assert snapshot["metadata"]["answer_temporal_literals_supported"] is True
+    assert snapshot["metadata"]["repaired_answer_temporal_literals_supported"] is True
+    assert snapshot["metadata"]["host_resolved_core_fact_applied"] is True
+
+
+
+
+def test_first_album_selection_repairs_subject_unbound_extra_title_but_keeps_grounded_context(
+    monkeypatch,
+):
+    from app.request_trace import RequestTrace
+
+    prompt = "melyik nagylemez volt az elso a sampleband zenekarnak?"
+    search_calls = []
+    forced = []
+
+    class SelectionClient:
+        def __init__(self):
+            self.once_calls = []
+            self.stream_calls = []
+
+        def chat_once(self, model, messages, timeout=600.0, **kwargs):
+            self.once_calls.append((model, messages, dict(kwargs)))
+            callback = kwargs.get("context_budget_callback")
+            if callback:
+                callback({
+                    "estimated_final_prompt_units": 700,
+                    "requested_output_units": kwargs.get("num_predict", 1024),
+                    "requested_num_ctx": 4096,
+                    "model_max_context": 32768,
+                    "context_budget_decision": "fits_default_context",
+                    "context_budget_safety_units": 192,
+                })
+            return (
+                'A sampleband első nagylemeze a saját nevét viselő album volt. '
+                'Az albumon szerepel a "Wrong Track" is.'
+            )
+
+        def chat_stream(self, *args, **kwargs):
+            self.stream_calls.append((args, kwargs))
+            raise AssertionError("first-album selection must use factual single pass")
+
+    def fake_search(query, max_results=6, fetch_pages=True):
+        search_calls.append(query)
+        return {
+            "provider": "Brave Search API",
+            "query": query,
+            "retrieved_at": "2026-09-27T00:00:00",
+            "provider_chain_errors": [],
+            "results": [
+                {
+                    "title": "Sample Band debut album",
+                    "url": "https://example.com/sampleband",
+                    "snippet": (
+                        'S.A.M.P.L.E.B.A.N.D. released its self-titled debut album '
+                        'in 1984. It includes the track "Real Track".'
+                    ),
+                    "page_text": (
+                        'S.A.M.P.L.E.B.A.N.D. released its self-titled debut album '
+                        'in 1984. It includes the track "Real Track".'
+                    ),
+                },
+                {
+                    "title": "Other Band songs",
+                    "url": "https://example.com/otherband",
+                    "snippet": 'Other Band recorded "Wrong Track".',
+                    "page_text": 'Other Band recorded "Wrong Track".',
+                },
+            ],
+        }
+
+    def capture_guard(client, model, user_prompt, answer, authority, **kwargs):
+        forced.append(kwargs.get("force_verify"))
+        assert '"Wrong Track"' in authority
+        assert kwargs["output_budget"] == 384
+        assert kwargs["temperature"] == 0.0
+        assert kwargs["seed"] == 42
+        return (
+            'A sampleband első nagylemeze a saját nevét viselő album volt. '
+            'Az albumon szerepel a "Real Track" is.'
+        )
+
+    monkeypatch.setattr(workers, "search_web", fake_search)
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: [
+            "https://example.com/sampleband",
+            "https://example.com/otherband",
+        ],
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_entries",
+        lambda payload, limit=6: [
+            {
+                "title": "Sample Band debut album",
+                "url": "https://example.com/sampleband",
+            },
+            {
+                "title": "Other Band songs",
+                "url": "https://example.com/otherband",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: (
+            'S.A.M.P.L.E.B.A.N.D. released its self-titled debut album in 1984. '
+            'It includes the track "Real Track". Other Band recorded "Wrong Track".'
+        ),
+    )
+    monkeypatch.setattr(workers, "guard_grounded_answer", capture_guard)
+    monkeypatch.setattr(
+        workers,
+        "guard_current_turn_binding",
+        lambda client, model, user_prompt, answer, authority, **kwargs: answer,
+    )
+    monkeypatch.setattr(
+        workers,
+        "verify_answer_against_evidence",
+        lambda answer, query, ledgers: (True, []),
+    )
+
+    trace = RequestTrace("test")
+    tokens = []
+    errors = []
+    client = SelectionClient()
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        prompt,
+        trace=trace,
+    )
+    worker.token.connect(tokens.append)
+    worker.failed.connect(errors.append)
+    worker.run()
+
+    assert errors == []
+    assert search_calls == ["sampleband debut first album discography"]
+    assert forced == [True]
+    assert client.stream_calls == []
+    assert len(client.once_calls) == 1
+    _, _, primary_kwargs = client.once_calls[0]
+    assert primary_kwargs["num_predict"] == 384
+    assert primary_kwargs["temperature"] == 0.0
+    assert primary_kwargs["seed"] == 42
+    assert tokens == [
+        'A sampleband első nagylemeze a saját nevét viselő album volt. '
+        'Az albumon szerepel a "Real Track" is.'
+    ]
+    snapshot = trace.snapshot()
+    assert snapshot["metadata"]["sampling_profile"] == "factual_strict"
+    assert snapshot["metadata"]["query_strategy"] == (
+        "premise_neutral_entity_release_relation"
+    )
+    assert snapshot["metadata"]["answer_release_named_literals_supported"] is False
+    assert snapshot["metadata"][
+        "repaired_answer_release_named_literals_supported"
+    ] is True
+
+
+def test_factual_strict_worker_cannot_be_widened_by_generic_constraint_budget():
+    prompt = "melyik nagylemez volt az elso a sampleband zenekarnak?"
+    worker = workers.ChatWebWorker(
+        DummyWebClient(),
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        prompt,
+        output_budget=1024,
+    )
+
+    assert worker.request_profile.kind == "direct_fact"
+    assert worker.sampling_profile == "factual_strict"
+    assert worker.output_budget == 384
+    assert worker.temperature == 0.0
+    assert worker.seed == 42
+
+
+def test_selection_guard_failure_recovers_with_host_resolved_fact(monkeypatch):
+    from app.request_trace import RequestTrace
+
+    prompt = "melyik nagylemez volt az elso a wasp zenekarnak?"
+
+    class WrongSelectionClient:
+        def __init__(self):
+            self.stream_calls = []
+
+        def chat_once(self, model, messages, timeout=600.0, **kwargs):
+            callback = kwargs.get("context_budget_callback")
+            if callback:
+                callback({
+                    "estimated_final_prompt_units": 700,
+                    "requested_output_units": kwargs.get("num_predict", 1024),
+                    "requested_num_ctx": 4096,
+                    "model_max_context": 32768,
+                    "context_budget_decision": "fits_default_context",
+                    "context_budget_safety_units": 192,
+                })
+            return "The Last Command volt az első nagylemez."
+
+        def chat_stream(self, *args, **kwargs):
+            self.stream_calls.append((args, kwargs))
+            raise AssertionError("direct factual selection must use single pass")
+
+    def fake_search(query, max_results=6, fetch_pages=True):
+        return {
+            "provider": "Brave Search API",
+            "query": query,
+            "retrieved_at": "2026-09-27T00:00:00",
+            "provider_chain_errors": [],
+            "results": [{
+                "title": "W.A.S.P. (album) - Wikipedia",
+                "url": "https://example.com/wasp",
+                "snippet": (
+                    "W.A.S.P. is the debut studio album by American heavy metal "
+                    "band W.A.S.P., released in 1984."
+                ),
+                "page_text": (
+                    "W.A.S.P. is the debut studio album by American heavy metal "
+                    "band W.A.S.P., released in 1984."
+                ),
+            }],
+        }
+
+    monkeypatch.setattr(workers, "search_web", fake_search)
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: ["https://example.com/wasp"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_entries",
+        lambda payload, limit=6: [{
+            "title": "W.A.S.P. (album) - Wikipedia",
+            "url": "https://example.com/wasp",
+        }],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: (
+            "W.A.S.P. is the debut studio album by American heavy metal "
+            "band W.A.S.P., released in 1984."
+        ),
+    )
+    monkeypatch.setattr(
+        workers,
+        "guard_grounded_answer",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            workers.GroundedFactualGuardError(
+                "Grounded answer still contains unsupported factual literals: "
+                "The Last Command"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        workers,
+        "guard_current_turn_binding",
+        lambda client, model, prompt, answer, authority, **kwargs: answer,
+    )
+
+    trace = RequestTrace("test")
+    tokens = []
+    errors = []
+    client = WrongSelectionClient()
+    worker = workers.ChatWebWorker(
+        client,
+        "eurollm-test",
+        [{"role": "system", "content": "Base system"}],
+        prompt,
+        trace=trace,
+        output_budget=1024,
+    )
+    worker.token.connect(tokens.append)
+    worker.failed.connect(errors.append)
+    worker.run()
+
+    assert errors == []
+    assert client.stream_calls == []
+    assert worker.output_budget == 384
+    assert tokens
+    final = "".join(tokens)
+    assert "The Last Command" not in final
+    assert "W.A.S.P" in final
+    assert "1984" in final
+    snapshot = trace.snapshot()
+    assert snapshot["metadata"]["deterministic_direct_fact_fallback"] == "used"
+    assert snapshot["metadata"]["factual_guard_repair_status"] == (
+        "host_resolved_direct_fact_fallback"
+    )
+
+
+def test_first_album_generation_is_preseeded_with_host_resolved_core_fact(monkeypatch):
+    from app.request_trace import RequestTrace
+
+    prompt = "melyik nagylemez volt az elso a wasp zenekarnak?"
+
+    class PreseedClient:
+        def __init__(self):
+            self.once_calls = []
+            self.stream_calls = []
+
+        def chat_once(self, model, messages, timeout=600.0, **kwargs):
+            self.once_calls.append((model, messages, dict(kwargs)))
+            callback = kwargs.get("context_budget_callback")
+            if callback:
+                callback({
+                    "estimated_final_prompt_units": 700,
+                    "requested_output_units": kwargs.get("num_predict", 1024),
+                    "requested_num_ctx": 4096,
+                    "model_max_context": 32768,
+                    "context_budget_decision": "fits_default_context",
+                    "context_budget_safety_units": 192,
+                })
+            user_content = messages[-1]["content"]
+            assert "HOST-RESOLVED REQUESTED FACT" in user_content
+            assert "Title: W.A.S.P." in user_content
+            assert "Release year: 1984" in user_content
+            return (
+                "A W.A.S.P. első nagylemeze a W.A.S.P. című album volt, "
+                "amely 1984-ben jelent meg."
+            )
+
+        def chat_stream(self, *args, **kwargs):
+            self.stream_calls.append((args, kwargs))
+            raise AssertionError("direct factual selection must use single pass")
+
+    def fake_search(query, max_results=6, fetch_pages=True):
+        return {
+            "provider": "Brave Search API",
+            "query": query,
+            "retrieved_at": "2026-09-27T00:00:00",
+            "provider_chain_errors": [],
+            "results": [{
+                "title": "W.A.S.P. (album) - Wikipedia",
+                "url": "https://example.com/wasp",
+                "snippet": (
+                    "W.A.S.P. is the debut studio album by American heavy metal "
+                    "band W.A.S.P., released in 1984."
+                ),
+                "page_text": (
+                    "W.A.S.P. is the debut studio album by American heavy metal "
+                    "band W.A.S.P., released in 1984."
+                ),
+            }],
+        }
+
+    monkeypatch.setattr(workers, "search_web", fake_search)
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: ["https://example.com/wasp"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_entries",
+        lambda payload, limit=6: [{
+            "title": "W.A.S.P. (album) - Wikipedia",
+            "url": "https://example.com/wasp",
+        }],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: (
+            "W.A.S.P. is the debut studio album by American heavy metal "
+            "band W.A.S.P., released in 1984."
+        ),
+    )
+    monkeypatch.setattr(
+        workers,
+        "guard_grounded_answer",
+        lambda client, model, user_prompt, answer, authority, **kwargs: answer,
+    )
+    monkeypatch.setattr(
+        workers,
+        "guard_current_turn_binding",
+        lambda client, model, prompt, answer, authority, **kwargs: answer,
+    )
+
+    trace = RequestTrace("test")
+    tokens = []
+    errors = []
+    client = PreseedClient()
+    worker = workers.ChatWebWorker(
+        client,
+        "eurollm-test",
+        [{"role": "system", "content": "Base system"}],
+        prompt,
+        trace=trace,
+        output_budget=1024,
+    )
+    worker.token.connect(tokens.append)
+    worker.failed.connect(errors.append)
+    worker.run()
+
+    assert errors == []
+    assert client.stream_calls == []
+    assert worker.output_budget == 384
+    assert tokens == [
+        "A W.A.S.P. első nagylemeze a W.A.S.P. című album volt. "
+        "Az album 1984-ben jelent meg."
+    ]
+    snapshot = trace.snapshot()
+    assert snapshot["metadata"]["host_resolved_direct_fact_preseed"] is True
+    assert snapshot["metadata"]["host_resolved_direct_fact_title"] == "W.A.S.P."
+    assert snapshot["metadata"]["host_resolved_direct_fact_year"] == "1984"
+    assert snapshot["metadata"].get("deterministic_direct_fact_fallback") != "used"
+
+
+def test_host_core_anchor_prevents_wrong_first_sentence_from_reaching_guard(monkeypatch):
+    from app.request_trace import RequestTrace
+
+    prompt = "melyik nagylemez volt az elso a wasp zenekarnak?"
+    seen_by_guard = []
+
+    class WrongCoreRichClient:
+        def __init__(self):
+            self.stream_calls = []
+
+        def chat_once(self, model, messages, timeout=600.0, **kwargs):
+            callback = kwargs.get("context_budget_callback")
+            if callback:
+                callback({
+                    "estimated_final_prompt_units": 700,
+                    "requested_output_units": kwargs.get("num_predict", 1024),
+                    "requested_num_ctx": 4096,
+                    "model_max_context": 32768,
+                    "context_budget_decision": "fits_default_context",
+                    "context_budget_safety_units": 192,
+                })
+            return (
+                "The Last Command volt az első nagylemez. "
+                "A W.A.S.P. debütáló albuma 1984-ben jelent meg."
+            )
+
+        def chat_stream(self, *args, **kwargs):
+            self.stream_calls.append((args, kwargs))
+            raise AssertionError("direct factual selection must use single pass")
+
+    def fake_search(query, max_results=6, fetch_pages=True):
+        return {
+            "provider": "Brave Search API",
+            "query": query,
+            "retrieved_at": "2026-09-27T00:00:00",
+            "provider_chain_errors": [],
+            "results": [{
+                "title": "W\\.A.S.P. (album) - Wikipedia",
+                "url": "https://example.com/wasp",
+                "snippet": (
+                    "W\\.A.S.P. is the debut studio album by American heavy metal "
+                    "band W\\.A.S.P., released in 1984."
+                ),
+                "page_text": (
+                    "W\\.A.S.P. is the debut studio album by American heavy metal "
+                    "band W\\.A.S.P., released in 1984."
+                ),
+            }],
+        }
+
+    monkeypatch.setattr(workers, "search_web", fake_search)
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: ["https://example.com/wasp"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_entries",
+        lambda payload, limit=6: [{
+            "title": "W\\.A.S.P. (album) - Wikipedia",
+            "url": "https://example.com/wasp",
+        }],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: (
+            "W\\.A.S.P. is the debut studio album by American heavy metal "
+            "band W\\.A.S.P., released in 1984."
+        ),
+    )
+
+    def capture_guard(client, model, user_prompt, answer, authority, **kwargs):
+        seen_by_guard.append(answer)
+        assert "The Last Command" not in answer
+        assert "\\." not in answer
+        assert answer.startswith(
+            "A W.A.S.P. első nagylemeze a W.A.S.P. című album volt."
+        )
+        return answer
+
+    monkeypatch.setattr(workers, "guard_grounded_answer", capture_guard)
+    monkeypatch.setattr(
+        workers,
+        "guard_current_turn_binding",
+        lambda client, model, prompt, answer, authority, **kwargs: answer,
+    )
+
+    trace = RequestTrace("test")
+    tokens = []
+    errors = []
+    client = WrongCoreRichClient()
+    worker = workers.ChatWebWorker(
+        client,
+        "eurollm-test",
+        [{"role": "system", "content": "Base system"}],
+        prompt,
+        trace=trace,
+        output_budget=1024,
+    )
+    worker.token.connect(tokens.append)
+    worker.failed.connect(errors.append)
+    worker.run()
+
+    assert errors == []
+    assert seen_by_guard
+    final = "".join(tokens)
+    assert "The Last Command" not in final
+    assert "\\." not in final
+    assert "1984" in final
+    snapshot = trace.snapshot()
+    assert snapshot["metadata"]["host_resolved_direct_fact_preseed"] is True
+    assert snapshot["metadata"]["host_resolved_core_fact_applied"] is True
+    assert snapshot["metadata"].get("deterministic_direct_fact_fallback") != "used"

@@ -1,3 +1,5 @@
+import pytest
+
 from app.web_intent import is_factual_risk_request
 
 
@@ -31,3 +33,31 @@ def test_explicit_rewrite_request_stays_non_factual():
     assert is_factual_risk_request(
         "Rewrite this story in a shorter style."
     ) is False
+
+
+def test_lowercase_typed_band_release_date_is_still_factual_risk():
+    assert is_factual_risk_request(
+        "Mikor adta ki az első nagylemezét a wasp együttes?"
+    ) is True
+
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Mikor adta ki az első nagylemezét a sampleband együttes?",
+        "Mikor adta ki az első nagylemezét a SAMPLEBAND együttes?",
+        "Mikor jelent meg a sampleband együttes első albuma?",
+        "Mikor adta ki a debütáló albumát a sampleband zenekar?",
+        "When did sampleband release its first album?",
+    ],
+)
+def test_debut_release_question_variants_are_factual_risk_independent_of_casing(prompt):
+    assert is_factual_risk_request(prompt) is True
+
+
+
+def test_lowercase_inflected_band_first_album_selection_is_factual_risk():
+    assert is_factual_risk_request(
+        "melyik nagylemez volt az elso a sampleband zenekarnak?"
+    ) is True

@@ -321,3 +321,85 @@ def test_grounded_guard_removes_adjacent_duplicate_name_token_before_checking():
 
     assert result == "Sample Author wrote the work in 1912."
     assert client.calls == 0
+
+
+def test_grounded_guard_rejects_invented_single_word_quoted_title():
+    authority = (
+        'USER REQUEST: Mikor jelent meg az első album?\n'
+        'AUTHORIZED EVIDENCE: The self-titled debut album was released in 1984.'
+    )
+
+    unsupported = unsupported_grounded_literals(
+        'A "Mystery" című album 1979-ben jelent meg.',
+        authority,
+    )
+
+    assert "Mystery" in unsupported
+    assert "1979" in unsupported
+
+
+
+def test_grounded_guard_repair_uses_explicit_factual_sampling_controls():
+    authority = "AUTHORIZED EVIDENCE: Sample Band released its debut album in 1984."
+
+    class SamplingRepairClient:
+        def __init__(self):
+            self.kwargs = None
+
+        def chat_once(self, **kwargs):
+            self.kwargs = dict(kwargs)
+            return "Sample Band released its debut album in 1984."
+
+    client = SamplingRepairClient()
+    result = guard_grounded_answer(
+        client,
+        "qwen-test",
+        "When did Sample Band release its debut album?",
+        "Sample Band released its debut album in 1979.",
+        authority,
+        force_verify=True,
+        output_budget=384,
+        temperature=0.0,
+        seed=42,
+    )
+
+    assert result == "Sample Band released its debut album in 1984."
+    assert client.kwargs["num_predict"] == 384
+    assert client.kwargs["temperature"] == 0.0
+    assert client.kwargs["seed"] == 42
+
+
+
+def test_grounded_guard_keeps_supported_extra_context_and_repairs_only_unsupported_detail():
+    authority = (
+        'USER REQUEST: Melyik nagylemez volt az első a sampleband zenekarnak?\n'
+        'AUTHORIZED EVIDENCE: Sample Band released its self-titled debut album '
+        'in 1984. The album includes the track "Real Track".'
+    )
+    draft = (
+        'A Sample Band első nagylemeze a saját nevét viselő album volt 1984-ben. '
+        'Az albumon szerepel a "Real Track" és a "Fake Track" is.'
+    )
+
+    unsupported = unsupported_grounded_literals(draft, authority)
+    assert "Fake Track" in unsupported
+    assert "Real Track" not in unsupported
+
+    repaired = (
+        'A Sample Band első nagylemeze a saját nevét viselő album volt 1984-ben. '
+        'Az albumon szerepel a "Real Track" is.'
+    )
+    client = RepairClient(repaired)
+
+    result = guard_grounded_answer(
+        client,
+        "qwen-test",
+        "Melyik nagylemez volt az első a sampleband zenekarnak?",
+        draft,
+        authority,
+        temperature=0.0,
+        seed=42,
+    )
+
+    assert result == repaired
+    assert client.calls == 1

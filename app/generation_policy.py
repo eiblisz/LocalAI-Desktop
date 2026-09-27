@@ -12,6 +12,7 @@ from .config import OLLAMA_NUM_PREDICT
 from .request_semantics import (
     TASK_ANALYSIS,
     TASK_DEEP_RESEARCH,
+    TASK_DIRECT_FACT,
     TASK_ENTITY_OVERVIEW,
     TASK_EXPLANATION,
     TASK_GENERAL,
@@ -27,8 +28,14 @@ LENGTH_SHORT = "short"
 LENGTH_NORMAL = "normal"
 LENGTH_LONG = "long"
 
+SAMPLING_DEFAULT = "default"
+SAMPLING_FACTUAL_STRICT = "factual_strict"
+
 _LONG_FORM_TARGET = 2048
 _SHORT_FORM_TARGET = 512
+_FACTUAL_STRICT_TARGET = 384
+_FACTUAL_STRICT_TEMPERATURE = 0.0
+_FACTUAL_STRICT_SEED = 42
 
 
 @dataclass(frozen=True)
@@ -38,6 +45,9 @@ class GenerationPolicy:
     output_budget: int
     web_required: bool
     freshness: str
+    sampling_profile: str = SAMPLING_DEFAULT
+    temperature: float | None = None
+    seed: int | None = None
 
 
 def _fold(value):
@@ -157,10 +167,26 @@ def build_generation_policy(
         route = SYNTHESIS_HYBRID
     else:
         route = SYNTHESIS_WEB
+    strict_factual = bool(
+        use_web
+        and not conversation_local
+        and getattr(profile, "kind", "") == TASK_DIRECT_FACT
+    )
+    output_budget = output_budget_for_response_length(response_length)
+    if strict_factual and response_length != LENGTH_LONG:
+        output_budget = max(256, min(output_budget, _FACTUAL_STRICT_TARGET))
+
     return GenerationPolicy(
         synthesis_route=route,
         response_length=response_length,
-        output_budget=output_budget_for_response_length(response_length),
+        output_budget=output_budget,
         web_required=bool(use_web),
         freshness=str(getattr(profile, "freshness", "stable") or "stable"),
+        sampling_profile=(
+            SAMPLING_FACTUAL_STRICT if strict_factual else SAMPLING_DEFAULT
+        ),
+        temperature=(
+            _FACTUAL_STRICT_TEMPERATURE if strict_factual else None
+        ),
+        seed=(_FACTUAL_STRICT_SEED if strict_factual else None),
     )

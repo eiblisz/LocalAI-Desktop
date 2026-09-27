@@ -119,6 +119,102 @@ def _marked_title(prompt):
     return ""
 
 
+def _release_subject_surface(prompt):
+    """Extract the named entity in a first/debut-release question when structural."""
+    raw = _clean(prompt)
+    patterns = (
+        r"(?i)\bmikor\s+(?:adta|adtak|kiadta|kiadtak)\s+(?:ki\s+)?"
+        r"(?:a|az)\s+(?:els[őo]|deb[uü]t\w*)\s+[^?]{0,40}?\s+"
+        r"(?:a|az)\s+(?P<subject>.+?)\s+(?:egy[uü]ttes|zenekar)\b",
+        r"(?i)\bmikor\s+jelent\s+meg\s+(?:a|az)\s+"
+        r"(?P<subject>.+?)\s+(?:egy[uü]ttes|zenekar)\s+"
+        r"(?:els[őo]|deb[uü]t\w*)\s+(?:albuma|nagylemeze|lemeze)\b",
+        r"(?i)\bwhen\s+did\s+(?P<subject>.+?)\s+release\s+"
+        r"(?:its|their|the)?\s*(?:first|debut)\s+(?:studio\s+)?album\b",
+        r"(?i)\bwann\s+ver[oö]ffentlichte\s+(?P<subject>.+?)\s+"
+        r"(?:sein|ihr|das)?\s*(?:erste|erstes|deb[uü]t)\w*\s+album\b",
+        # Generic typed-entity fallback for ordinal/debut questions such as
+        # "melyik nagylemez volt az első a sampleband zenekarnak?". The
+        # surrounding release/debut checks decide whether this surface is used.
+        r"(?i)\b(?:a|az)\s+(?P<subject>[A-Za-z0-9.&'’_-]{2,}"
+        r"(?:\s+[A-Za-z0-9.&'’_-]{2,}){0,4})\s+"
+        r"(?:egy[uü]ttes|zenekar)"
+        r"(?:nak|nek|n[aá]l|r[oó]l|ban|ben|b[oő]l|t[oő]l)?\b",
+        r"(?i)\b(?P<subject>[A-Za-z0-9.&'’_-]{2,}"
+        r"(?:\s+[A-Za-z0-9.&'’_-]{2,}){0,4})\s+band\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, raw)
+        if match:
+            subject = _clean(match.group("subject")).strip(" .?!,;:")
+            if 2 <= len(subject) <= 120:
+                return subject
+    return ""
+
+
+def _debut_release_surface_supported(text):
+    """Recognize first/debut-album wording without requiring adjacent words."""
+    folded = _fold(text)
+    debut_markers = (
+        "elso album", "elso nagylemez", "elso lemez",
+        "debut album", "debut studio album", "debutalo album",
+        "debutlemez", "debutalbum", "first album", "first studio album",
+        "erstes album",
+    )
+    if any(marker in folded for marker in debut_markers):
+        return True
+
+    # Model/evidence paraphrases may insert a short modifier phrase between
+    # "first/debut" and the album noun, for example:
+    # "elso sajat nevet viselo albuma" or "first self titled studio album".
+    # Keep the window deliberately small so unrelated earlier "first" mentions
+    # do not satisfy the requested debut-release relation.
+    patterns = (
+        r"\b(?:elso|debutalo)\b(?:\s+\w+){0,4}\s+"
+        r"(?:album\w*|nagylemez\w*|lemez\w*)\b",
+        r"\b(?:first|debut)\b(?:\s+\w+){0,4}\s+"
+        r"(?:album\w*|record\w*)\b",
+        r"\b(?:album\w*|nagylemez\w*|lemez\w*)\b"
+        r"(?:\s+\w+){0,3}\s+(?:elso|debutalo)\b",
+        r"\b(?:album\w*|record\w*)\b(?:\s+\w+){0,3}\s+first\b",
+        r"\b(?:erste|erstes|debut\w*)\b(?:\s+\w+){0,4}\s+album\w*\b",
+    )
+    return any(re.search(pattern, folded) for pattern in patterns)
+
+
+def _is_debut_release_request(prompt):
+    return _debut_release_surface_supported(prompt)
+
+
+def _subject_supported_in_text(text, subject):
+    folded_text = _fold(text)
+    folded_subject = _fold(subject)
+    if not folded_subject:
+        return False
+    if re.search(r"(?<!\w)" + re.escape(folded_subject) + r"(?!\w)", folded_text):
+        return True
+
+    # Entity names may be written with or without punctuation/spaces
+    # (for example WASP/W.A.S.P.). Match the same alphanumeric surface
+    # conservatively across separators without depending on user casing.
+    raw_subject = re.sub(r"[^A-Za-z0-9]", "", str(subject or ""))
+    if 2 <= len(raw_subject) <= 32 and re.fullmatch(r"[A-Za-z0-9]+", raw_subject):
+        compact_pattern = r"(?i)(?<![A-Za-z0-9])" + r"[^A-Za-z0-9]*".join(
+            re.escape(ch) for ch in raw_subject
+        ) + r"(?![A-Za-z0-9])"
+        return bool(re.search(compact_pattern, str(text or "")))
+    return False
+
+
+def _debut_release_item_supported(text, request_text):
+    if not _is_debut_release_request(request_text):
+        return True
+    subject = _release_subject_surface(request_text)
+    if subject and not _subject_supported_in_text(text, subject):
+        return False
+    return _debut_release_surface_supported(text)
+
+
 def direct_fact_title_surface(prompt):
     """Return a structurally identified work/title surface from the request."""
     return _marked_title(prompt)
@@ -131,9 +227,12 @@ def requested_fact_relation(prompt):
         return "event"
     if semantic_relation in {
         "authorship", "authorship_creation", "creation", "formation", "birth",
+        "release", "publication",
     }:
         if semantic_relation in {"authorship", "authorship_creation"}:
             return "creation"
+        if semantic_relation in {"release", "publication"}:
+            return "release"
         return semantic_relation
 
     folded = _fold(prompt)
@@ -150,6 +249,11 @@ def requested_fact_relation(prompt):
         )),
         ("birth", (
             r"\b(?:szuletett|born|geboren)\b",
+        )),
+        ("release", (
+            r"\b(?:megjelent|jelent meg|kiadta|kiadtak|adta ki|adtak ki|kiadas|kiadva)\b",
+            r"\b(?:released|published|publication)\b",
+            r"\b(?:erschien|veroffentlicht|ausgabe)\b",
         )),
         ("event", (
             r"\b(?:tortent|happened|occurred|geschah)\b",
@@ -173,11 +277,29 @@ def derive_premise_neutral_query(prompt, requested_fact="general"):
     if identity_subject:
         return identity_subject, "identity_lookup_subject"
 
+    relation = requested_fact_relation(clean)
+    release_subject = _release_subject_surface(clean)
+    if (
+        relation == "release"
+        and release_subject
+        and _is_debut_release_request(clean)
+    ):
+        if str(requested_fact or "") == "temporal":
+            query = f"{release_subject} debut first album release date year"
+        elif str(requested_fact or "") == "selection":
+            query = f"{release_subject} debut first album discography"
+        else:
+            query = ""
+        if query:
+            return (
+                query,
+                "premise_neutral_entity_release_relation",
+            )
+
     title = _marked_title(clean)
     if not title:
         return clean, "validated_original"
 
-    relation = requested_fact_relation(clean)
     hungarian_creation_query = bool(
         re.search(r"\b(?:mikor|irta|irja|cimu|verset|muvet)\b", _fold(clean))
     )
@@ -189,6 +311,7 @@ def derive_premise_neutral_query(prompt, requested_fact="general"):
         ),
         "formation": "formation founding date year",
         "birth": "birth date year",
+        "release": "release publication date year",
         "event": "event date year",
         "general": "date year",
     }
@@ -208,8 +331,26 @@ def derive_premise_neutral_query(prompt, requested_fact="general"):
 def targeted_fact_refinement_query(prompt, requested_fact="general"):
     """Derive one stricter, bounded follow-up query after insufficient evidence."""
     clean = _clean(prompt)
+    requested_fact = str(requested_fact or "")
+    if requested_fact not in {"temporal", "selection"}:
+        return ""
+
+    relation = requested_fact_relation(clean)
+    release_subject = _release_subject_surface(clean)
+    if (
+        relation == "release"
+        and release_subject
+        and _is_debut_release_request(clean)
+    ):
+        if requested_fact == "selection":
+            return f"{release_subject} debut first album discography"
+        return f"{release_subject} debut studio album release year"
+
+    if requested_fact != "temporal":
+        return ""
+
     title = _marked_title(clean)
-    if not title or str(requested_fact or "") != "temporal":
+    if not title:
         return ""
 
     hungarian_creation_query = bool(
@@ -223,6 +364,7 @@ def targeted_fact_refinement_query(prompt, requested_fact="general"):
         ),
         "formation": "formation year",
         "birth": "birth year",
+        "release": "release year",
         "event": "event date",
         "general": "date year",
     }
@@ -253,6 +395,11 @@ def _temporal_relation_supported(text, relation):
             "established", "gegrundet",
         ),
         "birth": ("szuletett", "born", "geboren"),
+        "release": (
+            "megjelent", "jelent meg", "kiadta", "kiadtak", "adta ki", "adtak ki",
+            "kiadas", "kiadva", "released", "published", "publication",
+            "erschien", "veroffentlicht", "ausgabe",
+        ),
         "event": ("tortent", "happened", "occurred", "geschah"),
     }
     expected = markers.get(relation)
@@ -351,6 +498,23 @@ def requested_fact_supported(payload, requested_fact="general", request_text="")
         return False
 
     requested_fact = str(requested_fact or "general")
+
+    if (
+        requested_fact == "selection"
+        and requested_fact_relation(request_text) == "release"
+        and _is_debut_release_request(request_text)
+    ):
+        for item in dict(payload or {}).get("results") or []:
+            item_text = "\n".join((
+                str(item.get("title") or ""),
+                str(item.get("snippet") or ""),
+                str(item.get("page_text") or ""),
+                str(item.get("pre_extracted_context") or ""),
+            ))
+            if _debut_release_item_supported(item_text, request_text):
+                return True
+        return False
+
     checks = {
         "temporal": r"(?<!\d)(?:1[0-9]{3}|20[0-9]{2})(?!\d)|\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}[./]\d{1,2}[./](?:19|20)\d{2}\b",
         "quantity": r"\b\d+(?:[.,]\d+)?\b",
@@ -386,9 +550,136 @@ def requested_fact_supported(payload, requested_fact="general", request_text="")
             if _creation_date_supported(item_text):
                 return True
             continue
+        if relation == "release" and not _debut_release_item_supported(
+            item_text,
+            request_text,
+        ):
+            continue
         if _temporal_relation_supported(item_text, relation):
             return True
     return False
+
+
+def _named_fact_literals(text):
+    values = []
+
+    def add(value):
+        literal = _clean(value).strip(" .,:;!?")
+        folded = _fold(literal)
+        if literal and folded and all(_fold(item) != folded for item in values):
+            values.append(literal)
+
+    for match in re.finditer(r'["“”„«»](.{2,120}?)["“”„«»]', str(text or "")):
+        add(match.group(1))
+
+    # Also catch unquoted multi-word title/proper-name surfaces such as
+    # A Town Called Malice. Single-word unquoted surfaces remain deliberately
+    # out of scope because they cannot be separated reliably from ordinary prose.
+    for match in re.finditer(
+        r"\b[A-ZÁÉÍÓÖŐÚÜŰ][A-Za-zÁÉÍÓÖŐÚÜŰáéíóöőúüű-]{1,}"
+        r"(?:\s+[A-ZÁÉÍÓÖŐÚÜŰ][A-Za-zÁÉÍÓÖŐÚÜŰáéíóöőúüű-]{1,})+\b",
+        str(text or ""),
+    ):
+        add(match.group(0))
+
+    return tuple(values)
+
+
+def unsupported_release_named_literals(answer, request_text, payload):
+    """Return named answer details not bound to the requested release subject.
+
+    Literal presence somewhere in a multi-result evidence bundle is not enough:
+    a title from an adjacent entity must not be attached to the entity the user
+    asked about. For first/debut-release questions, each detectable named detail
+    in the answer must appear in an evidence result that also names the requested
+    subject. The user's premise is not treated as factual authority.
+    """
+    if requested_fact_relation(request_text) != "release":
+        return ()
+    subject = _release_subject_surface(request_text)
+    if not subject:
+        return ()
+
+    results = list(dict(payload or {}).get("results") or [])
+    unsupported = []
+
+    for literal in _named_fact_literals(answer):
+        folded_literal = _fold(literal)
+        if not folded_literal:
+            continue
+
+        supported = False
+        for item in results:
+            item_text = "\n".join((
+                str(item.get("title") or ""),
+                str(item.get("snippet") or ""),
+                str(item.get("page_text") or ""),
+                str(item.get("pre_extracted_context") or ""),
+            ))
+            if not _subject_supported_in_text(item_text, subject):
+                continue
+            if _subject_supported_in_text(item_text, literal):
+                supported = True
+                break
+
+        if not supported:
+            unsupported.append(literal)
+
+    return tuple(sorted(set(unsupported), key=str.casefold))
+
+
+def answer_temporal_literals_supported_by_evidence(answer, request_text, payload):
+    """Require each answer year to bind to the requested relation in evidence."""
+    years = tuple(dict.fromkeys(
+        re.findall(
+            r"(?<!\d)(?:1[0-9]{3}|20[0-9]{2})(?!\d)",
+            str(answer or ""),
+        )
+    ))
+    if not years:
+        return True
+
+    relation = requested_fact_relation(request_text)
+    results = list(dict(payload or {}).get("results") or [])
+    for year in years:
+        supported = False
+        for item in results:
+            item_text = "\n".join((
+                str(item.get("title") or ""),
+                str(item.get("snippet") or ""),
+                str(item.get("page_text") or ""),
+                str(item.get("pre_extracted_context") or ""),
+            ))
+            if year not in item_text:
+                continue
+            if relation == "release" and not _debut_release_item_supported(
+                item_text,
+                request_text,
+            ):
+                continue
+
+            clauses = [
+                clause.strip()
+                for clause in re.split(r"[.!?;,\n]+", item_text)
+                if clause.strip() and year in clause
+            ]
+            for clause in clauses:
+                if relation == "creation":
+                    if _creation_date_supported(clause):
+                        supported = True
+                        break
+                    continue
+                if relation == "general" or _temporal_relation_supported(
+                    clause,
+                    relation,
+                ):
+                    supported = True
+                    break
+            if supported:
+                break
+        if not supported:
+            return False
+    return True
 
 
 _NAME_TOKEN_RE = r"[A-ZÁÉÍÓÖŐÚÜŰ][A-Za-zÁÉÍÓÖŐÚÜŰáéíóöőúüű-]{1,}"
@@ -469,6 +760,349 @@ def creation_answer_conflicts_with_evidence(answer, request_text, payload):
             continue
         return not alleged_uniquely_supported
     return False
+
+
+def _deescape_evidence_surface(value):
+    """Remove repeated Markdown escaping from a short evidence display surface."""
+    text = str(value or "")
+    slash = chr(92)
+    for char in "`*_{}[]()#+-.!|>":
+        escaped = slash + char
+        while escaped in text:
+            text = text.replace(escaped, char)
+    return text
+
+
+def _split_answer_sentences(text):
+    """Split normal prose without breaking dotted acronyms such as W.A.S.P."""
+    value = _clean(text)
+    if not value:
+        return ()
+    parts = re.split(
+        r"(?<=[.!?])\s+(?=[A-ZÁÉÍÓÖŐÚÜŰ0-9\"“„«])",
+        value,
+    )
+    return tuple(part.strip() for part in parts if part.strip())
+
+
+def render_resolved_direct_fact(fact, requested_fact="general", *, language="hu"):
+    """Render the host-resolved core fact without invoking a model."""
+    fact = dict(fact or {})
+    subject = _deescape_evidence_surface(fact.get("subject")).strip()
+    title = _deescape_evidence_surface(fact.get("title")).strip()
+    year = str(fact.get("year") or "").strip()
+    requested_fact = str(requested_fact or "general")
+    if not subject or not title:
+        return ""
+
+    if requested_fact == "selection":
+        if language == "de":
+            answer = f"Das erste Album von {subject} war {title}."
+            if year:
+                answer += f" Es erschien {year}."
+            return answer
+        if language == "en":
+            answer = f"The first album by {subject} was {title}."
+            if year:
+                answer += f" It was released in {year}."
+            return answer
+        answer = f"A {subject} első nagylemeze a {title} című album volt."
+        if year:
+            answer += f" Az album {year}-ben jelent meg."
+        return answer
+
+    if requested_fact == "temporal" and year:
+        if language == "de":
+            return f"Das Debütalbum von {subject} erschien {year}."
+        if language == "en":
+            return f"The debut album by {subject} was released in {year}."
+        return f"A {subject} debütáló albuma {year}-ben jelent meg."
+
+    return ""
+
+
+def anchor_resolved_direct_fact_answer(
+    draft,
+    fact,
+    requested_fact="general",
+    *,
+    language="hu",
+):
+    """Replace only the model's leading core-fact sentence with host authority.
+
+    Direct-fact prompts require the requested fact in the first sentence. Once
+    the host has resolved that core relation deterministically, the model must
+    not be allowed to override it. Later sentences are preserved so useful,
+    evidence-grounded context can still survive normal factual validation.
+    """
+    core = render_resolved_direct_fact(
+        fact,
+        requested_fact,
+        language=language,
+    )
+    if not core:
+        return str(draft or "").strip()
+
+    sentences = list(_split_answer_sentences(draft))
+    if len(sentences) <= 1:
+        return core
+
+    supporting_sentences = []
+    for sentence in sentences[1:]:
+        # Do not preserve a second model sentence that merely restates the same
+        # resolved debut/release relation. Keep genuinely additional context.
+        if (
+            str(fact.get("relation") or "") == "release"
+            and _is_debut_release_request(sentence)
+            and requested_fact_relation(sentence) == "release"
+        ):
+            continue
+        supporting_sentences.append(sentence)
+
+    supporting = " ".join(supporting_sentences).strip()
+    return (core + (" " + supporting if supporting else "")).strip()
+
+
+def _subject_display_surface(text, subject):
+    """Return the evidence spelling of *subject* when it can be matched safely."""
+    raw = _deescape_evidence_surface(text)
+    folded_subject = _fold(subject)
+    if not folded_subject:
+        return ""
+
+    # Normal token-spaced form first.
+    canonical_tokens = folded_subject.split()
+    if canonical_tokens:
+        token_pattern = r"(?i)(?<!\w)" + r"\s+".join(
+            re.escape(token) for token in canonical_tokens
+        ) + r"(?!\w)"
+        match = re.search(token_pattern, raw)
+        if match:
+            return _clean(match.group(0)).strip(" ,;:")
+
+    # Punctuated compact forms such as WASP / W.A.S.P.
+    raw_subject = re.sub(r"[^A-Za-z0-9]", "", str(subject or ""))
+    if 2 <= len(raw_subject) <= 32 and re.fullmatch(r"[A-Za-z0-9]+", raw_subject):
+        compact_pattern = (
+            r"(?i)(?<![A-Za-z0-9])"
+            + r"[^A-Za-z0-9]*".join(re.escape(ch) for ch in raw_subject)
+            + r"(?:\.)?(?![A-Za-z0-9])"
+        )
+        match = re.search(compact_pattern, raw)
+        if match:
+            surface = match.group(0).strip(" ,;:")
+            if surface.endswith(".") and surface.count(".") <= 1:
+                surface = surface[:-1]
+            return surface
+    return ""
+
+
+def _debut_title_candidates_from_item(item, request_text):
+    """Extract conservative debut-album title candidates from one bound result."""
+    fields = [
+        str(item.get("snippet") or ""),
+        str(item.get("page_text") or ""),
+        str(item.get("pre_extracted_context") or ""),
+        str(item.get("title") or ""),
+    ]
+    item_text = "\n".join(fields)
+    subject = _release_subject_surface(request_text)
+    if not subject or not _debut_release_item_supported(item_text, request_text):
+        return ()
+
+    subject_surface = _subject_display_surface(item_text, subject) or _clean(subject)
+    candidates = []
+
+    def add(value):
+        title = _clean(_deescape_evidence_surface(value)).strip(" .,:;!?-–—")
+        folded = _fold(title)
+        if (
+            not title
+            or len(title) > 120
+            or not folded
+            or folded in {
+                "discography", "album", "debut album", "first album",
+                "debut studio album", "first studio album",
+            }
+        ):
+            return
+        if all(_fold(existing) != folded for existing in candidates):
+            candidates.append(title)
+
+    folded_item = _fold(item_text)
+    self_titled_markers = (
+        "self titled", "selftitled", "eponymous",
+        "sajat nevet viselo", "sajat cimu", "sajat nevu",
+        "selbstbetitelt", "selbstbenannt",
+    )
+    if any(marker in folded_item for marker in self_titled_markers):
+        add(subject_surface)
+
+    # Encyclopedic result shape:
+    # "Kill 'Em All is the debut studio album by ... Metallica"
+    # or "W.A.S.P. is the debut studio album by ... W.A.S.P."
+    title_pattern = re.compile(
+        r"(?im)^\s*(?P<title>[^\n]{2,120}?)\s+"
+        r"(?:is|was|ist|war)\s+(?:the\s+|das\s+|die\s+)?"
+        r"(?:debut|first|erste\w*)\s+(?:studio\s+)?album\b"
+    )
+    for field in fields[:3]:
+        for match in title_pattern.finditer(field):
+            add(match.group("title"))
+
+    # Band/artist overview pages often summarize the first releases as
+    # "first two studio albums, Title A (1984) and Title B (1985)". The first
+    # listed title is structurally bound to the requested ordinal relation.
+    first_list_pattern = re.compile(
+        r"(?i)\bfirst\b(?:\s+[\w-]+){0,4}\s+albums?\s*[,/:;-]\s*"
+        r"(?P<title>[^,;()]{2,100}?)\s*\((?:19|20)\d{2}\)"
+    )
+    for field in fields[:3]:
+        for match in first_list_pattern.finditer(field):
+            add(match.group("title"))
+
+    # Result-title fallback is intentionally narrow: only an explicit album
+    # page title may supply the value. A band/artist biography title must never
+    # be mistaken for the requested album.
+    result_title = _clean(item.get("title"))
+    body = "\n".join(fields[:3])
+    if (
+        result_title
+        and _debut_release_item_supported(body, request_text)
+        and re.search(
+            r"(?i)\((?:album|studio album|debut album)\)",
+            result_title,
+        )
+    ):
+        cleaned_title = re.sub(
+            r"\s*[-|:]\s*(?:wikipedia|discogs|allmusic|musicbrainz).*$",
+            "",
+            result_title,
+            flags=re.IGNORECASE,
+        )
+        cleaned_title = re.sub(
+            r"\s*\((?:album|studio album|debut album)\)\s*$",
+            "",
+            cleaned_title,
+            flags=re.IGNORECASE,
+        )
+        add(cleaned_title)
+
+    return tuple(candidates)
+
+
+def _release_year_candidates_from_item(item, request_text):
+    fields = [
+        str(item.get("snippet") or ""),
+        str(item.get("page_text") or ""),
+        str(item.get("pre_extracted_context") or ""),
+    ]
+    years = []
+    first_list_year_pattern = re.compile(
+        r"(?i)\bfirst\b(?:\s+[\w-]+){0,4}\s+albums?\s*[,/:;-]\s*"
+        r"[^,;()]{2,100}?\s*\((?P<year>(?:19|20)\d{2})\)"
+    )
+    for field in fields:
+        for match in first_list_year_pattern.finditer(field):
+            year = match.group("year")
+            if year not in years:
+                years.append(year)
+
+        # Work at result-field scope rather than splitting on periods: dotted
+        # entity names such as W.A.S.P. would otherwise destroy the relation
+        # clause before the release year is reached. The caller has already
+        # bound this result to subject + debut relation, and ambiguity still
+        # fails closed because multiple years are not rendered.
+        if not _debut_release_surface_supported(field):
+            continue
+        if not _temporal_relation_supported(field, "release"):
+            continue
+        for year in re.findall(
+            r"(?<!\d)(?:1[0-9]{3}|20[0-9]{2})(?!\d)",
+            field,
+        ):
+            if year not in years:
+                years.append(year)
+    return tuple(years)
+
+
+def resolve_debut_release_fact(payload, request_text):
+    """Resolve one unambiguous debut-release fact from structured evidence.
+
+    The resolver is deliberately host-side and entity-neutral. It only accepts
+    results already bound to the requested subject + debut/first-album relation.
+    Conflicting album titles fail closed instead of asking the model to choose.
+    """
+    if requested_fact_relation(request_text) != "release":
+        return {}
+    if not _is_debut_release_request(request_text):
+        return {}
+
+    subject = _release_subject_surface(request_text)
+    if not subject:
+        return {}
+
+    titles = []
+    years = []
+    subject_surfaces = []
+    for item in dict(payload or {}).get("results") or []:
+        item_text = "\n".join((
+            str(item.get("title") or ""),
+            str(item.get("snippet") or ""),
+            str(item.get("page_text") or ""),
+            str(item.get("pre_extracted_context") or ""),
+        ))
+        if not _debut_release_item_supported(item_text, request_text):
+            continue
+
+        surface = _subject_display_surface(item_text, subject)
+        if surface and all(_fold(value) != _fold(surface) for value in subject_surfaces):
+            subject_surfaces.append(surface)
+
+        for title in _debut_title_candidates_from_item(item, request_text):
+            if all(_fold(value) != _fold(title) for value in titles):
+                titles.append(title)
+
+        for year in _release_year_candidates_from_item(item, request_text):
+            if year not in years:
+                years.append(year)
+
+    if len(titles) != 1:
+        return {}
+
+    display_subject = subject_surfaces[0] if subject_surfaces else _clean(subject)
+    display_title = titles[0]
+    if _fold(display_title) == _fold(display_subject):
+        # Prefer the evidence-preserved entity spelling for self-titled releases
+        # (for example W.A.S.P. rather than a punctuation-trimmed W.A.S.P).
+        display_title = display_subject
+
+    return {
+        "subject": display_subject,
+        "title": display_title,
+        "year": years[0] if len(years) == 1 else "",
+        "relation": "release",
+    }
+
+
+def deterministic_direct_fact_fallback(
+    payload,
+    request_text,
+    requested_fact="general",
+    *,
+    language="hu",
+):
+    """Render a host-resolved direct fact only after generative grounding fails."""
+    requested_fact = str(requested_fact or "general")
+    fact = resolve_debut_release_fact(payload, request_text)
+    if not fact:
+        return ""
+
+    return render_resolved_direct_fact(
+        fact,
+        requested_fact,
+        language=language,
+    )
 
 
 def deterministic_hungarian_fact_fallback(authority_text, requested_fact="general"):

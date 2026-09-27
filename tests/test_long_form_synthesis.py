@@ -9,6 +9,8 @@ from app.chat_orchestration import plan_chat_actions
 from app.generation_policy import (
     LENGTH_LONG,
     LENGTH_SHORT,
+    SAMPLING_DEFAULT,
+    SAMPLING_FACTUAL_STRICT,
     SYNTHESIS_HYBRID,
     SYNTHESIS_LOCAL,
     SYNTHESIS_WEB,
@@ -121,6 +123,17 @@ def test_case_13_desktop_and_discord_share_contract_policy():
     discord = _contract(LONG_FORM_STABLE_GENERAL_PROMPT)
     assert desktop.synthesis_policy == discord.synthesis_policy
     assert desktop.constraints.output_budget == discord.constraints.output_budget
+
+
+def test_direct_fact_contract_exposes_route_aware_runtime_budget():
+    prompt = "melyik nagylemez volt az elso a sampleband zenekarnak?"
+    contract = _contract(prompt)
+
+    assert contract.route == ROUTE_WEB
+    assert contract.synthesis_policy.sampling_profile == SAMPLING_FACTUAL_STRICT
+    assert contract.runtime_output_budget == contract.synthesis_policy.output_budget
+    assert contract.runtime_output_budget == 384
+    assert contract.runtime_output_budget <= contract.constraints.output_budget
 
 
 def test_case_14_short_normal_query_does_not_inflate_budget():
@@ -270,3 +283,58 @@ def test_hybrid_worker_degrades_to_guarded_stable_synthesis_without_sources(
     assert worker.diagnostic_metadata["evidence_coverage"] == (
         "unavailable_for_web_augmentation"
     )
+
+
+def test_direct_fact_web_policy_uses_factual_strict_sampling():
+    prompt = "Mikor jelent meg a sampleband együttes első albuma?"
+    policy = build_generation_policy(
+        prompt,
+        profile=classify_request(prompt),
+        use_web=True,
+    )
+
+    assert policy.sampling_profile == SAMPLING_FACTUAL_STRICT
+    assert policy.temperature == 0.0
+    assert policy.seed == 42
+    assert 256 <= policy.output_budget <= 384
+
+
+def test_first_album_selection_web_policy_uses_factual_strict_sampling():
+    prompt = "Melyik nagylemez volt az első a sampleband zenekarnak?"
+    policy = build_generation_policy(
+        prompt,
+        profile=classify_request(prompt),
+        use_web=True,
+    )
+
+    assert policy.sampling_profile == SAMPLING_FACTUAL_STRICT
+    assert policy.temperature == 0.0
+    assert policy.seed == 42
+    assert 256 <= policy.output_budget <= 384
+
+
+def test_non_factual_web_policy_keeps_default_sampling():
+    prompt = "Mutasd be röviden a sampleband történetét."
+    policy = build_generation_policy(
+        prompt,
+        profile=classify_request(prompt),
+        use_web=True,
+    )
+
+    assert policy.sampling_profile == SAMPLING_DEFAULT
+    assert policy.temperature is None
+    assert policy.seed is None
+
+
+def test_local_direct_fact_does_not_force_web_factual_sampling_profile():
+    prompt = "Mi 2+2?"
+    policy = build_generation_policy(
+        prompt,
+        profile=classify_request(prompt),
+        use_web=False,
+    )
+
+    assert policy.sampling_profile == SAMPLING_DEFAULT
+    assert policy.temperature is None
+    assert policy.seed is None
+

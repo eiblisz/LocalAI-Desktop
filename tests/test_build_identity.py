@@ -5,12 +5,31 @@ from pathlib import Path
 def test_build_identity_rejects_unstamped_or_invalid_sha(monkeypatch):
     monkeypatch.setattr(build_identity, "BUILD_SHA", "not-a-sha")
     monkeypatch.setattr(build_identity, "EXPECTED_MAIN_SHA", "")
+    monkeypatch.setattr(build_identity, "_source_git_sha", lambda ref="HEAD": "")
 
     assert build_identity.build_identity() == {
         "build_sha": "source",
         "expected_main_sha": "unknown",
     }
     assert build_identity.short_build_sha() == "source"
+
+
+def test_source_build_identity_resolves_checkout_and_origin_main(monkeypatch):
+    build_sha = "0123456789abcdef0123456789abcdef01234567"
+    main_sha = "89abcdef0123456789abcdef0123456789abcdef"
+    monkeypatch.setattr(build_identity, "BUILD_SHA", "source")
+    monkeypatch.setattr(build_identity, "EXPECTED_MAIN_SHA", "unknown")
+    monkeypatch.setattr(
+        build_identity,
+        "_source_git_sha",
+        lambda ref="HEAD": build_sha if ref == "HEAD" else main_sha,
+    )
+
+    assert build_identity.build_identity() == {
+        "build_sha": build_sha,
+        "expected_main_sha": main_sha,
+    }
+    assert build_identity.short_build_sha() == build_sha[:12]
 
 
 def test_build_identity_exposes_stamped_full_and_short_sha(monkeypatch):

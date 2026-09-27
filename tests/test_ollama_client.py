@@ -1410,3 +1410,78 @@ def test_chat_stream_rejects_response_without_terminal_completion(monkeypatch):
             on_token=lambda _token: None,
             should_stop=lambda: False,
         )
+
+
+def test_chat_once_forwards_explicit_factual_sampling_options(monkeypatch):
+    captured = {}
+
+    def fake_post(_url, **kwargs):
+        captured.update(kwargs)
+        return _Response()
+
+    monkeypatch.setattr("app.ollama_client.requests.post", fake_post)
+
+    assert OllamaClient().chat_once(
+        model="local-factual-test:9b-q4",
+        messages=[{"role": "user", "content": "When was it released?"}],
+        num_predict=384,
+        temperature=0.0,
+        seed=42,
+    ) == "ok"
+
+    assert captured["json"]["options"] == {
+        "num_predict": 384,
+        "temperature": 0.0,
+        "seed": 42,
+    }
+
+
+def test_chat_stream_forwards_explicit_factual_sampling_options(monkeypatch):
+    import json
+
+    captured = {}
+
+    class StreamResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        def close(self):
+            return None
+
+        def iter_lines(self):
+            yield json.dumps({
+                "message": {"content": "ok"},
+                "done": True,
+                "done_reason": "stop",
+            }).encode("utf-8")
+
+    def fake_post(_url, **kwargs):
+        captured.update(kwargs)
+        return StreamResponse()
+
+    monkeypatch.setattr("app.ollama_client.requests.post", fake_post)
+
+    tokens = []
+    OllamaClient().chat_stream(
+        model="local-factual-test:9b-q4",
+        messages=[{"role": "user", "content": "When was it released?"}],
+        on_token=tokens.append,
+        should_stop=lambda: False,
+        num_predict=384,
+        temperature=0.0,
+        seed=42,
+    )
+
+    assert tokens == ["ok"]
+    assert captured["json"]["options"] == {
+        "num_predict": 384,
+        "temperature": 0.0,
+        "seed": 42,
+    }
+

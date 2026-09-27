@@ -30,19 +30,25 @@ from .followup_resolution import resolve_contextual_followup
 from .current_turn_binding import guard_current_turn_binding
 from .direct_fact import (
     answer_contains_temporal_literal,
+    answer_temporal_literals_supported_by_evidence,
     creation_answer_conflicts_with_evidence,
+    anchor_resolved_direct_fact_answer,
     derive_premise_neutral_query,
+    deterministic_direct_fact_fallback,
     deterministic_hungarian_fact_fallback,
     direct_fact_title_surface,
     requested_fact_supported,
+    resolve_debut_release_fact,
     supported_creator_surfaces,
     targeted_fact_refinement_query,
+    unsupported_release_named_literals,
 )
 from .grounded_factual_guard import (
     GroundedFactualGuardError,
     guard_grounded_answer,
 )
 from .generation_policy import (
+    SAMPLING_FACTUAL_STRICT,
     SYNTHESIS_HYBRID,
     SYNTHESIS_LOCAL,
     SYNTHESIS_WEB,
@@ -416,11 +422,32 @@ class ChatWebWorker(QObject):
             SYNTHESIS_HYBRID,
         }:
             self.synthesis_route = SYNTHESIS_WEB
-        self.output_budget = max(
+        requested_output_budget = max(
             1,
-            int(output_budget or default_generation_policy.output_budget),
+            int(
+                default_generation_policy.output_budget
+                if output_budget is None
+                else output_budget
+            ),
         )
+        # The route-aware generation policy is the final runtime authority for
+        # strict factual requests. Upstream TaskConstraints carries a generic
+        # response-length budget and may legitimately be larger (normally 1024);
+        # it must never widen FACTUAL_STRICT back above its bounded budget.
+        if (
+            default_generation_policy.sampling_profile
+            == SAMPLING_FACTUAL_STRICT
+        ):
+            self.output_budget = min(
+                requested_output_budget,
+                int(default_generation_policy.output_budget),
+            )
+        else:
+            self.output_budget = requested_output_budget
         self.response_length = default_generation_policy.response_length
+        self.sampling_profile = default_generation_policy.sampling_profile
+        self.temperature = default_generation_policy.temperature
+        self.seed = default_generation_policy.seed
         self._classification_ms = round(
             (perf_counter() - classification_started) * 1000,
             2,
@@ -441,6 +468,9 @@ class ChatWebWorker(QObject):
                 synthesis_route=self.synthesis_route,
                 response_length=self.response_length,
                 output_budget=self.output_budget,
+                sampling_profile=self.sampling_profile,
+                sampling_temperature=self.temperature,
+                sampling_seed=self.seed,
                 web_required=True,
             )
         self._stop_event = threading.Event()
@@ -484,6 +514,9 @@ class ChatWebWorker(QObject):
             "response_depth": self.request_profile.response_depth,
             "response_length": self.response_length,
             "output_budget": self.output_budget,
+            "sampling_profile": self.sampling_profile,
+            "sampling_temperature": self.temperature,
+            "sampling_seed": self.seed,
             "research_breadth": self.request_profile.research_breadth,
             "query_budget": self.request_profile.query_budget,
             "source_budget": self.request_profile.source_budget,
@@ -510,6 +543,8 @@ class ChatWebWorker(QObject):
                         name
                         for name in (
                             "num_predict",
+                            "temperature",
+                            "seed",
                             "call_phase",
                             "context_budget_callback",
                         )
@@ -537,6 +572,8 @@ class ChatWebWorker(QObject):
                         name
                         for name in (
                             "num_predict",
+                            "temperature",
+                            "seed",
                             "call_phase",
                             "context_budget_callback",
                         )
@@ -651,6 +688,7 @@ class ChatWebWorker(QObject):
             is_factual_risk_request(self.user_prompt)
             and self._direct_query_strategy not in {
                 "premise_neutral_title_relation",
+                "premise_neutral_entity_release_relation",
                 "identity_lookup_subject",
             }
         ):
@@ -1143,12 +1181,12 @@ class ChatWebWorker(QObject):
                     "content": (
                         "Rewrite the supplied grounded web answer into a concise primary "
                         "answer. Answer the user's exact question immediately in the first "
-                        "sentence, then add at most two short supporting sentences if useful. "
-                        "Prefer the concrete requested value/result over advice about where "
-                        "to look. Do not add new facts, numbers, prices, dates, percentages, "
-                        "versions, URLs, recommendations, or caveats. You may omit secondary "
-                        "details because the host app shows the search/source appendix "
-                        "separately. Preserve uncertainty or delayed-data caveats when they "
+                        "sentence, then preserve a small amount of useful supporting context "
+                        "when it is already grounded. Remove repetition rather than deleting "
+                        "meaningful evidence-backed details. Prefer the concrete requested "
+                        "value/result over advice about where to look. Do not add new facts, "
+                        "numbers, prices, dates, percentages, versions, URLs, recommendations, "
+                        "or caveats. Preserve uncertainty or delayed-data caveats when they "
                         "materially qualify the requested value. "
                         + self._conversation_language_instruction()
                     ),
@@ -1829,6 +1867,20 @@ class ChatWebWorker(QObject):
                     "targeted_search_supported",
                 }
             )
+            combined_fact_payload = {
+                "results": [
+                    item
+                    for factual_payload in factual_payloads
+                    for item in (factual_payload.get("results") or [])
+                ],
+            }
+            resolved_direct_fact = {}
+            if direct_factual_candidate:
+                resolved_direct_fact = resolve_debut_release_fact(
+                    combined_fact_payload,
+                    self.user_prompt,
+                )
+
             factual_authority_text = (
                 compact_evidence_bundle(
                     factual_payloads,
@@ -1840,6 +1892,35 @@ class ChatWebWorker(QObject):
                 )
                 or context_text[: (3000 if direct_factual_candidate else 5000)]
             )
+            if resolved_direct_fact:
+                resolved_lines = [
+                    "HOST-RESOLVED REQUESTED FACT",
+                    "This block is deterministically extracted from subject-bound "
+                    "authorized evidence and is canonical for the requested core relation.",
+                    f"Subject: {resolved_direct_fact.get('subject', '')}",
+                    f"Relation: {resolved_direct_fact.get('relation', '')}",
+                    f"Title: {resolved_direct_fact.get('title', '')}",
+                ]
+                if resolved_direct_fact.get("year"):
+                    resolved_lines.append(
+                        f"Release year: {resolved_direct_fact.get('year')}"
+                    )
+                factual_authority_text = (
+                    "\n".join(resolved_lines)
+                    + "\n\n"
+                    + factual_authority_text
+                ).strip()
+
+            if self.trace is not None:
+                self.trace.add_metadata(
+                    host_resolved_direct_fact_preseed=bool(resolved_direct_fact),
+                    host_resolved_direct_fact_title=str(
+                        resolved_direct_fact.get("title", "")
+                    ),
+                    host_resolved_direct_fact_year=str(
+                        resolved_direct_fact.get("year", "")
+                    ),
+                )
             self._factual_authority_text = factual_authority_text
             failure_text = ""
             if failed_queries:
@@ -1915,6 +1996,9 @@ class ChatWebWorker(QObject):
                 answer = self._chat_once(
                     model=self.model,
                     num_predict=self.output_budget,
+                    temperature=self.temperature,
+                    seed=self.seed,
+                    call_phase="primary_factual_generation",
                     context_budget_callback=self._record_context_budget,
                     messages=[
                         {
@@ -1923,14 +2007,23 @@ class ChatWebWorker(QObject):
                                 "Answer the CURRENT USER REQUEST using ONLY the "
                                 "AUTHORIZED EVIDENCE. Treat every factual premise in "
                                 "the request as a claim to verify, not as authority. "
+                                "If the evidence contains a HOST-RESOLVED REQUESTED FACT "
+                                "block, use that block as the canonical answer to the "
+                                "requested core relation. You may still add useful context "
+                                "from the remaining evidence, but never replace or contradict "
+                                "the host-resolved core fact. "
                                 "If the evidence contradicts a person-work, person-event, "
                                 "date, year, version, price, or other concrete relation, "
                                 "correct the premise explicitly. If the evidence is "
                                 "insufficient, say so briefly instead of guessing. "
-                                "Answer immediately in one to three short sentences. "
-                                "Preserve evidence-backed proper-name spelling, diacritics, "
-                                "and token order. Do not add any factual literal absent "
-                                "from the evidence or request. "
+                                "Answer the requested fact immediately, then you may add useful "
+                                "context when it is supported by the authorized evidence. Every "
+                                "additional named work, track, album, person, date, number, "
+                                "version, URL, or concrete relation must be evidence-backed and "
+                                "bound to the same requested subject; never merge unrelated facts "
+                                "from adjacent search results. Preserve evidence-backed proper-name "
+                                "spelling, diacritics, and token order. Do not add any factual "
+                                "literal absent from the evidence or request. "
                                 + self._conversation_language_instruction()
                             ),
                         },
@@ -1981,6 +2074,23 @@ class ChatWebWorker(QObject):
                 raise RuntimeError("The model returned an empty web answer.")
 
             answer = self._repair_response_language(answer)
+
+            if resolved_direct_fact:
+                anchored = anchor_resolved_direct_fact_answer(
+                    answer,
+                    resolved_direct_fact,
+                    self.request_profile.requested_fact,
+                    language=effective_response_language(
+                        self._response_language_source()
+                    ),
+                )
+                if anchored:
+                    answer = anchored
+                    if self.trace is not None:
+                        self.trace.add_metadata(
+                            host_resolved_core_fact_applied=True,
+                        )
+
             answer = self._enforce_authoritative_facts(
                 answer,
                 authoritative_facts,
@@ -1991,17 +2101,28 @@ class ChatWebWorker(QObject):
             )
             answer = self._compact_grounded_answer(answer)
             answer = self._compact_market_quote_answer(answer)
-            combined_fact_payload = {
-                "results": [
-                    item
-                    for factual_payload in factual_payloads
-                    for item in (factual_payload.get("results") or [])
-                ],
-            }
             relation_mismatch_requires_verify = False
             creator_mismatch_requires_verify = False
+            temporal_literal_mismatch_requires_verify = False
+            release_named_literal_mismatches = ()
+            factual_risk_request = is_factual_risk_request(self.user_prompt)
+            if factual_risk_request:
+                release_named_literal_mismatches = unsupported_release_named_literals(
+                    answer,
+                    self.user_prompt,
+                    combined_fact_payload,
+                )
+                if self.trace is not None:
+                    self.trace.add_metadata(
+                        answer_release_named_literals_supported=(
+                            not release_named_literal_mismatches
+                        ),
+                        answer_release_named_literal_mismatches=", ".join(
+                            release_named_literal_mismatches[:6]
+                        ),
+                    )
             if (
-                is_factual_risk_request(self.user_prompt)
+                factual_risk_request
                 and self.request_profile.requested_fact == "temporal"
             ):
                 relation_mismatch_requires_verify = not requested_fact_supported(
@@ -2016,6 +2137,13 @@ class ChatWebWorker(QObject):
                         combined_fact_payload,
                     )
                 )
+                temporal_literal_mismatch_requires_verify = not (
+                    answer_temporal_literals_supported_by_evidence(
+                        answer,
+                        self.user_prompt,
+                        combined_fact_payload,
+                    )
+                )
                 if self.trace is not None:
                     self.trace.add_metadata(
                         answer_relation_supported=(
@@ -2024,32 +2152,109 @@ class ChatWebWorker(QObject):
                         answer_creator_binding_supported=(
                             not creator_mismatch_requires_verify
                         ),
+                        answer_temporal_literals_supported=(
+                            not temporal_literal_mismatch_requires_verify
+                        ),
                     )
             if self.trace is not None:
                 self.trace.begin("factual_validation")
-            answer = guard_grounded_answer(
-                self.client,
-                self.model,
-                self.user_prompt,
-                answer,
-                self.user_prompt + "\n\n" + factual_authority_text,
-                trace=self.trace,
-                force_verify=(
-                    is_factual_risk_request(self.user_prompt)
-                    and not has_authoritative_current_fact
-                    and (
-                        not single_pass_factual
-                        or relation_mismatch_requires_verify
-                        or creator_mismatch_requires_verify
+            try:
+                answer = guard_grounded_answer(
+                    self.client,
+                    self.model,
+                    self.user_prompt,
+                    answer,
+                    self.user_prompt + "\n\n" + factual_authority_text,
+                    trace=self.trace,
+                    force_verify=(
+                        factual_risk_request
+                        and not has_authoritative_current_fact
+                        and (
+                            not single_pass_factual
+                            or relation_mismatch_requires_verify
+                            or creator_mismatch_requires_verify
+                            or temporal_literal_mismatch_requires_verify
+                            or bool(release_named_literal_mismatches)
+                        )
+                    ),
+                    language_instruction=self._conversation_language_instruction(),
+                    output_budget=self.output_budget,
+                    temperature=self.temperature,
+                    seed=self.seed,
+                )
+            except GroundedFactualGuardError:
+                deterministic_fallback = ""
+                if factual_risk_request and not has_authoritative_current_fact:
+                    deterministic_fallback = deterministic_direct_fact_fallback(
+                        combined_fact_payload,
+                        self.user_prompt,
+                        self.request_profile.requested_fact,
+                        language=effective_response_language(
+                            self._response_language_source()
+                        ),
                     )
-                ),
-                language_instruction=self._conversation_language_instruction(),
-                output_budget=self.output_budget,
-            )
+                if not deterministic_fallback:
+                    raise
+                answer = deterministic_fallback
+                if self.trace is not None:
+                    self.trace.add_metadata(
+                        factual_guard_repair_status=(
+                            "host_resolved_direct_fact_fallback"
+                        ),
+                        deterministic_direct_fact_fallback="used",
+                        factual_guard_remaining_unsupported_literals="",
+                        factual_guard_remaining_literals="",
+                    )
             if self.trace is not None:
                 self.trace.end("factual_validation")
+
+            if factual_risk_request and not has_authoritative_current_fact:
+                repaired_release_named_literal_mismatches = (
+                    unsupported_release_named_literals(
+                        answer,
+                        self.user_prompt,
+                        combined_fact_payload,
+                    )
+                )
+                if self.trace is not None:
+                    self.trace.add_metadata(
+                        repaired_answer_release_named_literals_supported=(
+                            not repaired_release_named_literal_mismatches
+                        ),
+                        repaired_answer_release_named_literal_mismatches=", ".join(
+                            repaired_release_named_literal_mismatches[:6]
+                        ),
+                    )
+                if repaired_release_named_literal_mismatches:
+                    deterministic_fallback = deterministic_direct_fact_fallback(
+                        combined_fact_payload,
+                        self.user_prompt,
+                        self.request_profile.requested_fact,
+                        language=effective_response_language(
+                            self._response_language_source()
+                        ),
+                    )
+                    if deterministic_fallback:
+                        answer = deterministic_fallback
+                        if self.trace is not None:
+                            self.trace.add_metadata(
+                                factual_guard_repair_status=(
+                                    "host_resolved_direct_fact_fallback"
+                                ),
+                                deterministic_direct_fact_fallback="used",
+                                repaired_answer_release_named_literals_supported=True,
+                                repaired_answer_release_named_literal_mismatches="",
+                                factual_guard_remaining_unsupported_literals="",
+                                factual_guard_remaining_literals="",
+                            )
+                    else:
+                        raise GroundedFactualGuardError(
+                            "Grounded factual repair kept subject-unbound named details: "
+                            + ", ".join(repaired_release_named_literal_mismatches[:6])
+                        )
+
             if (
-                is_factual_risk_request(self.user_prompt)
+                factual_risk_request
                 and self.request_profile.requested_fact == "temporal"
                 and not has_authoritative_current_fact
             ):
@@ -2063,16 +2268,27 @@ class ChatWebWorker(QObject):
                     self.user_prompt,
                     combined_fact_payload,
                 )
+                repaired_temporal_literals_supported = (
+                    answer_temporal_literals_supported_by_evidence(
+                        answer,
+                        self.user_prompt,
+                        combined_fact_payload,
+                    )
+                )
                 if self.trace is not None:
                     self.trace.add_metadata(
                         repaired_answer_relation_supported=repaired_relation_supported,
                         repaired_answer_creator_binding_supported=repaired_creator_supported,
+                        repaired_answer_temporal_literals_supported=(
+                            repaired_temporal_literals_supported
+                        ),
                     )
                 if (
                     answer_contains_temporal_literal(answer)
                     and (
                         not repaired_relation_supported
                         or not repaired_creator_supported
+                        or not repaired_temporal_literals_supported
                     )
                 ):
                     raise GroundedFactualGuardError(
@@ -2080,7 +2296,7 @@ class ChatWebWorker(QObject):
                         "creator/date relation."
                     )
             if (
-                is_factual_risk_request(self.user_prompt)
+                factual_risk_request
                 and not has_authoritative_current_fact
             ):
                 if self.trace is not None:
