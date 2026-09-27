@@ -9,6 +9,7 @@ from app.direct_fact import (
     deterministic_hungarian_fact_fallback,
     targeted_fact_refinement_query,
     requested_fact_supported,
+    unsupported_release_named_literals,
 )
 
 
@@ -376,3 +377,33 @@ def test_first_album_selection_requires_subject_bound_debut_evidence():
 
     assert requested_fact_supported(good, "selection", prompt) is True
     assert requested_fact_supported(unrelated, "selection", prompt) is False
+
+
+def test_release_extra_quoted_title_requires_same_result_subject_binding():
+    prompt = "Melyik nagylemez volt az első a sampleband zenekarnak?"
+    evidence = {
+        "results": [
+            {
+                "title": "Sample Band debut album",
+                "snippet": (
+                    "S.A.M.P.L.E.B.A.N.D. released its self-titled debut album "
+                    "in 1984. It includes the track \"Real Track\"."
+                ),
+            },
+            {
+                "title": "Other Band songs",
+                "snippet": 'Other Band recorded "Wrong Track".',
+            },
+        ],
+    }
+
+    assert unsupported_release_named_literals(
+        'A debütáló albumon szerepel a "Real Track".',
+        prompt,
+        evidence,
+    ) == ()
+    assert unsupported_release_named_literals(
+        'A debütáló albumon szerepel a "Wrong Track".',
+        prompt,
+        evidence,
+    ) == ("Wrong Track",)
