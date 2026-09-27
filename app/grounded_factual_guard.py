@@ -34,6 +34,13 @@ def _critical_literals(text):
         for match in re.finditer(pattern, value, flags=re.IGNORECASE):
             tokens.add(match.group(0).rstrip(".,;:"))
 
+    # Quoted factual titles/names are critical literals too. This catches a
+    # model inventing an album/book/work title even when it is a single word.
+    for match in re.finditer(r'["“”„«»](.{2,120}?)["“”„«»]', value):
+        quoted = " ".join(match.group(1).split()).strip(" .,:;!?")
+        if quoted and re.search(r"[A-Za-zÁÉÍÓÖŐÚÜŰáéíóöőúüű]", quoted):
+            tokens.add(quoted)
+
     # Retain one explicit proper-name span.  Do not manufacture overlapping
     # adjacent pairs: a person name followed by a title such as
     # "Arany János János Vitéz" used to create the false literal
