@@ -334,6 +334,11 @@ def _creation_date_supported(text):
     return False
 
 
+def answer_contains_temporal_literal(text):
+    """Return whether user-visible text contains an explicit date/year literal."""
+    return bool(_DATE_RE.search(str(text or "")))
+
+
 def requested_fact_supported(payload, requested_fact="general", request_text=""):
     """Whether provider snippets/page text contain a usable fact-shaped signal."""
     text = _evidence_text(payload)
