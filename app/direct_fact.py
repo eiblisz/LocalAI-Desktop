@@ -173,8 +173,15 @@ def derive_premise_neutral_query(prompt, requested_fact="general"):
         return clean, "validated_original"
 
     relation = requested_fact_relation(clean)
+    hungarian_creation_query = bool(
+        re.search(r"\b(?:mikor|irta|irja|cimu|verset|muvet)\b", _fold(clean))
+    )
     temporal_suffixes = {
-        "creation": "literary work author composition writing date year",
+        "creation": (
+            "szerző keletkezés megírás éve"
+            if hungarian_creation_query
+            else "literary work author composition writing date year"
+        ),
         "formation": "formation founding date year",
         "birth": "birth date year",
         "event": "event date year",
@@ -200,8 +207,15 @@ def targeted_fact_refinement_query(prompt, requested_fact="general"):
     if not title or str(requested_fact or "") != "temporal":
         return ""
 
+    hungarian_creation_query = bool(
+        re.search(r"\b(?:mikor|irta|irja|cimu|verset|muvet)\b", _fold(clean))
+    )
     suffixes = {
-        "creation": "literary work author original composition year",
+        "creation": (
+            "szerző eredeti keletkezés éve"
+            if hungarian_creation_query
+            else "literary work author original composition year"
+        ),
         "formation": "formation year",
         "birth": "birth year",
         "event": "event date",
@@ -253,6 +267,7 @@ _CREATION_DATE_MARKERS = (
 
 _PUBLICATION_DATE_MARKERS = (
     "jelent meg", "megjelent", "kiadas", "kiadva", "publikal",
+    "adta ki", "adtak ki", "kiadta", "kiadtak", "kiadott",
     "published", "publication", "edition", "released",
     "erschien", "veroffentlicht", "ausgabe",
 )
@@ -363,6 +378,83 @@ def requested_fact_supported(payload, requested_fact="general", request_text="")
             continue
         if _temporal_relation_supported(item_text, relation):
             return True
+    return False
+
+
+_NAME_TOKEN_RE = r"[A-ZÁÉÍÓÖŐÚÜŰ][A-Za-zÁÉÍÓÖŐÚÜŰáéíóöőúüű-]{1,}"
+_NAME_SPAN_RE = rf"{_NAME_TOKEN_RE}(?:\s+{_NAME_TOKEN_RE}){{1,2}}"
+
+
+def _hungarian_alleged_creator(prompt):
+    match = re.match(
+        r"^\s*mikor\s+[ií]rta\s+(.+?)\s+(?:a|az)\s+",
+        _clean(prompt),
+        flags=re.IGNORECASE,
+    )
+    return _clean(match.group(1)) if match else ""
+
+
+def _creator_surfaces_from_text(text):
+    raw = str(text or "")
+    candidates = []
+    patterns = (
+        rf"(?P<person>{_NAME_SPAN_RE})\s+(?:[ií]rta|meg[ií]rta|wrote|authored|composed|created)\b",
+        rf"\b(?:written|authored|composed|created)\s+by\s+(?P<person>{_NAME_SPAN_RE})\b",
+        rf"\b(?:szerz[őo]je|szerz[őo]|author)\s*(?::|is|was)?\s*(?P<person>{_NAME_SPAN_RE})\b",
+    )
+    seen = set()
+    for pattern in patterns:
+        for match in re.finditer(pattern, raw, flags=re.IGNORECASE):
+            person = _clean(match.group("person"))
+            folded = _fold(person)
+            if folded and folded not in seen:
+                seen.add(folded)
+                candidates.append(person)
+    return candidates
+
+
+def supported_creator_surfaces(payload):
+    candidates = []
+    seen = set()
+    for item in dict(payload or {}).get("results") or []:
+        item_text = "\n".join((
+            str(item.get("title") or ""),
+            str(item.get("snippet") or ""),
+            str(item.get("page_text") or ""),
+            str(item.get("pre_extracted_context") or ""),
+        ))
+        for person in _creator_surfaces_from_text(item_text):
+            folded = _fold(person)
+            if folded and folded not in seen:
+                seen.add(folded)
+                candidates.append(person)
+    return tuple(candidates)
+
+
+def creation_answer_conflicts_with_evidence(answer, request_text, payload):
+    """Detect affirmation of a false creator premise contradicted by evidence."""
+    alleged = _hungarian_alleged_creator(request_text)
+    if not alleged:
+        return False
+
+    creators = supported_creator_surfaces(payload)
+    if not creators:
+        return False
+
+    alleged_folded = _fold(alleged)
+    if any(_fold(person) == alleged_folded for person in creators):
+        return False
+
+    answer_text = str(answer or "")
+    for clause in re.split(r"[.!?;,]+", answer_text):
+        folded = _fold(clause)
+        if not folded or alleged_folded not in folded:
+            continue
+        if not any(marker in folded for marker in _CREATION_DATE_MARKERS):
+            continue
+        if re.search(r"\b(?:nem|not|nicht)\b", folded):
+            continue
+        return True
     return False
 
 
