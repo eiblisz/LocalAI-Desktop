@@ -560,24 +560,39 @@ def requested_fact_supported(payload, requested_fact="general", request_text="")
     return False
 
 
-def _quoted_fact_literals(text):
+def _named_fact_literals(text):
     values = []
-    for match in re.finditer(r'["“”„«»](.{2,120}?)["“”„«»]', str(text or "")):
-        literal = _clean(match.group(1)).strip(" .,:;!?")
-        if literal and literal not in values:
+
+    def add(value):
+        literal = _clean(value).strip(" .,:;!?")
+        folded = _fold(literal)
+        if literal and folded and all(_fold(item) != folded for item in values):
             values.append(literal)
+
+    for match in re.finditer(r'["“”„«»](.{2,120}?)["“”„«»]', str(text or "")):
+        add(match.group(1))
+
+    # Also catch unquoted multi-word title/proper-name surfaces such as
+    # A Town Called Malice. Single-word unquoted surfaces remain deliberately
+    # out of scope because they cannot be separated reliably from ordinary prose.
+    for match in re.finditer(
+        r"\b[A-ZÁÉÍÓÖŐÚÜŰ][A-Za-zÁÉÍÓÖŐÚÜŰáéíóöőúüű-]{1,}"
+        r"(?:\s+[A-ZÁÉÍÓÖŐÚÜŰ][A-Za-zÁÉÍÓÖŐÚÜŰáéíóöőúüű-]{1,})+\b",
+        str(text or ""),
+    ):
+        add(match.group(0))
+
     return tuple(values)
 
 
 def unsupported_release_named_literals(answer, request_text, payload):
-    """Return quoted extra names/titles not bound to the requested release subject.
+    """Return named answer details not bound to the requested release subject.
 
     Literal presence somewhere in a multi-result evidence bundle is not enough:
     a title from an adjacent entity must not be attached to the entity the user
-    asked about. For first/debut-release questions, every newly introduced
-    quoted title/name must appear in an evidence result that also names the
-    requested subject. This remains entity-neutral and works across casing and
-    punctuation variants.
+    asked about. For first/debut-release questions, each detectable named detail
+    in the answer must appear in an evidence result that also names the requested
+    subject. The user's premise is not treated as factual authority.
     """
     if requested_fact_relation(request_text) != "release":
         return ()
@@ -585,13 +600,12 @@ def unsupported_release_named_literals(answer, request_text, payload):
     if not subject:
         return ()
 
-    request_literals = {_fold(item) for item in _quoted_fact_literals(request_text)}
     results = list(dict(payload or {}).get("results") or [])
     unsupported = []
 
-    for literal in _quoted_fact_literals(answer):
+    for literal in _named_fact_literals(answer):
         folded_literal = _fold(literal)
-        if not folded_literal or folded_literal in request_literals:
+        if not folded_literal:
             continue
 
         supported = False
