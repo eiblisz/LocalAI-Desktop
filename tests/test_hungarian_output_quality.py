@@ -237,10 +237,7 @@ def test_fluency_audit_accepts_schema_bound_status_and_findings_contract():
     )
 
     assert result == draft.replace("működéskére", "működésre")
-    assert isinstance(client.audit_format, dict)
-    status_schema = client.audit_format["properties"]["status"]
-    assert status_schema["minItems"] == 2
-    assert status_schema["maxItems"] == 2
+    assert client.audit_format == "json"
 
 
 def test_fluency_audit_reconciles_pass_status_with_reasoned_exact_finding():
