@@ -3100,3 +3100,160 @@ def test_debut_release_worker_forces_grounded_repair_for_invented_year_and_title
     assert snapshot["metadata"]["repaired_answer_temporal_literals_supported"] is True
 
 
+
+
+def test_first_album_selection_repairs_subject_unbound_extra_title_but_keeps_grounded_context(
+    monkeypatch,
+):
+    from app.request_trace import RequestTrace
+
+    prompt = "melyik nagylemez volt az elso a sampleband zenekarnak?"
+    search_calls = []
+    forced = []
+
+    class SelectionClient:
+        def __init__(self):
+            self.once_calls = []
+            self.stream_calls = []
+
+        def chat_once(self, model, messages, timeout=600.0, **kwargs):
+            self.once_calls.append((model, messages, dict(kwargs)))
+            callback = kwargs.get("context_budget_callback")
+            if callback:
+                callback({
+                    "estimated_final_prompt_units": 700,
+                    "requested_output_units": kwargs.get("num_predict", 1024),
+                    "requested_num_ctx": 4096,
+                    "model_max_context": 32768,
+                    "context_budget_decision": "fits_default_context",
+                    "context_budget_safety_units": 192,
+                })
+            return (
+                'A sampleband első nagylemeze a saját nevét viselő album volt. '
+                'Az albumon szerepel a "Wrong Track" is.'
+            )
+
+        def chat_stream(self, *args, **kwargs):
+            self.stream_calls.append((args, kwargs))
+            raise AssertionError("first-album selection must use factual single pass")
+
+    def fake_search(query, max_results=6, fetch_pages=True):
+        search_calls.append(query)
+        return {
+            "provider": "Brave Search API",
+            "query": query,
+            "retrieved_at": "2026-09-27T00:00:00",
+            "provider_chain_errors": [],
+            "results": [
+                {
+                    "title": "Sample Band debut album",
+                    "url": "https://example.com/sampleband",
+                    "snippet": (
+                        'S.A.M.P.L.E.B.A.N.D. released its self-titled debut album '
+                        'in 1984. It includes the track "Real Track".'
+                    ),
+                    "page_text": (
+                        'S.A.M.P.L.E.B.A.N.D. released its self-titled debut album '
+                        'in 1984. It includes the track "Real Track".'
+                    ),
+                },
+                {
+                    "title": "Other Band songs",
+                    "url": "https://example.com/otherband",
+                    "snippet": 'Other Band recorded "Wrong Track".',
+                    "page_text": 'Other Band recorded "Wrong Track".',
+                },
+            ],
+        }
+
+    def capture_guard(client, model, user_prompt, answer, authority, **kwargs):
+        forced.append(kwargs.get("force_verify"))
+        assert '"Wrong Track"' in authority
+        assert kwargs["output_budget"] == 384
+        assert kwargs["temperature"] == 0.0
+        assert kwargs["seed"] == 42
+        return (
+            'A sampleband első nagylemeze a saját nevét viselő album volt. '
+            'Az albumon szerepel a "Real Track" is.'
+        )
+
+    monkeypatch.setattr(workers, "search_web", fake_search)
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: [
+            "https://example.com/sampleband",
+            "https://example.com/otherband",
+        ],
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_entries",
+        lambda payload, limit=6: [
+            {
+                "title": "Sample Band debut album",
+                "url": "https://example.com/sampleband",
+            },
+            {
+                "title": "Other Band songs",
+                "url": "https://example.com/otherband",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: (
+            'S.A.M.P.L.E.B.A.N.D. released its self-titled debut album in 1984. '
+            'It includes the track "Real Track". Other Band recorded "Wrong Track".'
+        ),
+    )
+    monkeypatch.setattr(workers, "guard_grounded_answer", capture_guard)
+    monkeypatch.setattr(
+        workers,
+        "guard_current_turn_binding",
+        lambda client, model, user_prompt, answer, authority, **kwargs: answer,
+    )
+    monkeypatch.setattr(
+        workers,
+        "verify_answer_against_evidence",
+        lambda answer, query, ledgers: (True, []),
+    )
+
+    trace = RequestTrace("test")
+    tokens = []
+    errors = []
+    client = SelectionClient()
+    worker = workers.ChatWebWorker(
+        client,
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        prompt,
+        trace=trace,
+    )
+    worker.token.connect(tokens.append)
+    worker.failed.connect(errors.append)
+    worker.run()
+
+    assert errors == []
+    assert search_calls == ["sampleband debut first album discography"]
+    assert forced == [True]
+    assert client.stream_calls == []
+    assert len(client.once_calls) == 1
+    _, _, primary_kwargs = client.once_calls[0]
+    assert primary_kwargs["num_predict"] == 384
+    assert primary_kwargs["temperature"] == 0.0
+    assert primary_kwargs["seed"] == 42
+    assert tokens == [
+        'A sampleband első nagylemeze a saját nevét viselő album volt. '
+        'Az albumon szerepel a "Real Track" is.'
+    ]
+    snapshot = trace.snapshot()
+    assert snapshot["metadata"]["sampling_profile"] == "factual_strict"
+    assert snapshot["metadata"]["query_strategy"] == (
+        "premise_neutral_entity_release_relation"
+    )
+    assert snapshot["metadata"]["answer_release_named_literals_supported"] is False
+    assert snapshot["metadata"][
+        "repaired_answer_release_named_literals_supported"
+    ] is True
