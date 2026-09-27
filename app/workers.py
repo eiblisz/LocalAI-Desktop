@@ -422,6 +422,9 @@ class ChatWebWorker(QObject):
             int(output_budget or default_generation_policy.output_budget),
         )
         self.response_length = default_generation_policy.response_length
+        self.sampling_profile = default_generation_policy.sampling_profile
+        self.temperature = default_generation_policy.temperature
+        self.seed = default_generation_policy.seed
         self._classification_ms = round(
             (perf_counter() - classification_started) * 1000,
             2,
@@ -442,6 +445,9 @@ class ChatWebWorker(QObject):
                 synthesis_route=self.synthesis_route,
                 response_length=self.response_length,
                 output_budget=self.output_budget,
+                sampling_profile=self.sampling_profile,
+                sampling_temperature=self.temperature,
+                sampling_seed=self.seed,
                 web_required=True,
             )
         self._stop_event = threading.Event()
@@ -485,6 +491,9 @@ class ChatWebWorker(QObject):
             "response_depth": self.request_profile.response_depth,
             "response_length": self.response_length,
             "output_budget": self.output_budget,
+            "sampling_profile": self.sampling_profile,
+            "sampling_temperature": self.temperature,
+            "sampling_seed": self.seed,
             "research_breadth": self.request_profile.research_breadth,
             "query_budget": self.request_profile.query_budget,
             "source_budget": self.request_profile.source_budget,
@@ -511,6 +520,8 @@ class ChatWebWorker(QObject):
                         name
                         for name in (
                             "num_predict",
+                            "temperature",
+                            "seed",
                             "call_phase",
                             "context_budget_callback",
                         )
@@ -538,6 +549,8 @@ class ChatWebWorker(QObject):
                         name
                         for name in (
                             "num_predict",
+                            "temperature",
+                            "seed",
                             "call_phase",
                             "context_budget_callback",
                         )
@@ -1916,6 +1929,9 @@ class ChatWebWorker(QObject):
                 answer = self._chat_once(
                     model=self.model,
                     num_predict=self.output_budget,
+                    temperature=self.temperature,
+                    seed=self.seed,
+                    call_phase="primary_factual_generation",
                     context_budget_callback=self._record_context_budget,
                     messages=[
                         {
@@ -2058,6 +2074,8 @@ class ChatWebWorker(QObject):
                 ),
                 language_instruction=self._conversation_language_instruction(),
                 output_budget=self.output_budget,
+                temperature=self.temperature,
+                seed=self.seed,
             )
             if self.trace is not None:
                 self.trace.end("factual_validation")
