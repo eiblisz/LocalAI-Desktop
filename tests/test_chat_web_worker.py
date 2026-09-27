@@ -3078,7 +3078,7 @@ def test_debut_release_worker_forces_grounded_repair_for_invented_year_and_title
 
     assert errors == []
     assert search_calls == ["sampleband debut first album release date year"]
-    assert forced == [True]
+    assert forced == [False]
     assert client.stream_calls == []
     assert len(client.once_calls) == 1
     _, _, primary_kwargs = client.once_calls[0]
@@ -3096,8 +3096,9 @@ def test_debut_release_worker_forces_grounded_repair_for_invented_year_and_title
     assert snapshot["metadata"]["query_strategy"] == (
         "premise_neutral_entity_release_relation"
     )
-    assert snapshot["metadata"]["answer_temporal_literals_supported"] is False
+    assert snapshot["metadata"]["answer_temporal_literals_supported"] is True
     assert snapshot["metadata"]["repaired_answer_temporal_literals_supported"] is True
+    assert snapshot["metadata"]["host_resolved_core_fact_applied"] is True
 
 
 
@@ -3499,8 +3500,8 @@ def test_first_album_generation_is_preseeded_with_host_resolved_core_fact(monkey
     assert client.stream_calls == []
     assert worker.output_budget == 384
     assert tokens == [
-        "A W.A.S.P. első nagylemeze a W.A.S.P. című album volt, "
-        "amely 1984-ben jelent meg."
+        "A W.A.S.P. első nagylemeze a W.A.S.P. című album volt. "
+        "Az album 1984-ben jelent meg."
     ]
     snapshot = trace.snapshot()
     assert snapshot["metadata"]["host_resolved_direct_fact_preseed"] is True
