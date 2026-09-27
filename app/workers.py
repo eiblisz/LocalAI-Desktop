@@ -1158,12 +1158,12 @@ class ChatWebWorker(QObject):
                     "content": (
                         "Rewrite the supplied grounded web answer into a concise primary "
                         "answer. Answer the user's exact question immediately in the first "
-                        "sentence, then add at most two short supporting sentences if useful. "
-                        "Prefer the concrete requested value/result over advice about where "
-                        "to look. Do not add new facts, numbers, prices, dates, percentages, "
-                        "versions, URLs, recommendations, or caveats. You may omit secondary "
-                        "details because the host app shows the search/source appendix "
-                        "separately. Preserve uncertainty or delayed-data caveats when they "
+                        "sentence, then preserve a small amount of useful supporting context "
+                        "when it is already grounded. Remove repetition rather than deleting "
+                        "meaningful evidence-backed details. Prefer the concrete requested "
+                        "value/result over advice about where to look. Do not add new facts, "
+                        "numbers, prices, dates, percentages, versions, URLs, recommendations, "
+                        "or caveats. Preserve uncertainty or delayed-data caveats when they "
                         "materially qualify the requested value. "
                         + self._conversation_language_instruction()
                     ),
@@ -1945,10 +1945,14 @@ class ChatWebWorker(QObject):
                                 "date, year, version, price, or other concrete relation, "
                                 "correct the premise explicitly. If the evidence is "
                                 "insufficient, say so briefly instead of guessing. "
-                                "Answer immediately in one to three short sentences. "
-                                "Preserve evidence-backed proper-name spelling, diacritics, "
-                                "and token order. Do not add any factual literal absent "
-                                "from the evidence or request. "
+                                "Answer the requested fact immediately, then you may add useful "
+                                "context when it is supported by the authorized evidence. Every "
+                                "additional named work, track, album, person, date, number, "
+                                "version, URL, or concrete relation must be evidence-backed and "
+                                "bound to the same requested subject; never merge unrelated facts "
+                                "from adjacent search results. Preserve evidence-backed proper-name "
+                                "spelling, diacritics, and token order. Do not add any factual "
+                                "literal absent from the evidence or request. "
                                 + self._conversation_language_instruction()
                             ),
                         },
