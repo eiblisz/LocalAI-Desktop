@@ -33,6 +33,7 @@ from .direct_fact import (
     creation_answer_conflicts_with_evidence,
     derive_premise_neutral_query,
     deterministic_hungarian_fact_fallback,
+    direct_fact_title_surface,
     requested_fact_supported,
     supported_creator_surfaces,
     targeted_fact_refinement_query,
@@ -2066,11 +2067,19 @@ class ChatWebWorker(QObject):
             ):
                 if self.trace is not None:
                     self.trace.begin("context_validation")
-                allowed_correction_anchors = ()
+                allowed_correction_anchors = []
                 if self.request_profile.requested_fact == "temporal":
-                    allowed_correction_anchors = supported_creator_surfaces(
-                        combined_fact_payload
+                    allowed_correction_anchors.extend(
+                        supported_creator_surfaces(combined_fact_payload)
                     )
+                    work_title_anchor = direct_fact_title_surface(
+                        self.user_prompt
+                    )
+                    if work_title_anchor:
+                        allowed_correction_anchors.append(work_title_anchor)
+                allowed_correction_anchors = tuple(
+                    dict.fromkeys(allowed_correction_anchors)
+                )
                 answer = guard_current_turn_binding(
                     self.client,
                     self.model,
