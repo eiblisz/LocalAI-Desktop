@@ -560,6 +560,60 @@ def requested_fact_supported(payload, requested_fact="general", request_text="")
     return False
 
 
+def _quoted_fact_literals(text):
+    values = []
+    for match in re.finditer(r'["“”„«»](.{2,120}?)["“”„«»]', str(text or "")):
+        literal = _clean(match.group(1)).strip(" .,:;!?")
+        if literal and literal not in values:
+            values.append(literal)
+    return tuple(values)
+
+
+def unsupported_release_named_literals(answer, request_text, payload):
+    """Return quoted extra names/titles not bound to the requested release subject.
+
+    Literal presence somewhere in a multi-result evidence bundle is not enough:
+    a title from an adjacent entity must not be attached to the entity the user
+    asked about. For first/debut-release questions, every newly introduced
+    quoted title/name must appear in an evidence result that also names the
+    requested subject. This remains entity-neutral and works across casing and
+    punctuation variants.
+    """
+    if requested_fact_relation(request_text) != "release":
+        return ()
+    subject = _release_subject_surface(request_text)
+    if not subject:
+        return ()
+
+    request_literals = {_fold(item) for item in _quoted_fact_literals(request_text)}
+    results = list(dict(payload or {}).get("results") or [])
+    unsupported = []
+
+    for literal in _quoted_fact_literals(answer):
+        folded_literal = _fold(literal)
+        if not folded_literal or folded_literal in request_literals:
+            continue
+
+        supported = False
+        for item in results:
+            item_text = "\n".join((
+                str(item.get("title") or ""),
+                str(item.get("snippet") or ""),
+                str(item.get("page_text") or ""),
+                str(item.get("pre_extracted_context") or ""),
+            ))
+            if not _subject_supported_in_text(item_text, subject):
+                continue
+            if _subject_supported_in_text(item_text, literal):
+                supported = True
+                break
+
+        if not supported:
+            unsupported.append(literal)
+
+    return tuple(sorted(set(unsupported), key=str.casefold))
+
+
 def answer_temporal_literals_supported_by_evidence(answer, request_text, payload):
     """Require each answer year to bind to the requested relation in evidence."""
     years = tuple(dict.fromkeys(
