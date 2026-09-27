@@ -483,13 +483,7 @@ class DiscordBotBridge(QObject):
                 response_length=str(
                     getattr(contract.constraints, "response_length", "normal")
                 ),
-                output_budget=int(
-                    getattr(
-                        synthesis_policy,
-                        "output_budget",
-                        getattr(contract.constraints, "output_budget", 1024),
-                    )
-                ),
+                output_budget=contract.runtime_output_budget,
                 web_required=bool(getattr(contract, "use_web", False)),
             )
             try:
@@ -514,15 +508,7 @@ class DiscordBotBridge(QObject):
                             "synthesis_route",
                             None,
                         ),
-                        output_budget=getattr(
-                            synthesis_policy,
-                            "output_budget",
-                            getattr(
-                                contract.constraints,
-                                "output_budget",
-                                None,
-                            ),
-                        ),
+                        output_budget=contract.runtime_output_budget,
                     )
                 child_trace.add_metadata(child_status="passed")
                 last_chat_id = str(
