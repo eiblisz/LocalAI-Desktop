@@ -37,6 +37,7 @@ from .direct_fact import (
     deterministic_hungarian_fact_fallback,
     direct_fact_title_surface,
     requested_fact_supported,
+    resolve_debut_release_fact,
     supported_creator_surfaces,
     targeted_fact_refinement_query,
     unsupported_release_named_literals,
@@ -1865,6 +1866,20 @@ class ChatWebWorker(QObject):
                     "targeted_search_supported",
                 }
             )
+            combined_fact_payload = {
+                "results": [
+                    item
+                    for factual_payload in factual_payloads
+                    for item in (factual_payload.get("results") or [])
+                ],
+            }
+            resolved_direct_fact = {}
+            if direct_factual_candidate:
+                resolved_direct_fact = resolve_debut_release_fact(
+                    combined_fact_payload,
+                    self.user_prompt,
+                )
+
             factual_authority_text = (
                 compact_evidence_bundle(
                     factual_payloads,
@@ -1876,6 +1891,35 @@ class ChatWebWorker(QObject):
                 )
                 or context_text[: (3000 if direct_factual_candidate else 5000)]
             )
+            if resolved_direct_fact:
+                resolved_lines = [
+                    "HOST-RESOLVED REQUESTED FACT",
+                    "This block is deterministically extracted from subject-bound "
+                    "authorized evidence and is canonical for the requested core relation.",
+                    f"Subject: {resolved_direct_fact.get('subject', '')}",
+                    f"Relation: {resolved_direct_fact.get('relation', '')}",
+                    f"Title: {resolved_direct_fact.get('title', '')}",
+                ]
+                if resolved_direct_fact.get("year"):
+                    resolved_lines.append(
+                        f"Release year: {resolved_direct_fact.get('year')}"
+                    )
+                factual_authority_text = (
+                    "\n".join(resolved_lines)
+                    + "\n\n"
+                    + factual_authority_text
+                ).strip()
+
+            if self.trace is not None:
+                self.trace.add_metadata(
+                    host_resolved_direct_fact_preseed=bool(resolved_direct_fact),
+                    host_resolved_direct_fact_title=str(
+                        resolved_direct_fact.get("title", "")
+                    ),
+                    host_resolved_direct_fact_year=str(
+                        resolved_direct_fact.get("year", "")
+                    ),
+                )
             self._factual_authority_text = factual_authority_text
             failure_text = ""
             if failed_queries:
@@ -1962,6 +2006,11 @@ class ChatWebWorker(QObject):
                                 "Answer the CURRENT USER REQUEST using ONLY the "
                                 "AUTHORIZED EVIDENCE. Treat every factual premise in "
                                 "the request as a claim to verify, not as authority. "
+                                "If the evidence contains a HOST-RESOLVED REQUESTED FACT "
+                                "block, use that block as the canonical answer to the "
+                                "requested core relation. You may still add useful context "
+                                "from the remaining evidence, but never replace or contradict "
+                                "the host-resolved core fact. "
                                 "If the evidence contradicts a person-work, person-event, "
                                 "date, year, version, price, or other concrete relation, "
                                 "correct the premise explicitly. If the evidence is "
@@ -2034,13 +2083,6 @@ class ChatWebWorker(QObject):
             )
             answer = self._compact_grounded_answer(answer)
             answer = self._compact_market_quote_answer(answer)
-            combined_fact_payload = {
-                "results": [
-                    item
-                    for factual_payload in factual_payloads
-                    for item in (factual_payload.get("results") or [])
-                ],
-            }
             relation_mismatch_requires_verify = False
             creator_mismatch_requires_verify = False
             temporal_literal_mismatch_requires_verify = False
@@ -2143,6 +2185,7 @@ class ChatWebWorker(QObject):
                         ),
                         deterministic_direct_fact_fallback="used",
                         factual_guard_remaining_unsupported_literals="",
+                        factual_guard_remaining_literals="",
                     )
             if self.trace is not None:
                 self.trace.end("factual_validation")
