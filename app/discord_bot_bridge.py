@@ -484,7 +484,11 @@ class DiscordBotBridge(QObject):
                     getattr(contract.constraints, "response_length", "normal")
                 ),
                 output_budget=int(
-                    getattr(contract.constraints, "output_budget", 1024)
+                    getattr(
+                        synthesis_policy,
+                        "output_budget",
+                        getattr(contract.constraints, "output_budget", 1024),
+                    )
                 ),
                 web_required=bool(getattr(contract, "use_web", False)),
             )
@@ -511,9 +515,13 @@ class DiscordBotBridge(QObject):
                             None,
                         ),
                         output_budget=getattr(
-                            contract.constraints,
+                            synthesis_policy,
                             "output_budget",
-                            None,
+                            getattr(
+                                contract.constraints,
+                                "output_budget",
+                                None,
+                            ),
                         ),
                     )
                 child_trace.add_metadata(child_status="passed")
