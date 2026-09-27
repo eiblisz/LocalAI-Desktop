@@ -33,6 +33,7 @@ from .direct_fact import (
     answer_temporal_literals_supported_by_evidence,
     creation_answer_conflicts_with_evidence,
     derive_premise_neutral_query,
+    deterministic_direct_fact_fallback,
     deterministic_hungarian_fact_fallback,
     direct_fact_title_surface,
     requested_fact_supported,
@@ -2097,29 +2098,52 @@ class ChatWebWorker(QObject):
                     )
             if self.trace is not None:
                 self.trace.begin("factual_validation")
-            answer = guard_grounded_answer(
-                self.client,
-                self.model,
-                self.user_prompt,
-                answer,
-                self.user_prompt + "\n\n" + factual_authority_text,
-                trace=self.trace,
-                force_verify=(
-                    factual_risk_request
-                    and not has_authoritative_current_fact
-                    and (
-                        not single_pass_factual
-                        or relation_mismatch_requires_verify
-                        or creator_mismatch_requires_verify
-                        or temporal_literal_mismatch_requires_verify
-                        or bool(release_named_literal_mismatches)
+            try:
+                answer = guard_grounded_answer(
+                    self.client,
+                    self.model,
+                    self.user_prompt,
+                    answer,
+                    self.user_prompt + "\n\n" + factual_authority_text,
+                    trace=self.trace,
+                    force_verify=(
+                        factual_risk_request
+                        and not has_authoritative_current_fact
+                        and (
+                            not single_pass_factual
+                            or relation_mismatch_requires_verify
+                            or creator_mismatch_requires_verify
+                            or temporal_literal_mismatch_requires_verify
+                            or bool(release_named_literal_mismatches)
+                        )
+                    ),
+                    language_instruction=self._conversation_language_instruction(),
+                    output_budget=self.output_budget,
+                    temperature=self.temperature,
+                    seed=self.seed,
+                )
+            except GroundedFactualGuardError:
+                deterministic_fallback = ""
+                if factual_risk_request and not has_authoritative_current_fact:
+                    deterministic_fallback = deterministic_direct_fact_fallback(
+                        combined_fact_payload,
+                        self.user_prompt,
+                        self.request_profile.requested_fact,
+                        language=effective_response_language(
+                            self._response_language_source()
+                        ),
                     )
-                ),
-                language_instruction=self._conversation_language_instruction(),
-                output_budget=self.output_budget,
-                temperature=self.temperature,
-                seed=self.seed,
-            )
+                if not deterministic_fallback:
+                    raise
+                answer = deterministic_fallback
+                if self.trace is not None:
+                    self.trace.add_metadata(
+                        factual_guard_repair_status=(
+                            "host_resolved_direct_fact_fallback"
+                        ),
+                        deterministic_direct_fact_fallback="used",
+                        factual_guard_remaining_unsupported_literals="",
+                    )
             if self.trace is not None:
                 self.trace.end("factual_validation")
 
