@@ -845,8 +845,21 @@ class OllamaClient:
         if self.auto_prepare_model:
             try:
                 self.prepare_model(model, allow_model_release=False)
-                preparation_stage = "model_warmup"
-                preparation_stage = "model_warmup"
+            except Exception as exc:
+                self._notify_context_budget(
+                    context_budget_callback,
+                    context_budget,
+                )
+                _tag_context_budget(exc, context_budget)
+                raise _tag_ollama_failure(
+                    exc,
+                    stage="model_preparation",
+                    classification="model_prepare_failed",
+                    request_sequence=request_sequence,
+                    call_phase=call_phase,
+                    preparation_reason=exc,
+                )
+            try:
                 readiness = self._ensure_model_ready(
                     model,
                     requested_num_ctx=context_budget["requested_num_ctx"],
@@ -863,11 +876,7 @@ class OllamaClient:
                 raise _tag_ollama_failure(
                     exc,
                     stage="model_preparation",
-                    classification=(
-                        "model_warmup_failed"
-                        if locals().get("preparation_stage") == "model_warmup"
-                        else "model_prepare_failed"
-                    ),
+                    classification="model_warmup_failed",
                     request_sequence=request_sequence,
                     call_phase=call_phase,
                     preparation_reason=exc,
@@ -995,10 +1004,6 @@ class OllamaClient:
                 model,
                 context_budget["requested_num_ctx"],
             )
-            self._remember_prepared_context(
-                model,
-                context_budget["requested_num_ctx"],
-            )
             self._set_request_state(
                 model,
                 request_id,
@@ -1038,6 +1043,21 @@ class OllamaClient:
         if self.auto_prepare_model:
             try:
                 self.prepare_model(model, allow_model_release=False)
+            except Exception as exc:
+                self._notify_context_budget(
+                    context_budget_callback,
+                    context_budget,
+                )
+                _tag_context_budget(exc, context_budget)
+                raise _tag_ollama_failure(
+                    exc,
+                    stage="model_preparation",
+                    classification="model_prepare_failed",
+                    request_sequence=request_sequence,
+                    call_phase=call_phase,
+                    preparation_reason=exc,
+                )
+            try:
                 readiness = self._ensure_model_ready(
                     model,
                     requested_num_ctx=context_budget["requested_num_ctx"],
@@ -1054,11 +1074,7 @@ class OllamaClient:
                 raise _tag_ollama_failure(
                     exc,
                     stage="model_preparation",
-                    classification=(
-                        "model_warmup_failed"
-                        if locals().get("preparation_stage") == "model_warmup"
-                        else "model_prepare_failed"
-                    ),
+                    classification="model_warmup_failed",
                     request_sequence=request_sequence,
                     call_phase=call_phase,
                     preparation_reason=exc,
@@ -1170,6 +1186,10 @@ class OllamaClient:
             )
             raise
         else:
+            self._remember_prepared_context(
+                model,
+                context_budget["requested_num_ctx"],
+            )
             self._set_request_state(
                 model,
                 request_id,
