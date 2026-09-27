@@ -883,17 +883,21 @@ def _release_year_candidates_from_item(item, request_text):
     ]
     years = []
     for field in fields:
-        for clause in re.split(r"[.!?;\n]+", field):
-            if not _debut_release_surface_supported(clause):
-                continue
-            if not _temporal_relation_supported(clause, "release"):
-                continue
-            for year in re.findall(
-                r"(?<!\d)(?:1[0-9]{3}|20[0-9]{2})(?!\d)",
-                clause,
-            ):
-                if year not in years:
-                    years.append(year)
+        # Work at result-field scope rather than splitting on periods: dotted
+        # entity names such as W.A.S.P. would otherwise destroy the relation
+        # clause before the release year is reached. The caller has already
+        # bound this result to subject + debut relation, and ambiguity still
+        # fails closed because multiple years are not rendered.
+        if not _debut_release_surface_supported(field):
+            continue
+        if not _temporal_relation_supported(field, "release"):
+            continue
+        for year in re.findall(
+            r"(?<!\d)(?:1[0-9]{3}|20[0-9]{2})(?!\d)",
+            field,
+        ):
+            if year not in years:
+                years.append(year)
     return tuple(years)
 
 
