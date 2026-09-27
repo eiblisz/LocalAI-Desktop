@@ -428,6 +428,7 @@ class ChatWebWorker(QObject):
         self.execution_control = ExecutionControl.for_request_profile(
             self.request_profile
         )
+        self._cold_start_deadline_grace_applied = False
         self.compact_market_quote = bool(compact_market_quote)
         self.trace = trace
         if self.trace is not None:
@@ -548,8 +549,25 @@ class ChatWebWorker(QObject):
                 kwargs.pop(unsupported)
 
     def _record_context_budget(self, metadata):
+        values = dict(metadata or {})
+        if (
+            not self._cold_start_deadline_grace_applied
+            and self.request_profile.kind == TASK_DIRECT_FACT
+            and values.get("model_warmup_required") is True
+            and values.get("model_warmup_reason") == "cold_model"
+            and values.get("model_warmup_result") == "ready"
+        ):
+            grace = self.execution_control.budget.add_deadline_grace(
+                45.0,
+                max_total_grace=45.0,
+            )
+            self._cold_start_deadline_grace_applied = True
+            values["execution_deadline_grace_seconds"] = grace
+            values["execution_deadline_budget_seconds"] = (
+                float(self.execution_control.budget.timeout_seconds) + grace
+            )
         if self.trace is not None:
-            self.trace.add_metadata(**dict(metadata or {}))
+            self.trace.add_metadata(**values)
 
     def _search_payload(self, query, *, max_results, fetch_pages):
         self.execution_control.claim_search()
