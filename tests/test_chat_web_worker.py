@@ -52,6 +52,51 @@ class DummyWebClient:
             on_token("Grounded web answer.")
 
 
+def test_direct_fact_cold_warmup_grants_one_deadline_grace():
+    worker = workers.ChatWebWorker(
+        DummyWebClient(),
+        "gemma-test",
+        [{"role": "user", "content": "Mikor írta Sample Author a Sample Work című művet?"}],
+        "Mikor írta Sample Author a Sample Work című művet?",
+    )
+
+    assert worker.execution_control.budget.timeout_seconds == 45.0
+    assert worker.execution_control.budget.deadline_grace_seconds == 0.0
+
+    worker._record_context_budget({
+        "model_warmup_required": True,
+        "model_warmup_reason": "cold_model",
+        "model_warmup_result": "ready",
+    })
+
+    assert worker.execution_control.budget.deadline_grace_seconds == 45.0
+
+    worker._record_context_budget({
+        "model_warmup_required": True,
+        "model_warmup_reason": "cold_model",
+        "model_warmup_result": "ready",
+    })
+
+    assert worker.execution_control.budget.deadline_grace_seconds == 45.0
+
+
+def test_direct_fact_warm_model_does_not_receive_deadline_grace():
+    worker = workers.ChatWebWorker(
+        DummyWebClient(),
+        "eurollm-test",
+        [{"role": "user", "content": "Mikor írta Sample Author a Sample Work című művet?"}],
+        "Mikor írta Sample Author a Sample Work című művet?",
+    )
+
+    worker._record_context_budget({
+        "model_warmup_required": False,
+        "model_warmup_reason": "",
+        "model_warmup_result": "not_needed",
+    })
+
+    assert worker.execution_control.budget.deadline_grace_seconds == 0.0
+
+
 def test_chat_web_worker_searches_streams_and_keeps_sources_structured(monkeypatch):
     monkeypatch.setattr(
         workers,
