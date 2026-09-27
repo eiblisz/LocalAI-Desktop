@@ -60,6 +60,9 @@ RELATION_MARKERS = {
     "release": (
         "megjelent", "jelent meg", "kiadtak", "kiadta", "adtak ki", "adta ki",
         "bemutattak", "released", "release", "published",
+        "elso album", "elso nagylemez", "elso lemez", "debutalo album",
+        "debutalbum", "first album", "first studio album", "debut album",
+        "debut studio album", "erstes album", "debutalbum",
     ),
     "publication": ("publikaltak", "kiadtak", "published"),
     "event_date": ("tortent", "esemeny", "happened", "event"),
