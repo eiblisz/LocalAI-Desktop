@@ -68,10 +68,22 @@ class ExecutionBudget:
     search_calls: int = 0
     page_fetches: int = 0
     repairs: int = 0
+    deadline_grace_seconds: float = 0.0
 
     @property
     def deadline(self):
-        return self.started_at + max(1.0, float(self.timeout_seconds))
+        return (
+            self.started_at
+            + max(1.0, float(self.timeout_seconds))
+            + max(0.0, float(self.deadline_grace_seconds))
+        )
+
+    def add_deadline_grace(self, seconds, *, max_total_grace=45.0):
+        requested = max(0.0, float(seconds))
+        cap = max(0.0, float(max_total_grace))
+        previous = max(0.0, float(self.deadline_grace_seconds))
+        self.deadline_grace_seconds = min(cap, previous + requested)
+        return self.deadline_grace_seconds
 
     def remaining_seconds(self):
         return max(0.0, self.deadline - time.monotonic())
