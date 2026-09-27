@@ -6,7 +6,9 @@ from app.direct_fact import (
     derive_premise_neutral_query,
     direct_fact_title_surface,
     supported_creator_surfaces,
+    deterministic_direct_fact_fallback,
     deterministic_hungarian_fact_fallback,
+    resolve_debut_release_fact,
     targeted_fact_refinement_query,
     requested_fact_supported,
     unsupported_release_named_literals,
@@ -412,3 +414,56 @@ def test_release_extra_quoted_title_requires_same_result_subject_binding():
         prompt,
         evidence,
     ) == ("Wrong Track",)
+
+
+def test_host_resolves_self_titled_debut_selection_from_bound_evidence():
+    prompt = "melyik nagylemez volt az elso a wasp zenekarnak?"
+    evidence = {
+        "results": [{
+            "title": "W.A.S.P. (album) - Wikipedia",
+            "snippet": (
+                "W.A.S.P. is the debut studio album by American heavy metal "
+                "band W.A.S.P., released in 1984."
+            ),
+        }],
+    }
+
+    fact = resolve_debut_release_fact(evidence, prompt)
+
+    assert fact["title"].replace(".", "") == "WASP"
+    assert fact["subject"].replace(".", "") == "WASP"
+    assert fact["year"] == "1984"
+
+    answer = deterministic_direct_fact_fallback(
+        evidence,
+        prompt,
+        "selection",
+        language="hu",
+    )
+    assert "első nagylemeze" in answer
+    assert "W.A.S.P" in answer
+    assert "1984" in answer
+
+
+def test_host_direct_fact_fallback_fails_closed_on_conflicting_debut_titles():
+    prompt = "Melyik nagylemez volt az első a sampleband zenekarnak?"
+    evidence = {
+        "results": [
+            {
+                "title": "Alpha",
+                "snippet": "Alpha is the debut studio album by Sampleband.",
+            },
+            {
+                "title": "Beta",
+                "snippet": "Beta is the debut studio album by Sampleband.",
+            },
+        ],
+    }
+
+    assert resolve_debut_release_fact(evidence, prompt) == {}
+    assert deterministic_direct_fact_fallback(
+        evidence,
+        prompt,
+        "selection",
+        language="hu",
+    ) == ""
