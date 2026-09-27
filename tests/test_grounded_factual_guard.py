@@ -337,3 +337,34 @@ def test_grounded_guard_rejects_invented_single_word_quoted_title():
     assert "Mystery" in unsupported
     assert "1979" in unsupported
 
+
+
+def test_grounded_guard_repair_uses_explicit_factual_sampling_controls():
+    authority = "AUTHORIZED EVIDENCE: Sample Band released its debut album in 1984."
+
+    class SamplingRepairClient:
+        def __init__(self):
+            self.kwargs = None
+
+        def chat_once(self, **kwargs):
+            self.kwargs = dict(kwargs)
+            return "Sample Band released its debut album in 1984."
+
+    client = SamplingRepairClient()
+    result = guard_grounded_answer(
+        client,
+        "qwen-test",
+        "When did Sample Band release its debut album?",
+        "Sample Band released its debut album in 1979.",
+        authority,
+        force_verify=True,
+        output_budget=384,
+        temperature=0.0,
+        seed=42,
+    )
+
+    assert result == "Sample Band released its debut album in 1984."
+    assert client.kwargs["num_predict"] == 384
+    assert client.kwargs["temperature"] == 0.0
+    assert client.kwargs["seed"] == 42
+
