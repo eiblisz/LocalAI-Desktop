@@ -86,6 +86,83 @@ def _normalize_key(value):
     return re.sub(r"[^a-z0-9]+", "_", _clean(value).lower()).strip("_")
 
 
+_WINDOW_STATE_MARKERS = (
+    ("codename", ("codename",)),
+    ("codename", ("code", "name")),
+    ("codename", ("kodnev",)),
+    ("codename", ("kodneve",)),
+    ("identifier", ("identifier",)),
+    ("identifier", ("azonosito",)),
+    ("status", ("status",)),
+    ("status", ("allapot",)),
+    ("decision", ("decision",)),
+    ("decision", ("decided",)),
+    ("decision", ("dontes",)),
+    ("decision", ("dontott",)),
+    ("selection", ("selected",)),
+    ("selection", ("chosen",)),
+    ("selection", ("valasztott",)),
+    ("selection", ("kivalasztott",)),
+    ("preference", ("preference",)),
+    ("preference", ("preferred",)),
+    ("preference", ("beallitas",)),
+)
+_WINDOW_STATE_SUBJECT_STOPWORDS = {
+    "a", "az", "the", "this", "that", "egy", "my", "our", "project",
+}
+
+
+def window_state_slot_key(text):
+    """Return a generic replaceable-state slot key, or empty when unknown.
+
+    The slot is based only on the user's subject phrase plus a state relation
+    such as codename/status/identifier. It contains no project-specific names.
+    """
+    tokens = canonical_match_text(text).split()
+    if not tokens:
+        return ""
+    for relation, marker in _WINDOW_STATE_MARKERS:
+        width = len(marker)
+        for index in range(0, len(tokens) - width + 1):
+            if tuple(tokens[index:index + width]) != tuple(marker):
+                continue
+            subject = [
+                token
+                for token in tokens[max(0, index - 6):index]
+                if token not in _WINDOW_STATE_SUBJECT_STOPWORDS
+            ]
+            if not subject:
+                return ""
+            return f"{relation}:{' '.join(subject)}"
+    return ""
+
+
+def collapse_window_state_lines(*sources):
+    """Keep only the newest line for the same replaceable state slot."""
+    plain = []
+    slotted = {}
+    seen_plain = set()
+    for source in sources:
+        for raw_line in str(source or "").splitlines():
+            line = raw_line.strip()
+            if not line.casefold().startswith("- user:"):
+                continue
+            content = line.split(":", 1)[1].strip()
+            slot = window_state_slot_key(content)
+            if slot:
+                # Dict assignment replaces stale values while preserving a
+                # single authoritative line for that slot.
+                if slot in slotted:
+                    del slotted[slot]
+                slotted[slot] = line
+                continue
+            normalized = canonical_match_text(line)
+            if normalized and normalized not in seen_plain:
+                plain.append(line)
+                seen_plain.add(normalized)
+    return plain + list(slotted.values())
+
+
 def secret_memory_reason(*, key="", value="", subject=""):
     normalized_key = _normalize_key(key)
     normalized_subject = _normalize_key(subject)
@@ -837,21 +914,13 @@ class MemoryStore:
         document_frequency = Counter()
         tokenized = []
         for item in candidates:
-            user_lines = []
-            seen_lines = set()
-            for source in (
-                str(item.get("indexed_state") or ""),
+            # Summary is older historical state; indexed_state is newer
+            # explicit state. Collapse replaceable slots across both so a stale
+            # codename/status from history cannot outrank the latest value.
+            user_lines = collapse_window_state_lines(
                 str(item.get("summary") or ""),
-            ):
-                for line in source.splitlines():
-                    cleaned_line = line.strip()
-                    if not cleaned_line.casefold().startswith("- user:"):
-                        continue
-                    normalized_line = canonical_match_text(cleaned_line)
-                    if normalized_line in seen_lines:
-                        continue
-                    seen_lines.add(normalized_line)
-                    user_lines.append(cleaned_line)
+                str(item.get("indexed_state") or ""),
+            )
             content = "\n".join(user_lines)
             content_tokens = {
                 token

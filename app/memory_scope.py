@@ -85,8 +85,8 @@ def is_other_window_request(user_text):
     tokens = _semantic_tokens(user_text)
     scope_terms = {
         "beszelgetes", "beszelgetesben", "beszelgetesnek",
-        "chat", "chatben", "szal", "szalban",
-        "conversation", "thread", "gesprach", "verlauf",
+        "chat", "chatben", "szal", "szalban", "ablak", "ablakban",
+        "conversation", "thread", "window", "gesprach", "verlauf",
     }
     other_terms = {
         "masik", "masikban", "other", "another", "anderen", "anderer",

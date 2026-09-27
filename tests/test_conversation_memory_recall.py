@@ -20,6 +20,21 @@ def _state(value):
     }
 
 
+def test_other_window_hungarian_query_extracts_value_without_copular_anchor():
+    recall = resolve_current_conversation_recall(
+        "Mi volt egy másik ablakban a tesztprojekt kódneve?",
+        messages=[
+            {
+                "role": "user",
+                "content": "A tesztprojekt kódneve Kék Sárkány 7319.",
+            },
+        ],
+    )
+
+    assert recall.is_direct_hit is True
+    assert recall.answer == "Kék Sárkány 7319."
+
+
 def test_current_window_recall_returns_exact_explicit_user_value():
     result = resolve_current_conversation_recall(
         "Mi a tesztprojekt kódneve ebben a beszélgetésben?",

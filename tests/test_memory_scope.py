@@ -1,4 +1,4 @@
-from app.memory_scope import resolve_memory_context_scope
+from app.memory_scope import is_other_window_request, resolve_memory_context_scope
 
 
 ACCEPTANCE_PROMPT = (
@@ -6,6 +6,12 @@ ACCEPTANCE_PROMPT = (
     "hogyan működik a mesterséges intelligencia általánosságban, különös "
     "tekintettel a lokális modellek előnyei-hátrányai."
 )
+
+
+def test_other_window_request_recognizes_hungarian_ablak_wording():
+    assert is_other_window_request(
+        "Mi volt egy másik ablakban a tesztprojekt kódneve?"
+    ) is True
 
 
 def test_fresh_general_knowledge_omits_all_runtime_memory_scopes():
