@@ -2149,7 +2149,7 @@ def test_single_factual_risk_request_skips_model_query_generation(monkeypatch):
     assert tokens
     assert "Correct Author" in tokens[0]
     assert "1912" in tokens[0]
-    assert search_calls == ["Silver Story composition writing date year"]
+    assert search_calls == ["Silver Story literary work author composition writing date year"]
 
     snapshot = trace.snapshot()
     assert snapshot["phases_ms"]["query_generation"] == 0.0
@@ -2209,7 +2209,7 @@ def test_direct_factual_request_uses_one_grounded_model_call_not_forced_second_p
             )
 
     def fake_search(query, max_results=6, fetch_pages=True):
-        assert query == "Silver Story composition writing date year"
+        assert query == "Silver Story literary work author composition writing date year"
         return {
             "provider": "Brave Search API",
             "query": query,
@@ -2397,7 +2397,7 @@ def test_direct_factual_insufficient_relation_evidence_forces_guarded_path(
     assert len(client.stream_calls) == 1
     assert client.once_calls == []
     assert search_calls == [
-        ("Silver Storyt composition writing date year", 0),
+        ("Silver Story literary work author composition writing date year", 0),
         ("Silver Storyt original composition year", 0),
     ]
     assert tokens == [
@@ -2567,9 +2567,9 @@ def test_temporal_direct_fact_uses_one_targeted_refinement_after_edition_only_ev
 
     def fake_search(query, max_results=6, fetch_pages=True):
         search_calls.append((query, fetch_pages))
-        if query == "Silver Story composition writing date year":
+        if query == "Silver Story literary work author composition writing date year":
             snippet = "The 1922 edition is available in print."
-        elif query == "Silver Story original composition year":
+        elif query == "Silver Story literary work author original composition year":
             snippet = "Silver Story was composed by Correct Author in 1912."
         else:
             raise AssertionError(f"unexpected query: {query}")
@@ -2628,8 +2628,8 @@ def test_temporal_direct_fact_uses_one_targeted_refinement_after_edition_only_ev
     assert errors == []
     assert tokens
     assert search_calls == [
-        ("Silver Story composition writing date year", 0),
-        ("Silver Story original composition year", 0),
+        ("Silver Story literary work author composition writing date year", 0),
+        ("Silver Story literary work author original composition year", 0),
     ]
     assert worker.execution_control.budget.search_calls == 2
     assert worker.execution_control.budget.page_fetches == 1
