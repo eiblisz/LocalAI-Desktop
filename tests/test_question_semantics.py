@@ -32,3 +32,14 @@ def test_work_type_context_expands_c_dot_without_general_typo_translation():
 
     assert query == "Ének szerző keletkezés megírás éve"
     assert strategy == "premise_neutral_title_relation"
+
+
+def test_hungarian_active_release_question_has_release_relation():
+    semantics = analyze_question(
+        "Mikor adta ki az első nagylemezét a wasp együttes?"
+    )
+
+    assert semantics.requested_fact == "temporal"
+    assert semantics.relation == "release"
+    assert semantics.premise_check_required is True
+
