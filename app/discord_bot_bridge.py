@@ -54,7 +54,8 @@ from .document_tools import (
 from .language_policy import response_language_instruction
 from .memory_answers import direct_user_memory_answer
 from .memory_runtime import remember_explicit_request, semantic_memory_context_lines
-from .memory_scope import is_durable_memory_query
+from .memory_scope import is_durable_memory_query, is_other_window_request
+from .window_memory import WindowMemoryService
 from .request_trace import RequestTrace
 from .task_constraints import build_task_constraints, task_constraints_instruction
 from .user_error_messages import public_error
@@ -201,6 +202,11 @@ class DiscordBotBridge(QObject):
         self.ollama_client = ollama_client
         self.chat_store = chat_store
         self.memory_store = memory_store
+        self.window_memory = (
+            WindowMemoryService(memory_store)
+            if memory_store is not None
+            else None
+        )
         self.extension_store = extension_store
         self.extension_authority = (
             ExtensionAuthority(extension_store)
@@ -960,25 +966,81 @@ class DiscordBotBridge(QObject):
         conversation_local=False,
         trace=None,
     ):
-        messages = [
-            {
-                "role": "system",
-                "content": self._remote_system_prompt(
-                    prompt,
-                    constraints,
-                    conversation_local=conversation_local,
-                    trace=trace,
-                ),
-            }
-        ]
-        history = [
+        system_prompt = self._remote_system_prompt(
+            prompt,
+            constraints,
+            conversation_local=conversation_local,
+            trace=trace,
+        )
+        memory_scope = resolve_memory_context_scope(
+            prompt,
+            conversation_local=conversation_local,
+        )
+        raw_history = [
             dict(item) for item in chat.get("messages", [])
             if item.get("role") in {"user", "assistant"}
-        ][-24:]
+        ]
+
+        history = raw_history[-24:]
+        window_context = None
+        if self.window_memory is not None:
+            window_context = self.window_memory.prepare_context(
+                str(chat.get("id", "") or ""),
+                raw_history,
+                prompt,
+                include_related_windows=memory_scope.include_cross_window,
+                include_current_memory=memory_scope.include_current_memory,
+                trace=trace,
+            )
+            if memory_scope.cross_window_requested:
+                if window_context.global_windows:
+                    system_prompt = (
+                        f"{system_prompt}\n\nOTHER CONVERSATION AUTHORITY:\n"
+                        "Answer only from the relevant other-window user state below. "
+                        "Do not use unrelated long-term memory or invent a match."
+                    )
+                else:
+                    system_prompt = (
+                        f"{system_prompt}\n\nOTHER CONVERSATION AUTHORITY:\n"
+                        "No relevant other-window state was found. Say that it was not "
+                        "found; do not substitute unrelated memories."
+                    )
+            window_context_text = self.window_memory.context_text(window_context)
+            if window_context_text:
+                system_prompt = f"{system_prompt}\n\n{window_context_text}"
+            history = list(window_context.recent_messages)
+            if trace is not None:
+                trace.add_metadata(
+                    window_memory_loaded=bool(
+                        window_context.summary or window_context.indexed_state
+                    ),
+                    related_window_count=len(window_context.global_windows),
+                    recent_raw_message_count=len(window_context.recent_messages),
+                    recent_raw_context_chars=sum(
+                        len(str(item.get("content") or ""))
+                        for item in window_context.recent_messages
+                    ),
+                    window_compaction_occurred=window_context.compacted,
+                )
+        elif memory_scope.cross_window_requested:
+            system_prompt = (
+                f"{system_prompt}\n\nOTHER CONVERSATION AUTHORITY:\n"
+                "Cross-window memory is unavailable in this runtime. Say that the "
+                "requested other-conversation fact was not found; do not invent it."
+            )
+            history = []
+
+        messages = [{"role": "system", "content": system_prompt}]
         if history and history[-1].get("role") == "user":
             history[-1]["content"] = str(prompt or "").strip()
         messages.extend(history)
+        if not history or history[-1].get("role") != "user":
+            messages.append({
+                "role": "user",
+                "content": str(prompt or "").strip(),
+            })
         return messages
+
 
     def _run_chat_web(
         self,
@@ -1272,6 +1334,15 @@ class DiscordBotBridge(QObject):
                 "content": stored_prompt,
             })
         self.chat_store.save(chat)
+        if self.window_memory is not None:
+            try:
+                self.window_memory.index_user_message(
+                    str(chat.get("id", "") or ""),
+                    stored_prompt,
+                    source_message_count=len(chat.get("messages", [])),
+                )
+            except Exception:
+                pass
 
         conversation_recall = (
             self._direct_conversation_memory_recall(
@@ -1300,7 +1371,9 @@ class DiscordBotBridge(QObject):
             conversation_recall.answer
             if direct_conversation_answer
             else (
-                "" if conversation_local else self._direct_compound_answer(prompt)
+                ""
+                if conversation_local or is_other_window_request(prompt)
+                else self._direct_compound_answer(prompt)
             )
         )
         if direct_answer:
