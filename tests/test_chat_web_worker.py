@@ -2349,12 +2349,12 @@ def test_direct_factual_single_pass_repairs_wrong_temporal_relation(
             self.once_calls = []
 
         def chat_once(self, model, messages, timeout=600.0, **kwargs):
-            self.once_calls.append((model, messages))
+            self.once_calls.append((model, messages, dict(kwargs)))
             callback = kwargs.get("context_budget_callback")
             if callback:
                 callback({
                     "estimated_final_prompt_units": 700,
-                    "requested_output_units": 1024,
+                    "requested_output_units": kwargs.get("num_predict", 1024),
                     "requested_num_ctx": 4096,
                     "model_max_context": 32768,
                     "context_budget_decision": "fits_default_context",
@@ -3028,6 +3028,9 @@ def test_debut_release_worker_forces_grounded_repair_for_invented_year_and_title
         forced.append(kwargs.get("force_verify"))
         assert "1984" in authority
         assert "1979" not in authority
+        assert kwargs["output_budget"] == 384
+        assert kwargs["temperature"] == 0.0
+        assert kwargs["seed"] == 42
         return "A sampleband első, saját nevét viselő albuma 1984-ben jelent meg."
 
     monkeypatch.setattr(workers, "search_web", fake_search)
@@ -3077,10 +3080,19 @@ def test_debut_release_worker_forces_grounded_repair_for_invented_year_and_title
     assert search_calls == ["sampleband debut first album release date year"]
     assert forced == [True]
     assert client.stream_calls == []
+    assert len(client.once_calls) == 1
+    _, _, primary_kwargs = client.once_calls[0]
+    assert primary_kwargs["num_predict"] == 384
+    assert primary_kwargs["temperature"] == 0.0
+    assert primary_kwargs["seed"] == 42
     assert tokens == [
         "A sampleband első, saját nevét viselő albuma 1984-ben jelent meg."
     ]
     snapshot = trace.snapshot()
+    assert snapshot["metadata"]["sampling_profile"] == "factual_strict"
+    assert snapshot["metadata"]["sampling_temperature"] == 0.0
+    assert snapshot["metadata"]["sampling_seed"] == 42
+    assert snapshot["metadata"]["output_budget"] == 384
     assert snapshot["metadata"]["query_strategy"] == (
         "premise_neutral_entity_release_relation"
     )
