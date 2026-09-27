@@ -161,7 +161,7 @@ def _subject_supported_in_text(text, subject):
 
     # Acronyms may be written with or without punctuation/spaces (WASP/W.A.S.P.).
     raw_subject = re.sub(r"[^A-Za-z0-9]", "", str(subject or ""))
-    if 2 <= len(raw_subject) <= 8 and raw_subject.upper() == raw_subject:
+    if 2 <= len(raw_subject) <= 8 and re.fullmatch(r"[A-Za-z0-9]+", raw_subject):
         compact_pattern = r"(?i)(?<![A-Za-z0-9])" + r"[^A-Za-z0-9]*".join(
             re.escape(ch) for ch in raw_subject
         ) + r"(?![A-Za-z0-9])"
