@@ -1966,6 +1966,22 @@ class ChatWebWorker(QObject):
             )
             answer = self._compact_grounded_answer(answer)
             answer = self._compact_market_quote_answer(answer)
+            relation_mismatch_requires_verify = False
+            if (
+                is_factual_risk_request(self.user_prompt)
+                and self.request_profile.requested_fact == "temporal"
+            ):
+                relation_mismatch_requires_verify = not requested_fact_supported(
+                    {"results": [{"snippet": answer}]},
+                    self.request_profile.requested_fact,
+                    self.user_prompt,
+                )
+                if self.trace is not None:
+                    self.trace.add_metadata(
+                        answer_relation_supported=(
+                            not relation_mismatch_requires_verify
+                        ),
+                    )
             if self.trace is not None:
                 self.trace.begin("factual_validation")
             answer = guard_grounded_answer(
@@ -1978,7 +1994,10 @@ class ChatWebWorker(QObject):
                 force_verify=(
                     is_factual_risk_request(self.user_prompt)
                     and not has_authoritative_current_fact
-                    and not single_pass_factual
+                    and (
+                        not single_pass_factual
+                        or relation_mismatch_requires_verify
+                    )
                 ),
                 language_instruction=self._conversation_language_instruction(),
                 output_budget=self.output_budget,
