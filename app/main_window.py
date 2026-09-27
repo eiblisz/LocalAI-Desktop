@@ -1786,7 +1786,11 @@ class MainWindow(QMainWindow):
                     "explicit_batch_child",
                     False,
                 ),
-                output_budget=getattr(contract.constraints, "output_budget", None),
+                output_budget=getattr(
+                    synthesis_policy,
+                    "output_budget",
+                    getattr(contract.constraints, "output_budget", None),
+                ),
                 synthesis_route=getattr(
                     synthesis_policy,
                     "synthesis_route",
