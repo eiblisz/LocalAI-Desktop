@@ -14,7 +14,7 @@ def test_marked_work_title_produces_entity_neutral_temporal_query():
 
     assert "Silver Story" in query
     assert "Wrong Author" not in query
-    assert "composition" in query
+    assert "keletkezés" in query
     assert "publication" not in query
     assert strategy == "premise_neutral_title_relation"
 
@@ -25,7 +25,7 @@ def test_unmarked_hungarian_work_object_produces_premise_neutral_query():
         "temporal",
     )
 
-    assert query == "Silver Story literary work author composition writing date year"
+    assert query == "Silver Story szerző keletkezés megírás éve"
     assert "Wrong Author" not in query
     assert strategy == "premise_neutral_title_relation"
 
@@ -36,7 +36,7 @@ def test_unmarked_hungarian_object_search_surface_strips_accusative_only_for_sea
         "temporal",
     )
 
-    assert query == "Toldi literary work author composition writing date year"
+    assert query == "Toldi szerző keletkezés megírás éve"
     assert "Wrong Author" not in query
     assert strategy == "premise_neutral_title_relation"
 
@@ -86,7 +86,7 @@ def test_creation_request_rejects_an_unrelated_edition_year():
     assert requested_fact_supported(edition_only, "temporal", prompt) is False
     assert requested_fact_supported(composition_date, "temporal", prompt) is True
     assert targeted_fact_refinement_query(prompt, "temporal") == (
-        "Silver Story literary work author original composition year"
+        "Silver Story szerző eredeti keletkezés éve"
     )
 
 
@@ -103,6 +103,24 @@ def test_creation_request_rejects_publication_year_even_with_authorship_in_same_
 
     assert requested_fact_supported(
         mixed_publication,
+        "temporal",
+        prompt,
+    ) is False
+
+
+def test_creation_request_rejects_hungarian_release_verb_as_writing_date():
+    prompt = "Mikor írta Wrong Author a Silver Story című művet?"
+    release_only = {
+        "results": [{
+            "snippet": (
+                "A Silver Story szerzője Correct Author, "
+                "aki 1912-ben adta ki a művet."
+            ),
+        }],
+    }
+
+    assert requested_fact_supported(
+        release_only,
         "temporal",
         prompt,
     ) is False
