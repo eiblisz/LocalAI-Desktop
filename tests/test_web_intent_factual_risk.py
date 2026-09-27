@@ -31,3 +31,10 @@ def test_explicit_rewrite_request_stays_non_factual():
     assert is_factual_risk_request(
         "Rewrite this story in a shorter style."
     ) is False
+
+
+def test_lowercase_typed_band_release_date_is_still_factual_risk():
+    assert is_factual_risk_request(
+        "Mikor adta ki az első nagylemezét a wasp együttes?"
+    ) is True
+
