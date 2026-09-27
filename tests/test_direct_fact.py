@@ -25,7 +25,18 @@ def test_unmarked_hungarian_work_object_produces_premise_neutral_query():
         "temporal",
     )
 
-    assert query == "Silver Storyt composition writing date year"
+    assert query == "Silver Story literary work author composition writing date year"
+    assert "Wrong Author" not in query
+    assert strategy == "premise_neutral_title_relation"
+
+
+def test_unmarked_hungarian_object_search_surface_strips_accusative_only_for_search():
+    query, strategy = derive_premise_neutral_query(
+        "Mikor írta Wrong Author a Toldit?",
+        "temporal",
+    )
+
+    assert query == "Toldi literary work author composition writing date year"
     assert "Wrong Author" not in query
     assert strategy == "premise_neutral_title_relation"
 
@@ -75,7 +86,7 @@ def test_creation_request_rejects_an_unrelated_edition_year():
     assert requested_fact_supported(edition_only, "temporal", prompt) is False
     assert requested_fact_supported(composition_date, "temporal", prompt) is True
     assert targeted_fact_refinement_query(prompt, "temporal") == (
-        "Silver Story original composition year"
+        "Silver Story literary work author original composition year"
     )
 
 
