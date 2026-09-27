@@ -665,6 +665,7 @@ class ChatWebWorker(QObject):
             is_factual_risk_request(self.user_prompt)
             and self._direct_query_strategy not in {
                 "premise_neutral_title_relation",
+                "premise_neutral_entity_release_relation",
                 "identity_lookup_subject",
             }
         ):
