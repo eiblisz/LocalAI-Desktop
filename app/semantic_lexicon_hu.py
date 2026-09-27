@@ -57,7 +57,10 @@ RELATION_MARKERS = {
     ),
     "birth": ("szuletett", "born", "birth"),
     "death": ("meghalt", "halt meg", "died", "death"),
-    "release": ("megjelent", "jelent meg", "kiadtak", "bemutattak", "released"),
+    "release": (
+        "megjelent", "jelent meg", "kiadtak", "kiadta", "adtak ki", "adta ki",
+        "bemutattak", "released", "release", "published",
+    ),
     "publication": ("publikaltak", "kiadtak", "published"),
     "event_date": ("tortent", "esemeny", "happened", "event"),
     "location": ("hol", "where", "helye"),
