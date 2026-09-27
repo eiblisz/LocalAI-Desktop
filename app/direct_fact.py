@@ -832,6 +832,7 @@ def _debut_title_candidates_from_item(item, request_text):
     self_titled_markers = (
         "self titled", "selftitled", "eponymous",
         "sajat nevet viselo", "sajat cimu", "sajat nevu",
+        "selbstbetitelt", "selbstbenannt",
     )
     if any(marker in folded_item for marker in self_titled_markers):
         add(subject_surface)
@@ -848,11 +849,30 @@ def _debut_title_candidates_from_item(item, request_text):
         for match in title_pattern.finditer(field):
             add(match.group("title"))
 
-    # Result-title fallback is allowed only when the same result body explicitly
-    # says it is the requested subject's debut/first album.
+    # Band/artist overview pages often summarize the first releases as
+    # "first two studio albums, Title A (1984) and Title B (1985)". The first
+    # listed title is structurally bound to the requested ordinal relation.
+    first_list_pattern = re.compile(
+        r"(?i)\bfirst\b(?:\s+[\w-]+){0,4}\s+albums?\s*[,/:;-]\s*"
+        r"(?P<title>[^,;()]{2,100}?)\s*\((?:19|20)\d{2}\)"
+    )
+    for field in fields[:3]:
+        for match in first_list_pattern.finditer(field):
+            add(match.group("title"))
+
+    # Result-title fallback is intentionally narrow: only an explicit album
+    # page title may supply the value. A band/artist biography title must never
+    # be mistaken for the requested album.
     result_title = _clean(item.get("title"))
     body = "\n".join(fields[:3])
-    if result_title and _debut_release_item_supported(body, request_text):
+    if (
+        result_title
+        and _debut_release_item_supported(body, request_text)
+        and re.search(
+            r"(?i)\((?:album|studio album|debut album)\)",
+            result_title,
+        )
+    ):
         cleaned_title = re.sub(
             r"\s*[-|:]\s*(?:wikipedia|discogs|allmusic|musicbrainz).*$",
             "",
@@ -865,12 +885,7 @@ def _debut_title_candidates_from_item(item, request_text):
             cleaned_title,
             flags=re.IGNORECASE,
         )
-        # Generic discography/source headings are not album titles.
-        if not re.search(
-            r"(?i)\b(?:discograph\w*|releases?|albums?|songs?|tracks?)\b",
-            cleaned_title,
-        ):
-            add(cleaned_title)
+        add(cleaned_title)
 
     return tuple(candidates)
 
@@ -882,7 +897,16 @@ def _release_year_candidates_from_item(item, request_text):
         str(item.get("pre_extracted_context") or ""),
     ]
     years = []
+    first_list_year_pattern = re.compile(
+        r"(?i)\bfirst\b(?:\s+[\w-]+){0,4}\s+albums?\s*[,/:;-]\s*"
+        r"[^,;()]{2,100}?\s*\((?P<year>(?:19|20)\d{2})\)"
+    )
     for field in fields:
+        for match in first_list_year_pattern.finditer(field):
+            year = match.group("year")
+            if year not in years:
+                years.append(year)
+
         # Work at result-field scope rather than splitting on periods: dotted
         # entity names such as W.A.S.P. would otherwise destroy the relation
         # clause before the release year is reached. The caller has already
