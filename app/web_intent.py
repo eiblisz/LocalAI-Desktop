@@ -122,7 +122,19 @@ def is_factual_risk_request(text):
     )
     quoted_title = bool(re.search(r'["„”«»][^"„”«»]{2,}["„”«»]', raw))
     year_literal = bool(re.search(r"(?<!\d)(?:1[0-9]{3}|20[0-9]{2})(?!\d)", raw))
-    return bool(named_tokens or quoted_title or year_literal)
+
+    # Explicit entity-type grammar is authoritative even when the user types
+    # the entity in lowercase. Casing must not decide whether a concrete
+    # relation question receives factual-risk verification.
+    typed_entity = bool(
+        re.search(
+            r"(?i)\b(?:a|az)\s+[A-Za-z0-9.&'’_-]{2,}"
+            r"(?:\s+[A-Za-z0-9.&'’_-]{2,}){0,3}\s+"
+            r"(?:egy[uü]ttes|zenekar|band)\b",
+            raw,
+        )
+    )
+    return bool(named_tokens or quoted_title or year_literal or typed_entity)
 
 
 def _legacy_looks_like_web_request(text):
