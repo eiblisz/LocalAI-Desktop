@@ -7,6 +7,7 @@ from math import ceil
 from typing import Callable
 
 import requests
+import psutil
 
 from .config import OLLAMA_BASE_URL, OLLAMA_NUM_PREDICT, OLLAMA_THINKING_ENABLED
 from .ollama_process_control import (
@@ -552,11 +553,31 @@ class OllamaClient:
         except Exception:
             return None
 
+    def _local_process_family_pids(self):
+        """Return this runtime PID plus its launcher/ancestor process IDs.
+
+        On Windows the Desktop is commonly launched from PowerShell and a venv
+        Python redirector may sit between the shell and the real interpreter.
+        Those launcher processes can retain idle HTTP keep-alive sockets to
+        Ollama from operator acceptance probes. They are part of the same local
+        operator session, not independent Ollama consumers.
+        """
+        pids = {os.getpid()}
+        try:
+            process = psutil.Process(os.getpid())
+            for parent in process.parents():
+                pid = getattr(parent, "pid", None)
+                if isinstance(pid, int) and pid > 0:
+                    pids.add(pid)
+        except Exception:
+            pass
+        return sorted(pids)
+
     def _external_consumers(self):
         try:
             return list_external_ollama_consumers(
                 timeout=3.0,
-                exclude_pids=[os.getpid()],
+                exclude_pids=self._local_process_family_pids(),
             )
         except Exception:
             return None
