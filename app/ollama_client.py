@@ -858,6 +858,8 @@ class OllamaClient:
         response_format=None,
         control=None,
         num_predict=None,
+        temperature=None,
+        seed=None,
         call_phase=None,
         context_budget_callback=None,
     ) -> str:
@@ -922,6 +924,10 @@ class OllamaClient:
         self._set_request_state(model, request_id, STATE_MODEL_LOADING)
         structured_response = response_format is not None
         options = {"num_predict": output_budget}
+        if temperature is not None:
+            options["temperature"] = float(temperature)
+        if seed is not None:
+            options["seed"] = int(seed)
         if apply_num_ctx:
             options["num_ctx"] = context_budget["requested_num_ctx"]
         payload = {
@@ -1103,6 +1109,8 @@ class OllamaClient:
         timeout: float = 600.0,
         control=None,
         num_predict=None,
+        temperature=None,
+        seed=None,
         call_phase=None,
         context_budget_callback=None,
     ) -> None:
@@ -1166,6 +1174,10 @@ class OllamaClient:
         request_id = uuid.uuid4().hex
         self._set_request_state(model, request_id, STATE_MODEL_LOADING)
         options = {"num_predict": output_budget}
+        if temperature is not None:
+            options["temperature"] = float(temperature)
+        if seed is not None:
+            options["seed"] = int(seed)
         if apply_num_ctx:
             options["num_ctx"] = context_budget["requested_num_ctx"]
         payload = {
