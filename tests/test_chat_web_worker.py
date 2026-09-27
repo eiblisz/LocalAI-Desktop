@@ -3389,3 +3389,121 @@ def test_selection_guard_failure_recovers_with_host_resolved_fact(monkeypatch):
     assert snapshot["metadata"]["factual_guard_repair_status"] == (
         "host_resolved_direct_fact_fallback"
     )
+
+
+def test_first_album_generation_is_preseeded_with_host_resolved_core_fact(monkeypatch):
+    from app.request_trace import RequestTrace
+
+    prompt = "melyik nagylemez volt az elso a wasp zenekarnak?"
+
+    class PreseedClient:
+        def __init__(self):
+            self.once_calls = []
+            self.stream_calls = []
+
+        def chat_once(self, model, messages, timeout=600.0, **kwargs):
+            self.once_calls.append((model, messages, dict(kwargs)))
+            callback = kwargs.get("context_budget_callback")
+            if callback:
+                callback({
+                    "estimated_final_prompt_units": 700,
+                    "requested_output_units": kwargs.get("num_predict", 1024),
+                    "requested_num_ctx": 4096,
+                    "model_max_context": 32768,
+                    "context_budget_decision": "fits_default_context",
+                    "context_budget_safety_units": 192,
+                })
+            user_content = messages[-1]["content"]
+            assert "HOST-RESOLVED REQUESTED FACT" in user_content
+            assert "Title: W.A.S.P." in user_content
+            assert "Release year: 1984" in user_content
+            return (
+                "A W.A.S.P. első nagylemeze a W.A.S.P. című album volt, "
+                "amely 1984-ben jelent meg."
+            )
+
+        def chat_stream(self, *args, **kwargs):
+            self.stream_calls.append((args, kwargs))
+            raise AssertionError("direct factual selection must use single pass")
+
+    def fake_search(query, max_results=6, fetch_pages=True):
+        return {
+            "provider": "Brave Search API",
+            "query": query,
+            "retrieved_at": "2026-09-27T00:00:00",
+            "provider_chain_errors": [],
+            "results": [{
+                "title": "W.A.S.P. (album) - Wikipedia",
+                "url": "https://example.com/wasp",
+                "snippet": (
+                    "W.A.S.P. is the debut studio album by American heavy metal "
+                    "band W.A.S.P., released in 1984."
+                ),
+                "page_text": (
+                    "W.A.S.P. is the debut studio album by American heavy metal "
+                    "band W.A.S.P., released in 1984."
+                ),
+            }],
+        }
+
+    monkeypatch.setattr(workers, "search_web", fake_search)
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: ["https://example.com/wasp"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_entries",
+        lambda payload, limit=6: [{
+            "title": "W.A.S.P. (album) - Wikipedia",
+            "url": "https://example.com/wasp",
+        }],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: (
+            "W.A.S.P. is the debut studio album by American heavy metal "
+            "band W.A.S.P., released in 1984."
+        ),
+    )
+    monkeypatch.setattr(
+        workers,
+        "guard_grounded_answer",
+        lambda client, model, user_prompt, answer, authority, **kwargs: answer,
+    )
+    monkeypatch.setattr(
+        workers,
+        "guard_current_turn_binding",
+        lambda client, model, prompt, answer, authority, **kwargs: answer,
+    )
+
+    trace = RequestTrace("test")
+    tokens = []
+    errors = []
+    client = PreseedClient()
+    worker = workers.ChatWebWorker(
+        client,
+        "eurollm-test",
+        [{"role": "system", "content": "Base system"}],
+        prompt,
+        trace=trace,
+        output_budget=1024,
+    )
+    worker.token.connect(tokens.append)
+    worker.failed.connect(errors.append)
+    worker.run()
+
+    assert errors == []
+    assert client.stream_calls == []
+    assert worker.output_budget == 384
+    assert tokens == [
+        "A W.A.S.P. első nagylemeze a W.A.S.P. című album volt, "
+        "amely 1984-ben jelent meg."
+    ]
+    snapshot = trace.snapshot()
+    assert snapshot["metadata"]["host_resolved_direct_fact_preseed"] is True
+    assert snapshot["metadata"]["host_resolved_direct_fact_title"] == "W.A.S.P."
+    assert snapshot["metadata"]["host_resolved_direct_fact_year"] == "1984"
+    assert snapshot["metadata"].get("deterministic_direct_fact_fallback") != "used"
