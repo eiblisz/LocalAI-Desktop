@@ -8,6 +8,12 @@ ACCEPTANCE_PROMPT = (
 )
 
 
+def test_other_window_request_recognizes_hungarian_ablak_wording():
+    assert is_other_window_request(
+        "Mi volt egy másik ablakban a tesztprojekt kódneve?"
+    ) is True
+
+
 def test_fresh_general_knowledge_omits_all_runtime_memory_scopes():
     scope = resolve_memory_context_scope(ACCEPTANCE_PROMPT)
 
