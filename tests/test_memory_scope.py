@@ -1,4 +1,4 @@
-from app.memory_scope import resolve_memory_context_scope
+from app.memory_scope import is_other_window_request, resolve_memory_context_scope
 
 
 ACCEPTANCE_PROMPT = (
