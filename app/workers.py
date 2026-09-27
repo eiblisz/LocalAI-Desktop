@@ -45,6 +45,7 @@ from .grounded_factual_guard import (
     guard_grounded_answer,
 )
 from .generation_policy import (
+    SAMPLING_FACTUAL_STRICT,
     SYNTHESIS_HYBRID,
     SYNTHESIS_LOCAL,
     SYNTHESIS_WEB,
@@ -418,10 +419,28 @@ class ChatWebWorker(QObject):
             SYNTHESIS_HYBRID,
         }:
             self.synthesis_route = SYNTHESIS_WEB
-        self.output_budget = max(
+        requested_output_budget = max(
             1,
-            int(output_budget or default_generation_policy.output_budget),
+            int(
+                default_generation_policy.output_budget
+                if output_budget is None
+                else output_budget
+            ),
         )
+        # The route-aware generation policy is the final runtime authority for
+        # strict factual requests. Upstream TaskConstraints carries a generic
+        # response-length budget and may legitimately be larger (normally 1024);
+        # it must never widen FACTUAL_STRICT back above its bounded budget.
+        if (
+            default_generation_policy.sampling_profile
+            == SAMPLING_FACTUAL_STRICT
+        ):
+            self.output_budget = min(
+                requested_output_budget,
+                int(default_generation_policy.output_budget),
+            )
+        else:
+            self.output_budget = requested_output_budget
         self.response_length = default_generation_policy.response_length
         self.sampling_profile = default_generation_policy.sampling_profile
         self.temperature = default_generation_policy.temperature
