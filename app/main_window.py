@@ -2280,6 +2280,7 @@ class MainWindow(QMainWindow):
             ("Ollama HTTP detail", metadata.get("ollama_http_detail")),
             ("Ollama call phase", metadata.get("ollama_call_phase")),
             ("Ollama preparation detail", metadata.get("ollama_preparation_reason")),
+            ("Ollama failure detail", metadata.get("ollama_failure_detail")),
             ("Final prompt token estimate", metadata.get("estimated_final_prompt_units")),
             ("Requested output tokens", metadata.get("requested_output_units")),
             ("Requested num_ctx", metadata.get("requested_num_ctx")),
@@ -2294,6 +2295,14 @@ class MainWindow(QMainWindow):
             (
                 "Warmup requested num_ctx",
                 metadata.get("model_warmup_requested_num_ctx"),
+            ),
+            (
+                "Post-warmup retry attempted",
+                metadata.get("post_warmup_retry_attempted"),
+            ),
+            (
+                "Post-warmup retry result",
+                metadata.get("post_warmup_retry_result"),
             ),
             ("Language validation result", metadata.get("language_validation_result")),
             ("Language validation issues", metadata.get("language_validation_issues")),
