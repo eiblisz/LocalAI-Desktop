@@ -34,6 +34,7 @@ from .direct_fact import (
     derive_premise_neutral_query,
     deterministic_hungarian_fact_fallback,
     requested_fact_supported,
+    supported_creator_surfaces,
     targeted_fact_refinement_query,
 )
 from .grounded_factual_guard import (
@@ -2065,6 +2066,11 @@ class ChatWebWorker(QObject):
             ):
                 if self.trace is not None:
                     self.trace.begin("context_validation")
+                allowed_correction_anchors = ()
+                if self.request_profile.requested_fact == "temporal":
+                    allowed_correction_anchors = supported_creator_surfaces(
+                        combined_fact_payload
+                    )
                 answer = guard_current_turn_binding(
                     self.client,
                     self.model,
@@ -2073,6 +2079,7 @@ class ChatWebWorker(QObject):
                     factual_authority_text,
                     trace=self.trace,
                     language_instruction=self._conversation_language_instruction(),
+                    allowed_entity_anchors=allowed_correction_anchors,
                 )
                 if self.trace is not None:
                     self.trace.end("context_validation")
