@@ -594,7 +594,11 @@ def _run_hungarian_fluency_audit(
         "messages": _fluency_audit_messages(segments),
         "num_predict": 512,
         "call_phase": "hungarian_fluency_audit",
-        "response_format": _fluency_audit_response_schema(len(segments)),
+        # Use Ollama's generic JSON mode here instead of a per-request JSON
+        # schema. Some otherwise valid local model templates reject schema
+        # objects with HTTP 400 even though they support ordinary JSON output.
+        # The host still enforces the exact status/findings contract below.
+        "response_format": "json",
     }
     if control is not None:
         call_kwargs["control"] = control
