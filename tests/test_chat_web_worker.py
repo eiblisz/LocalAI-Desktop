@@ -2291,6 +2291,111 @@ def test_direct_factual_request_uses_one_grounded_model_call_not_forced_second_p
     assert snapshot["metadata"]["model_max_context"] == 32768
 
 
+def test_direct_factual_single_pass_repairs_wrong_temporal_relation(
+    monkeypatch,
+):
+    from app.request_trace import RequestTrace
+
+    prompt = "Mikor írta Wrong Author a Silver Story című művet?"
+    forced = []
+
+    class RelationDriftClient:
+        def __init__(self):
+            self.once_calls = []
+
+        def chat_once(self, model, messages, timeout=600.0, **kwargs):
+            self.once_calls.append((model, messages))
+            callback = kwargs.get("context_budget_callback")
+            if callback:
+                callback({
+                    "estimated_final_prompt_units": 700,
+                    "requested_output_units": 1024,
+                    "requested_num_ctx": 4096,
+                    "model_max_context": 32768,
+                    "context_budget_decision": "fits_default_context",
+                    "context_budget_safety_units": 192,
+                })
+            return (
+                "A Silver Story című művet nem Wrong Author, hanem Correct Author "
+                "írta, és 1912-ben jelent meg."
+            )
+
+        def chat_stream(self, *args, **kwargs):
+            raise AssertionError("supported direct fact should use single pass")
+
+    def fake_search(query, max_results=6, fetch_pages=True):
+        assert query == "Silver Story literary work author composition writing date year"
+        return {
+            "provider": "Brave Search API",
+            "query": query,
+            "retrieved_at": "2026-09-27T00:00:00",
+            "provider_chain_errors": [],
+            "results": [{
+                "title": "Correct Author: Silver Story",
+                "url": "https://example.com/silver-story",
+                "snippet": "Correct Author wrote Silver Story in 1912.",
+                "page_text": "Correct Author wrote Silver Story in 1912.",
+            }],
+        }
+
+    def capture_guard(client, model, user_prompt, answer, authority, **kwargs):
+        forced.append(kwargs.get("force_verify"))
+        return (
+            "A Silver Story című művet nem Wrong Author, hanem Correct Author "
+            "írta 1912-ben."
+        )
+
+    monkeypatch.setattr(workers, "search_web", fake_search)
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: ["https://example.com/silver-story"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_entries",
+        lambda payload, limit=6: [{
+            "title": "Correct Author: Silver Story",
+            "url": "https://example.com/silver-story",
+        }],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: "Correct Author wrote Silver Story in 1912.",
+    )
+    monkeypatch.setattr(workers, "guard_grounded_answer", capture_guard)
+    monkeypatch.setattr(
+        workers,
+        "guard_current_turn_binding",
+        lambda client, model, prompt, answer, authority, **kwargs: answer,
+    )
+
+    trace = RequestTrace("test")
+    tokens = []
+    errors = []
+    worker = workers.ChatWebWorker(
+        RelationDriftClient(),
+        "qwen-test",
+        [{"role": "system", "content": "Base system"}],
+        prompt,
+        trace=trace,
+    )
+    worker.token.connect(tokens.append)
+    worker.failed.connect(errors.append)
+    worker.run()
+
+    assert errors == []
+    assert forced == [True]
+    assert tokens == [
+        "A Silver Story című művet nem Wrong Author, hanem Correct Author "
+        "írta 1912-ben."
+    ]
+    snapshot = trace.snapshot()
+    assert snapshot["metadata"]["generation_strategy"] == "factual_single_pass"
+    assert snapshot["metadata"]["answer_relation_supported"] is False
+
+
 def test_direct_factual_insufficient_relation_evidence_forces_guarded_path(
     monkeypatch,
 ):
