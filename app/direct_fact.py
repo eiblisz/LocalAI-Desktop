@@ -840,7 +840,7 @@ def _debut_title_candidates_from_item(item, request_text):
     # "Kill 'Em All is the debut studio album by ... Metallica"
     # or "W.A.S.P. is the debut studio album by ... W.A.S.P."
     title_pattern = re.compile(
-        r"(?im)^\s*(?P<title>[^\n.!?]{2,120}?)\s+"
+        r"(?im)^\s*(?P<title>[^\n]{2,120}?)\s+"
         r"(?:is|was|ist|war)\s+(?:the\s+|das\s+|die\s+)?"
         r"(?:debut|first|erste\w*)\s+(?:studio\s+)?album\b"
     )
