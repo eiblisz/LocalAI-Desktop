@@ -1,3 +1,5 @@
+import pytest
+
 from app.direct_fact import (
     answer_temporal_literals_supported_by_evidence,
     creation_answer_conflicts_with_evidence,
@@ -278,6 +280,53 @@ def test_debut_release_rejects_unrelated_year_even_when_result_mentions_band():
         }],
     }
 
+    assert answer_temporal_literals_supported_by_evidence(
+        "A debütáló album 1979-ben jelent meg.",
+        prompt,
+        evidence,
+    ) is False
+
+
+
+@pytest.mark.parametrize(
+    ("prompt", "expected_subject"),
+    [
+        ("Mikor adta ki az első nagylemezét a sampleband együttes?", "sampleband"),
+        ("Mikor adta ki az első nagylemezét a SAMPLEBAND együttes?", "SAMPLEBAND"),
+        ("Mikor jelent meg a sampleband együttes első albuma?", "sampleband"),
+        ("Mikor adta ki a debütáló albumát a sampleband zenekar?", "sampleband"),
+        ("When did sampleband release its first album?", "sampleband"),
+    ],
+)
+def test_debut_release_variants_build_entity_bound_neutral_queries(prompt, expected_subject):
+    query, strategy = derive_premise_neutral_query(prompt, "temporal")
+
+    assert query == f"{expected_subject} debut first album release date year"
+    assert strategy == "premise_neutral_entity_release_relation"
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Mikor adta ki az első nagylemezét a sampleband együttes?",
+        "Mikor adta ki az első nagylemezét a SAMPLEBAND együttes?",
+        "Mikor jelent meg a sampleband együttes első albuma?",
+        "When did sampleband release its first album?",
+    ],
+)
+def test_debut_release_evidence_acceptance_is_case_and_wording_invariant(prompt):
+    evidence = {
+        "results": [{
+            "snippet": "S.A.M.P.L.E.B.A.N.D. released its debut album in 1984.",
+        }],
+    }
+
+    assert requested_fact_supported(evidence, "temporal", prompt) is True
+    assert answer_temporal_literals_supported_by_evidence(
+        "A debütáló album 1984-ben jelent meg.",
+        prompt,
+        evidence,
+    ) is True
     assert answer_temporal_literals_supported_by_evidence(
         "A debütáló album 1979-ben jelent meg.",
         prompt,
