@@ -969,9 +969,16 @@ def resolve_debut_release_fact(payload, request_text):
     if len(titles) != 1:
         return {}
 
+    display_subject = subject_surfaces[0] if subject_surfaces else _clean(subject)
+    display_title = titles[0]
+    if _fold(display_title) == _fold(display_subject):
+        # Prefer the evidence-preserved entity spelling for self-titled releases
+        # (for example W.A.S.P. rather than a punctuation-trimmed W.A.S.P).
+        display_title = display_subject
+
     return {
-        "subject": subject_surfaces[0] if subject_surfaces else _clean(subject),
-        "title": titles[0],
+        "subject": display_subject,
+        "title": display_title,
         "year": years[0] if len(years) == 1 else "",
         "relation": "release",
     }
