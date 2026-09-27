@@ -126,6 +126,9 @@ def _release_subject_surface(prompt):
         r"(?i)\bmikor\s+(?:adta|adtak|kiadta|kiadtak)\s+(?:ki\s+)?"
         r"(?:a|az)\s+(?:els[őo]|deb[uü]t\w*)\s+[^?]{0,40}?\s+"
         r"(?:a|az)\s+(?P<subject>.+?)\s+(?:egy[uü]ttes|zenekar)\b",
+        r"(?i)\bmikor\s+jelent\s+meg\s+(?:a|az)\s+"
+        r"(?P<subject>.+?)\s+(?:egy[uü]ttes|zenekar)\s+"
+        r"(?:els[őo]|deb[uü]t\w*)\s+(?:albuma|nagylemeze|lemeze)\b",
         r"(?i)\bwhen\s+did\s+(?P<subject>.+?)\s+release\s+"
         r"(?:its|their|the)?\s*(?:first|debut)\s+(?:studio\s+)?album\b",
         r"(?i)\bwann\s+ver[oö]ffentlichte\s+(?P<subject>.+?)\s+"
