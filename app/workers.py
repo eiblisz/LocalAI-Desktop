@@ -2165,10 +2165,30 @@ class ChatWebWorker(QObject):
                         ),
                     )
                 if repaired_release_named_literal_mismatches:
-                    raise GroundedFactualGuardError(
-                        "Grounded factual repair kept subject-unbound named details: "
-                        + ", ".join(repaired_release_named_literal_mismatches[:6])
+                    deterministic_fallback = deterministic_direct_fact_fallback(
+                        combined_fact_payload,
+                        self.user_prompt,
+                        self.request_profile.requested_fact,
+                        language=effective_response_language(
+                            self._response_language_source()
+                        ),
                     )
+                    if deterministic_fallback:
+                        answer = deterministic_fallback
+                        if self.trace is not None:
+                            self.trace.add_metadata(
+                                factual_guard_repair_status=(
+                                    "host_resolved_direct_fact_fallback"
+                                ),
+                                deterministic_direct_fact_fallback="used",
+                                repaired_answer_release_named_literals_supported=True,
+                                repaired_answer_release_named_literal_mismatches="",
+                            )
+                    else:
+                        raise GroundedFactualGuardError(
+                            "Grounded factual repair kept subject-unbound named details: "
+                            + ", ".join(repaired_release_named_literal_mismatches[:6])
+                        )
 
             if (
                 factual_risk_request
