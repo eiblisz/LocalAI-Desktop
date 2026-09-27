@@ -430,8 +430,8 @@ def test_host_resolves_self_titled_debut_selection_from_bound_evidence():
 
     fact = resolve_debut_release_fact(evidence, prompt)
 
-    assert fact["title"].replace(".", "") == "WASP"
-    assert fact["subject"].replace(".", "") == "WASP"
+    assert fact["title"] == "W.A.S.P."
+    assert fact["subject"] == "W.A.S.P."
     assert fact["year"] == "1984"
 
     answer = deterministic_direct_fact_fallback(
@@ -484,6 +484,6 @@ def test_host_resolves_first_album_from_artist_overview_without_using_band_page_
 
     fact = resolve_debut_release_fact(evidence, prompt)
 
-    assert fact["title"].replace(".", "") == "WASP"
+    assert fact["title"] == "W.A.S.P."
     assert "(band)" not in fact["title"]
     assert fact["year"] == "1984"
