@@ -407,3 +407,8 @@ def test_release_extra_quoted_title_requires_same_result_subject_binding():
         prompt,
         evidence,
     ) == ("Wrong Track",)
+    assert unsupported_release_named_literals(
+        "A debütáló album egyik dala a Wrong Track.",
+        prompt,
+        evidence,
+    ) == ("Wrong Track",)
