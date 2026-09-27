@@ -710,9 +710,7 @@ class DiscordBotBridge(QObject):
         )
 
     def _direct_cross_window_memory_recall(self, query, chat_id, *, trace=None):
-        """Return one exact value from other-window indexed user state when unambiguous."""
-        if self.memory_store is None:
-            return None
+        """Return one exact value from other-window user-authored state when unambiguous."""
         if trace is not None:
             trace.begin("memory_scope_resolution")
             trace.end(
@@ -725,19 +723,74 @@ class DiscordBotBridge(QObject):
             trace.mark_duration("current_raw_context_retrieval", 0)
             trace.mark_duration("window_memory_retrieval", 0)
             trace.begin("cross_window_retrieval")
-        related = self.memory_store.search_window_memories(
+
+        # The raw chat store is the authoritative source for historical
+        # conversation facts. Window memory is a derived acceleration layer and
+        # can legitimately be absent for chats created before indexing existed.
+        # Only user-authored messages are eligible: assistant answers must never
+        # be promoted into memory, which prevents prior hallucinations from
+        # becoming future recall evidence.
+        raw_user_messages = []
+        raw_chat_count = 0
+        try:
+            chats = self.chat_store.list_chats(include_closed=True)
+        except Exception:
+            chats = []
+        for candidate_chat in chats:
+            candidate_id = str(candidate_chat.get("id", "") or "")
+            if not candidate_id or candidate_id == str(chat_id or ""):
+                continue
+            raw_chat_count += 1
+            for message in candidate_chat.get("messages", []):
+                if str(message.get("role") or "").strip().lower() != "user":
+                    continue
+                raw_user_messages.append({
+                    "role": "user",
+                    "content": str(message.get("content") or ""),
+                })
+
+        raw_recall = resolve_current_conversation_recall(
             query,
-            exclude_chat_id=str(chat_id or ""),
-            limit=10,
+            messages=raw_user_messages,
+            indexed_state="",
+            summary="",
         )
-        if trace is not None:
-            trace.end(
-                "cross_window_retrieval",
-                cross_window_hit=bool(related),
-                cross_window_retrieved_count=len(related),
+        if raw_recall.is_direct_hit or raw_recall.candidate_count > 1:
+            if trace is not None:
+                trace.end(
+                    "cross_window_retrieval",
+                    cross_window_hit=raw_recall.is_direct_hit,
+                    cross_window_retrieved_count=raw_recall.retrieved_item_count,
+                    cross_window_raw_chat_count=raw_chat_count,
+                    cross_window_raw_user_message_count=len(raw_user_messages),
+                    cross_window_source="raw_user_chat_history",
+                )
+                trace.mark_duration("global_memory_retrieval", 0)
+                trace.begin("direct_memory_recall")
+                trace.end(
+                    "direct_memory_recall",
+                    current_window_hit=False,
+                    cross_window_hit=raw_recall.is_direct_hit,
+                    global_memory_hit=False,
+                    retrieved_item_count=raw_recall.retrieved_item_count,
+                    recall_candidate_count=raw_recall.candidate_count,
+                    recall_source=(
+                        "raw_user_chat_history"
+                        if raw_recall.is_direct_hit
+                        else "ambiguous_raw_user_chat_history"
+                    ),
+                )
+            return raw_recall
+
+        related = (
+            self.memory_store.search_window_memories(
+                query,
+                exclude_chat_id=str(chat_id or ""),
+                limit=10,
             )
-            trace.mark_duration("global_memory_retrieval", 0)
-            trace.begin("direct_memory_recall")
+            if self.memory_store is not None
+            else []
+        )
         indexed_state = "\n".join(
             str(item.get("matched_state") or "").strip()
             for item in related
@@ -750,6 +803,20 @@ class DiscordBotBridge(QObject):
             summary="",
         )
         if trace is not None:
+            trace.end(
+                "cross_window_retrieval",
+                cross_window_hit=recall.is_direct_hit,
+                cross_window_retrieved_count=len(related),
+                cross_window_raw_chat_count=raw_chat_count,
+                cross_window_raw_user_message_count=len(raw_user_messages),
+                cross_window_source=(
+                    "window_index"
+                    if related
+                    else "none"
+                ),
+            )
+            trace.mark_duration("global_memory_retrieval", 0)
+            trace.begin("direct_memory_recall")
             trace.end(
                 "direct_memory_recall",
                 current_window_hit=False,
@@ -764,6 +831,7 @@ class DiscordBotBridge(QObject):
                 ),
             )
         return recall
+
 
     def _build_memory_context(self, query, limit=8):
         if self.memory_store is None:
