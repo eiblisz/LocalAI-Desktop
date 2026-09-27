@@ -119,6 +119,71 @@ def _marked_title(prompt):
     return ""
 
 
+def _release_subject_surface(prompt):
+    """Extract the named entity in a first/debut-release question when structural."""
+    raw = _clean(prompt)
+    patterns = (
+        r"(?i)\bmikor\s+(?:adta|adtak|kiadta|kiadtak)\s+(?:ki\s+)?"
+        r"(?:a|az)\s+(?:els[őo]|deb[uü]t\w*)\s+[^?]{0,40}?\s+"
+        r"(?:a|az)\s+(?P<subject>.+?)\s+(?:egy[uü]ttes|zenekar)\b",
+        r"(?i)\bwhen\s+did\s+(?P<subject>.+?)\s+release\s+"
+        r"(?:its|their|the)?\s*(?:first|debut)\s+(?:studio\s+)?album\b",
+        r"(?i)\bwann\s+ver[oö]ffentlichte\s+(?P<subject>.+?)\s+"
+        r"(?:sein|ihr|das)?\s*(?:erste|erstes|deb[uü]t)\w*\s+album\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, raw)
+        if match:
+            subject = _clean(match.group("subject")).strip(" .?!,;:")
+            if 2 <= len(subject) <= 120:
+                return subject
+    return ""
+
+
+def _is_debut_release_request(prompt):
+    folded = _fold(prompt)
+    debut_markers = (
+        "elso album", "elso nagylemez", "elso lemez",
+        "debut album", "debut studio album", "debutalo album",
+        "debutlemez", "debutalbum", "first album", "first studio album",
+        "erstes album",
+    )
+    return any(marker in folded for marker in debut_markers)
+
+
+def _subject_supported_in_text(text, subject):
+    folded_text = _fold(text)
+    folded_subject = _fold(subject)
+    if not folded_subject:
+        return False
+    if re.search(r"(?<!\w)" + re.escape(folded_subject) + r"(?!\w)", folded_text):
+        return True
+
+    # Acronyms may be written with or without punctuation/spaces (WASP/W.A.S.P.).
+    raw_subject = re.sub(r"[^A-Za-z0-9]", "", str(subject or ""))
+    if 2 <= len(raw_subject) <= 8 and raw_subject.upper() == raw_subject:
+        compact_pattern = r"(?i)(?<![A-Za-z0-9])" + r"[^A-Za-z0-9]*".join(
+            re.escape(ch) for ch in raw_subject
+        ) + r"(?![A-Za-z0-9])"
+        return bool(re.search(compact_pattern, str(text or "")))
+    return False
+
+
+def _debut_release_item_supported(text, request_text):
+    if not _is_debut_release_request(request_text):
+        return True
+    subject = _release_subject_surface(request_text)
+    if subject and not _subject_supported_in_text(text, subject):
+        return False
+    folded = _fold(text)
+    debut_markers = (
+        "debut album", "debut studio album", "first album", "first studio album",
+        "elso album", "elso nagylemez", "debutalo album", "debutalbum",
+        "erstes album",
+    )
+    return any(marker in folded for marker in debut_markers)
+
+
 def direct_fact_title_surface(prompt):
     """Return a structurally identified work/title surface from the request."""
     return _marked_title(prompt)
@@ -131,9 +196,12 @@ def requested_fact_relation(prompt):
         return "event"
     if semantic_relation in {
         "authorship", "authorship_creation", "creation", "formation", "birth",
+        "release", "publication",
     }:
         if semantic_relation in {"authorship", "authorship_creation"}:
             return "creation"
+        if semantic_relation in {"release", "publication"}:
+            return "release"
         return semantic_relation
 
     folded = _fold(prompt)
@@ -150,6 +218,11 @@ def requested_fact_relation(prompt):
         )),
         ("birth", (
             r"\b(?:szuletett|born|geboren)\b",
+        )),
+        ("release", (
+            r"\b(?:megjelent|jelent meg|kiadta|kiadtak|adta ki|adtak ki|kiadas|kiadva)\b",
+            r"\b(?:released|published|publication)\b",
+            r"\b(?:erschien|veroffentlicht|ausgabe)\b",
         )),
         ("event", (
             r"\b(?:tortent|happened|occurred|geschah)\b",
@@ -173,11 +246,23 @@ def derive_premise_neutral_query(prompt, requested_fact="general"):
     if identity_subject:
         return identity_subject, "identity_lookup_subject"
 
+    relation = requested_fact_relation(clean)
+    release_subject = _release_subject_surface(clean)
+    if (
+        str(requested_fact or "") == "temporal"
+        and relation == "release"
+        and release_subject
+        and _is_debut_release_request(clean)
+    ):
+        return (
+            f"{release_subject} debut first album release date year",
+            "premise_neutral_entity_release_relation",
+        )
+
     title = _marked_title(clean)
     if not title:
         return clean, "validated_original"
 
-    relation = requested_fact_relation(clean)
     hungarian_creation_query = bool(
         re.search(r"\b(?:mikor|irta|irja|cimu|verset|muvet)\b", _fold(clean))
     )
@@ -189,6 +274,7 @@ def derive_premise_neutral_query(prompt, requested_fact="general"):
         ),
         "formation": "formation founding date year",
         "birth": "birth date year",
+        "release": "release publication date year",
         "event": "event date year",
         "general": "date year",
     }
@@ -208,8 +294,20 @@ def derive_premise_neutral_query(prompt, requested_fact="general"):
 def targeted_fact_refinement_query(prompt, requested_fact="general"):
     """Derive one stricter, bounded follow-up query after insufficient evidence."""
     clean = _clean(prompt)
+    if str(requested_fact or "") != "temporal":
+        return ""
+
+    relation = requested_fact_relation(clean)
+    release_subject = _release_subject_surface(clean)
+    if (
+        relation == "release"
+        and release_subject
+        and _is_debut_release_request(clean)
+    ):
+        return f"{release_subject} debut studio album release year"
+
     title = _marked_title(clean)
-    if not title or str(requested_fact or "") != "temporal":
+    if not title:
         return ""
 
     hungarian_creation_query = bool(
@@ -223,6 +321,7 @@ def targeted_fact_refinement_query(prompt, requested_fact="general"):
         ),
         "formation": "formation year",
         "birth": "birth year",
+        "release": "release year",
         "event": "event date",
         "general": "date year",
     }
@@ -253,6 +352,11 @@ def _temporal_relation_supported(text, relation):
             "established", "gegrundet",
         ),
         "birth": ("szuletett", "born", "geboren"),
+        "release": (
+            "megjelent", "jelent meg", "kiadta", "kiadtak", "adta ki", "adtak ki",
+            "kiadas", "kiadva", "released", "published", "publication",
+            "erschien", "veroffentlicht", "ausgabe",
+        ),
         "event": ("tortent", "happened", "occurred", "geschah"),
     }
     expected = markers.get(relation)
@@ -386,9 +490,42 @@ def requested_fact_supported(payload, requested_fact="general", request_text="")
             if _creation_date_supported(item_text):
                 return True
             continue
+        if relation == "release" and not _debut_release_item_supported(
+            item_text,
+            request_text,
+        ):
+            continue
         if _temporal_relation_supported(item_text, relation):
             return True
     return False
+
+
+def answer_temporal_literals_supported_by_evidence(answer, request_text, payload):
+    """Require each answer year to be supported by evidence for the requested relation."""
+    years = tuple(dict.fromkeys(re.findall(r"(?<!\d)(?:1[0-9]{3}|20[0-9]{2})(?!\d)", str(answer or ""))))
+    if not years:
+        return True
+    results = list(dict(payload or {}).get("results") or [])
+    for year in years:
+        matching = []
+        for item in results:
+            item_text = "\n".join((
+                str(item.get("title") or ""),
+                str(item.get("snippet") or ""),
+                str(item.get("page_text") or ""),
+                str(item.get("pre_extracted_context") or ""),
+            ))
+            if year in item_text:
+                matching.append(item)
+        if not matching:
+            return False
+        if not requested_fact_supported(
+            {"results": matching},
+            "temporal",
+            request_text,
+        ):
+            return False
+    return True
 
 
 _NAME_TOKEN_RE = r"[A-ZÁÉÍÓÖŐÚÜŰ][A-Za-zÁÉÍÓÖŐÚÜŰáéíóöőúüű-]{1,}"
