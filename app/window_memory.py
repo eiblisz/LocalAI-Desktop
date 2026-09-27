@@ -1,7 +1,11 @@
 import re
 from dataclasses import dataclass
 
-from .memory_store import is_secret_memory_candidate
+from .memory_store import (
+    collapse_window_state_lines,
+    is_secret_memory_candidate,
+    window_state_slot_key,
+)
 
 
 RECENT_MESSAGE_LIMIT = 12
@@ -60,6 +64,33 @@ def _merge_summary(existing, messages):
     return "\n".join(lines)
 
 
+def _merge_indexed_state(existing, text):
+    line = _memory_line({"role": "user", "content": text})
+    if not line:
+        return str(existing or "").strip()
+
+    slot = window_state_slot_key(text)
+    if not slot:
+        return _merge_summary(
+            existing,
+            [{"role": "user", "content": text}],
+        )
+
+    kept = []
+    for existing_line in str(existing or "").splitlines():
+        clean = existing_line.strip()
+        if not clean.casefold().startswith("- user:"):
+            continue
+        existing_content = clean.split(":", 1)[1].strip()
+        if window_state_slot_key(existing_content) == slot:
+            continue
+        kept.append(clean)
+    kept.append(line)
+    # Reuse the same canonical collapse logic to guard against legacy duplicate
+    # slot values already persisted before this behavior existed.
+    return "\n".join(collapse_window_state_lines("\n".join(kept)))
+
+
 def _is_high_value_user_state(text):
     normalized = _clean_text(text)
     if not normalized or len(normalized) > MAX_LINE_CHARS:
@@ -93,9 +124,9 @@ class WindowMemoryService:
         if is_secret_memory_candidate(key=text, value=text, subject=text):
             return None
         current = self.store.get_window_memory(chat_id)
-        indexed = _merge_summary(
+        indexed = _merge_indexed_state(
             (current or {}).get("indexed_state", ""),
-            [{"role": "user", "content": text}],
+            text,
         )
         while indexed and len(indexed) > MAX_INDEXED_STATE_CHARS:
             indexed = "\n".join(indexed.splitlines()[1:])
