@@ -2310,6 +2310,7 @@ class MainWindow(QMainWindow):
             ("Hungarian fluency audit", metadata.get("hungarian_fluency_audit_result")),
             ("Fluency audit transport", metadata.get("fluency_audit_transport")),
             ("Fluency audit evidence", metadata.get("fluency_audit_evidence")),
+            ("Fluency audit degraded", metadata.get("fluency_audit_degraded_reason")),
             ("Fluency audit failure", metadata.get("fluency_audit_failure_reason")),
             ("Fluency sentences audited", metadata.get("fluency_sentences_audited")),
             ("Fluency sentences failed", metadata.get("fluency_sentences_failed")),
