@@ -535,6 +535,68 @@ def test_automatic_model_prepare_has_no_process_kill_or_server_restart_path():
 
 
 
+def test_external_consumer_probe_excludes_local_launcher_ancestors(monkeypatch):
+    client = OllamaClient()
+    captured = {}
+
+    class Parent:
+        def __init__(self, pid):
+            self.pid = pid
+
+    class Process:
+        def __init__(self, pid):
+            assert pid == os.getpid()
+
+        def parents(self):
+            return [Parent(43210), Parent(54321)]
+
+    monkeypatch.setattr("app.ollama_client.psutil.Process", Process)
+
+    def fake_list_external(*, timeout, exclude_pids):
+        captured["timeout"] = timeout
+        captured["exclude_pids"] = list(exclude_pids)
+        return []
+
+    monkeypatch.setattr(
+        "app.ollama_client.list_external_ollama_consumers",
+        fake_list_external,
+    )
+
+    assert client._external_consumers() == []
+    assert os.getpid() in captured["exclude_pids"]
+    assert 43210 in captured["exclude_pids"]
+    assert 54321 in captured["exclude_pids"]
+
+
+def test_external_consumer_probe_does_not_exclude_unrelated_clients(monkeypatch):
+    client = OllamaClient()
+
+    monkeypatch.setattr(
+        client,
+        "_local_process_family_pids",
+        lambda: [os.getpid(), 43210],
+    )
+
+    def fake_list_external(*, timeout, exclude_pids):
+        assert 99999 not in exclude_pids
+        return [{
+            "pid": 99999,
+            "owner": "EINSTEIN",
+            "model": "qwen-test",
+        }]
+
+    monkeypatch.setattr(
+        "app.ollama_client.list_external_ollama_consumers",
+        fake_list_external,
+    )
+
+    assert client._external_consumers() == [{
+        "pid": 99999,
+        "owner": "EINSTEIN",
+        "model": "qwen-test",
+    }]
+
+
 def test_prepare_model_blocks_manual_other_model_before_destructive_switch(monkeypatch, tmp_path):
     client, _store = _desktop_client(tmp_path)
     touched = {"ps": False}
