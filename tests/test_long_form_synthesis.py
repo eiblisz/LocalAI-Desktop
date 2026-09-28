@@ -70,6 +70,14 @@ def test_case_02c_hungarian_inflected_exact_paragraph_count_is_long_form():
     assert "10 paragraphs" in contract.constraints.format_constraints
 
 
+def test_case_02d_paragraph_parser_rejects_unknown_suffix_tail():
+    prompt = "irj egy 10 bekezdesxyz allo esszet a tortenelemrol"
+    contract = _contract(prompt)
+
+    assert contract.constraints.response_length != LENGTH_LONG
+    assert "10 paragraphs" not in contract.constraints.format_constraints
+
+
 def test_case_03_partial_web_coverage_uses_hybrid_synthesis_policy():
     prompt = (
         "Mutasd be részletesen, hogyan működik a neurális háló, "
