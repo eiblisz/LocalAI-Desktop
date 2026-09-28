@@ -2224,6 +2224,7 @@ class ChatWebWorker(QObject):
                         else None
                     ),
                     prune_unsupported_sentences=long_web_semantic_audit,
+                    strict_relation_audit=long_web_semantic_audit,
                     language_instruction=(
                         self._conversation_language_instruction()
                         + (
