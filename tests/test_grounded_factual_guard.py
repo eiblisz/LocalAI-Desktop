@@ -443,3 +443,47 @@ def test_grounded_guard_still_rejects_literal_absent_from_full_generation_author
             compact_authority,
             literal_authority_text=full_generation_authority,
         )
+
+
+def test_long_form_guard_can_prune_one_unsupported_sentence_without_model_repair():
+    authority = (
+        "AUTHORIZED EVIDENCE: Kossuth Lajos fontos szereplő volt 1848-ban. "
+        "A szabadságharc 1849-ben ért véget."
+    )
+    client = RepairClient("must not be used")
+    draft = (
+        "Kossuth Lajos fontos szereplő volt 1848-ban. "
+        "A Kitalált Személy 1847-ben döntő szerepet játszott. "
+        "A szabadságharc 1849-ben ért véget."
+    )
+
+    result = guard_grounded_answer(
+        client,
+        "qwen-test",
+        "Írj esszét az 1848-as szabadságharcról.",
+        draft,
+        authority,
+        prune_unsupported_sentences=True,
+    )
+
+    assert "Kossuth Lajos" in result
+    assert "1849" in result
+    assert "Kitalált Személy" not in result
+    assert "1847" not in result
+    assert client.calls == 0
+
+
+def test_direct_fact_guard_does_not_prune_unsupported_sentence_by_default():
+    authority = "AUTHORIZED EVIDENCE: Correct Author, 1912."
+    client = RepairClient("Other Person 1956-ban írta.")
+
+    with pytest.raises(GroundedFactualGuardError):
+        guard_grounded_answer(
+            client,
+            "qwen-test",
+            "Mikor írták?",
+            "Wrong Author 1956-ban írta.",
+            authority,
+        )
+
+    assert client.calls == 1
