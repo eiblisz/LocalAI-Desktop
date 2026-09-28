@@ -1190,6 +1190,7 @@ class DiscordBotBridge(QObject):
         explicit_batch_child=False,
         output_budget=None,
         synthesis_route=None,
+        constraints=None,
     ):
         kwargs = {}
         if trace is not None:
@@ -1200,6 +1201,8 @@ class DiscordBotBridge(QObject):
             kwargs["output_budget"] = int(output_budget)
         if synthesis_route is not None and isinstance(self.ollama_client, OllamaClient):
             kwargs["synthesis_route"] = str(synthesis_route)
+        if constraints is not None:
+            kwargs["constraints"] = constraints
         return run_chat_web_request(
             self.ollama_client,
             self.settings.model,
@@ -1248,6 +1251,7 @@ class DiscordBotBridge(QObject):
             prompt,
             trace=trace,
             explicit_batch_child=explicit_batch_child,
+            constraints=constraints,
         )
 
     def _crypto_market_extension(self):
@@ -1678,6 +1682,7 @@ class DiscordBotBridge(QObject):
                     explicit_batch_child=explicit_batch_child,
                     output_budget=output_budget,
                     synthesis_route=synthesis_route,
+                    constraints=constraints,
                 )
         else:
             if trace is not None:
@@ -1707,6 +1712,7 @@ class DiscordBotBridge(QObject):
                     explicit_batch_child=explicit_batch_child,
                     output_budget=output_budget,
                     synthesis_route="WEB",
+                    constraints=constraints,
                 )
 
         if not answer:
