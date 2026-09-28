@@ -265,6 +265,7 @@ def guard_grounded_answer(
     trace=None,
     force_verify=False,
     literal_authority_text=None,
+    repair_authority_text=None,
     prune_unsupported_sentences=False,
     language_instruction="",
     output_budget=None,
@@ -273,6 +274,7 @@ def guard_grounded_answer(
 ):
     draft = _collapse_adjacent_proper_name_repetition(str(answer or "").strip())
     literal_authority = str(literal_authority_text or authority_text or "")
+    repair_authority = str(repair_authority_text or authority_text or "")
     unsupported = unsupported_grounded_literals(draft, literal_authority)
     if trace is not None:
         trace.add_metadata(
@@ -296,7 +298,8 @@ def guard_grounded_answer(
     if not unsupported and not force_verify:
         return draft
 
-    if unsupported and prune_unsupported_sentences and not force_verify:
+    if unsupported and prune_unsupported_sentences:
+        pruned_literals = unsupported
         pruned = _remove_sentences_with_unsupported_literals(
             draft,
             unsupported,
@@ -306,16 +309,23 @@ def guard_grounded_answer(
             literal_authority,
         )
         if pruned and not remaining_after_prune:
+            draft = pruned
+            unsupported = ()
             if trace is not None:
                 trace.add_metadata(
-                    factual_guard_repair_status="deterministic_prune",
+                    factual_guard_repair_status=(
+                        "deterministic_prune_pending_semantic_audit"
+                        if force_verify
+                        else "deterministic_prune"
+                    ),
                     factual_guard_pruned_unsupported_literals=", ".join(
-                        unsupported[:6]
+                        pruned_literals[:6]
                     ),
                     factual_guard_remaining_unsupported_literals="",
                     factual_guard_remaining_literals="",
                 )
-            return pruned
+            if not force_verify:
+                return draft
 
     if trace is not None:
         trace.begin("factual_guard_repair")
