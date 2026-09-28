@@ -243,3 +243,49 @@ def test_output_hygiene_handles_nested_amp_escaped_space_entity():
     assert "x20" not in value
     assert "Első." in value
     assert "Második." in value
+
+
+def test_output_hygiene_enforces_exact_paragraph_count_without_new_facts():
+    constraints = build_task_constraints(
+        "Írj egy 10 bekezdésből álló esszét a történelemről."
+    )
+    draft = "\n\n".join(
+        f"{index}. bekezdés. Ez a meglévő tartalom második mondata."
+        for index in range(1, 15)
+    )
+
+    value = normalize_user_visible_output(draft, constraints)
+
+    blocks = [item for item in value.split("\n\n") if item.strip()]
+    assert len(blocks) == 10
+    assert "14. bekezdés." in blocks[-1]
+
+
+def test_output_hygiene_preserves_paragraph_boundary_when_space_entity_ends_line():
+    constraints = build_task_constraints(
+        "Írj egy 2 bekezdésből álló esszét a történelemről."
+    )
+    draft = "Első bekezdés.&#x20;\nMásodik bekezdés.&amp;#x20;"
+
+    value = normalize_user_visible_output(draft, constraints)
+
+    assert "&#x20;" not in value
+    assert "&amp;#x20;" not in value
+    assert len([item for item in value.split("\n\n") if item.strip()]) == 2
+
+
+def test_output_hygiene_can_split_existing_sentences_to_reach_exact_count():
+    constraints = build_task_constraints(
+        "Írj egy 3 bekezdésből álló esszét a történelemről."
+    )
+    draft = (
+        "Első mondat. Második mondat. Harmadik mondat. "
+        "Negyedik mondat. Ötödik mondat. Hatodik mondat."
+    )
+
+    value = normalize_user_visible_output(draft, constraints)
+
+    blocks = [item for item in value.split("\n\n") if item.strip()]
+    assert len(blocks) == 3
+    assert "Első mondat." in value
+    assert "Hatodik mondat." in value
