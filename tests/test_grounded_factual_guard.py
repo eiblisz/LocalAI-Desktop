@@ -531,3 +531,61 @@ def test_long_form_force_verify_uses_full_repair_authority_after_pruning():
     assert "first" not in result.casefold()
     assert "első nagy magyar győzelem" not in result.casefold()
     assert full_authority in client.messages[-1]["content"]
+
+
+def test_long_form_post_repair_prunes_reintroduced_unsupported_literals():
+    authority = (
+        "AUTHORIZED EVIDENCE: Correct Author wrote Silver Story in 1912. "
+        "The work was published in the same year."
+    )
+    client = RepairClient(
+        "Correct Author wrote Silver Story in 1912. "
+        "Other Person later changed it in 1956."
+    )
+
+    result = guard_grounded_answer(
+        client,
+        "qwen-test",
+        "Írj rövid ismertetőt a Silver Storyról.",
+        "Wrong Author wrote Silver Story in 1956.",
+        authority,
+        force_verify=True,
+        prune_unsupported_sentences=True,
+        strict_relation_audit=True,
+    )
+
+    assert "Correct Author" in result
+    assert "1912" in result
+    assert "Other Person" not in result
+    assert "1956" not in result
+    assert client.calls == 1
+
+
+def test_strict_relation_audit_instruction_rejects_name_cooccurrence_as_support():
+    authority = (
+        "AUTHORIZED EVIDENCE: Correct Author wrote Silver Story in 1912."
+    )
+
+    class CaptureClient:
+        def __init__(self):
+            self.messages = None
+
+        def chat_once(self, model, messages, timeout=600.0, **kwargs):
+            self.messages = messages
+            return "Correct Author wrote Silver Story in 1912."
+
+    client = CaptureClient()
+    result = guard_grounded_answer(
+        client,
+        "qwen-test",
+        "Írj ismertetőt.",
+        "Correct Author wrote Silver Story in 1912.",
+        authority,
+        force_verify=True,
+        strict_relation_audit=True,
+    )
+
+    assert result == "Correct Author wrote Silver Story in 1912."
+    system = client.messages[0]["content"]
+    assert "Mere co-occurrence of the same names is not support." in system
+    assert "delete that sentence rather than guessing" in system
