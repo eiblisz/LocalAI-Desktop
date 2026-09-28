@@ -76,14 +76,23 @@ def _benchmark_web_modes():
         "Keress rá a weben a legfrissebb Qwen modellre.",
         disable_web=True,
     )
-    on = runtime.plan_many("Írj egy rövid verset az őszről.", force_web=True)
+    on = runtime.plan_many(
+        "Magyarázd el röviden a TCP működését.",
+        force_web=True,
+    )
+    creative_on = runtime.plan_many(
+        "Írj egy rövid verset az őszről.",
+        force_web=True,
+    )
 
     _assert(auto[0].route == ROUTE_WEB and auto[0].use_web,
             "WEB AUTO did not route a freshness-sensitive request to web")
     _assert(off[0].route == ROUTE_CHAT and not off[0].use_web,
             "WEB OFF did not force LOCAL ONLY")
     _assert(on[0].route == ROUTE_WEB and on[0].use_web,
-            "WEB ON did not force web routing")
+            "WEB ON did not route external factual/expository work to web")
+    _assert(creative_on[0].route == ROUTE_CHAT and not creative_on[0].use_web,
+            "WEB ON incorrectly routed ordinary creative writing to web")
 
 
 def _benchmark_script_guard():
