@@ -133,8 +133,18 @@ def plan_chat_actions(
     contracts = action_runtime.plan_many(
         user_text,
         model_context_suffix=model_context_suffix,
-        force_web=False,
-        disable_web=mode == "OFF",
+        force_web=(
+            (lambda unit: (
+                mode == "ON"
+                and not conversation_local_resolver(unit)
+            ))
+        ),
+        disable_web=(
+            (lambda unit: (
+                mode == "OFF"
+                or conversation_local_resolver(unit)
+            ))
+        ),
         conversation_local=conversation_local_resolver,
         crypto_market_available=crypto_market_available,
         multi_asset_market_available=multi_asset_market_available,
