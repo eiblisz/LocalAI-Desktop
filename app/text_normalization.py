@@ -74,24 +74,124 @@ def canonical_contains(text, candidate):
     )
 
 
-# These are grammatical suffixes only.  The helper is intentionally not a
-# fuzzy entity resolver: base tokens must match exactly and only one final token
-# may carry one known Hungarian case/plural suffix.
-_SAFE_HUNGARIAN_SUFFIXES = tuple(sorted({
-    "atok", "etek", "otok", "unk",
-    "nak", "nek", "ban", "ben", "bol", "tol", "rol", "hoz", "hez",
-    "nal", "nel",
-    "val", "vel", "kent", "kepp", "jat", "jet", "ja", "je",
-    "at", "et", "ot", "on", "en", "ig", "ra", "re", "ba", "be",
-    "t", "k",
-}, key=len, reverse=True))
+# Hungarian morphology matching is deliberately conservative. This module does
+# not attempt full lemmatization; callers supply a known canonical lemma and a
+# bounded suffix profile. That keeps routing/intent matching tolerant of normal
+# Hungarian inflection without turning entity or factual matching into fuzzy
+# guessing.
+_HUNGARIAN_CASE_SUFFIXES = {
+    "nak", "nek", "ban", "ben", "ba", "be", "bol", "tol", "rol",
+    "hoz", "hez", "nal", "nel", "val", "vel", "kent", "kepp",
+    "ert", "ig", "ra", "re", "on", "en", "at", "et", "ot", "t",
+}
+
+_HUNGARIAN_NUMBER_POSSESSIVE_SUFFIXES = {
+    "k", "ak", "ek", "ok",
+    "m", "d", "a", "e", "am", "em", "om", "ad", "ed", "od",
+    "ja", "je", "unk", "atok", "etek", "otok", "uk", "juk",
+    "ai", "ei", "aim", "eim", "aid", "eid",
+    "anak", "enek", "janak", "jenek",
+}
+
+_HUNGARIAN_SEMANTIC_CONTINUATIONS = {
+    # Number/person continuations that can follow an already meaningful
+    # semantic surface, for example "alakult" -> "alakultak".
+    "ak", "ek", "ok", "ik", "unk", "tok", "tek",
+    "nak", "nek", "ja", "je", "juk", "jak", "jek",
+    "am", "em", "om", "ad", "ed", "od",
+}
+
+_HUNGARIAN_FORMAT_SUFFIXES = {
+    # Format-unit adjectives such as "bekezdéses" are safe only in this
+    # profile and must not broaden general semantic/entity matching.
+    "s", "as", "es", "os",
+}
+
+_HUNGARIAN_COMMAND_SUFFIXES = {
+    # Imperative/polite variants of a supplied command lemma, e.g.
+    # "keress" -> "keressél", "keressen", "keressetek".
+    "el", "en", "ek", "ed", "etek", "unk",
+}
+
+_HUNGARIAN_SUFFIX_PROFILES = {
+    "entity": _HUNGARIAN_CASE_SUFFIXES | _HUNGARIAN_NUMBER_POSSESSIVE_SUFFIXES,
+    "semantic": (
+        _HUNGARIAN_CASE_SUFFIXES
+        | _HUNGARIAN_NUMBER_POSSESSIVE_SUFFIXES
+        | _HUNGARIAN_SEMANTIC_CONTINUATIONS
+    ),
+    "format": (
+        _HUNGARIAN_CASE_SUFFIXES
+        | _HUNGARIAN_NUMBER_POSSESSIVE_SUFFIXES
+        | _HUNGARIAN_FORMAT_SUFFIXES
+    ),
+    "command": _HUNGARIAN_COMMAND_SUFFIXES,
+}
+
+# Backward-compatible alias used by older entity-surface tests/callers.
+_SAFE_HUNGARIAN_SUFFIXES = tuple(sorted(
+    _HUNGARIAN_SUFFIX_PROFILES["entity"],
+    key=len,
+    reverse=True,
+))
+
+
+def hungarian_token_matches(surface, lemma, *, profile="semantic"):
+    """Match one token to a known lemma plus one bounded Hungarian suffix.
+
+    Both sides are accent/case normalized first. This is a recognizer, not a
+    generic stemmer: the supplied lemma must match exactly at the beginning and
+    the entire remainder must be an allowed suffix for the selected profile.
+    """
+    surface_tokens = canonical_tokens(surface)
+    lemma_tokens = canonical_tokens(lemma)
+    if len(surface_tokens) != 1 or len(lemma_tokens) != 1:
+        return False
+
+    actual = surface_tokens[0]
+    base = lemma_tokens[0]
+    if actual == base:
+        return True
+    if not base or not actual.startswith(base):
+        return False
+
+    suffixes = _HUNGARIAN_SUFFIX_PROFILES.get(profile)
+    if suffixes is None:
+        raise ValueError(f"Unknown Hungarian suffix profile: {profile}")
+    suffix = actual[len(base):]
+    return bool(suffix) and suffix in suffixes
+
+
+def canonical_contains_inflected(text, candidate, *, profile="semantic"):
+    """Match a phrase while allowing bounded inflection on its final token.
+
+    Earlier tokens must match exactly. This supports semantic lexicon phrases
+    without accepting arbitrary fuzzy substitutions.
+    """
+    haystack = canonical_tokens(text)
+    needle = canonical_tokens(candidate)
+    if not haystack or not needle or len(needle) > len(haystack):
+        return False
+
+    width = len(needle)
+    for index in range(len(haystack) - width + 1):
+        window = haystack[index:index + width]
+        if tuple(window[:-1]) != tuple(needle[:-1]):
+            continue
+        if hungarian_token_matches(
+            window[-1],
+            needle[-1],
+            profile=profile,
+        ):
+            return True
+    return False
 
 
 def is_safe_hungarian_entity_surface(surface, canonical_entity):
-    """Whether *surface* is a simple inflected spelling of an allowed entity.
+    """Whether surface is a simple inflected spelling of an allowed entity.
 
-    Examples: ``Toldit``/``Toldi``, ``Pokolgépről``/``Pokolgép`` and
-    ``Petőfi Sándort``/``Petőfi Sándor``.  This never accepts substitutions,
+    Examples: Toldit/Toldi, Pokolgépről/Pokolgép and
+    Petőfi Sándort/Petőfi Sándor. This never accepts substitutions,
     reordered names, or a new extra name token.
     """
     surface_tokens = canonical_tokens(surface)
@@ -103,12 +203,11 @@ def is_safe_hungarian_entity_surface(surface, canonical_entity):
     if surface_tokens[:-1] != entity_tokens[:-1]:
         return False
 
-    base = entity_tokens[-1]
-    inflected = surface_tokens[-1]
-    if len(base) < 3 or not inflected.startswith(base):
-        return False
-    suffix = inflected[len(base):]
-    return suffix in _SAFE_HUNGARIAN_SUFFIXES
+    return hungarian_token_matches(
+        surface_tokens[-1],
+        entity_tokens[-1],
+        profile="entity",
+    )
 
 
 def matches_allowed_entity_surface(surface, allowed_entities):
