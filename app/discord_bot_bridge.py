@@ -1211,6 +1211,33 @@ class DiscordBotBridge(QObject):
             **kwargs,
         ).strip()
 
+    def _run_chat_web_bound(
+        self,
+        messages,
+        prompt,
+        *,
+        trace=None,
+        explicit_batch_child=False,
+        output_budget=None,
+        synthesis_route=None,
+        constraints=None,
+    ):
+        """Call the shared web path while preserving compatibility with test/plugin overrides."""
+        kwargs = {
+            "trace": trace,
+            "explicit_batch_child": explicit_batch_child,
+            "output_budget": output_budget,
+            "synthesis_route": synthesis_route,
+            "constraints": constraints,
+        }
+        try:
+            return self._run_chat_web(messages, prompt, **kwargs)
+        except TypeError as exc:
+            if "constraints" not in str(exc):
+                raise
+            kwargs.pop("constraints", None)
+            return self._run_chat_web(messages, prompt, **kwargs)
+
     def _run_market_web(
         self,
         messages,
@@ -1246,7 +1273,7 @@ class DiscordBotBridge(QObject):
             constraints=constraints,
             trace=trace,
         )
-        return self._run_chat_web(
+        return self._run_chat_web_bound(
             messages,
             prompt,
             trace=trace,
@@ -1675,7 +1702,7 @@ class DiscordBotBridge(QObject):
                         explicit_batch_child=explicit_batch_child,
                     )
             else:
-                answer = self._run_chat_web(
+                answer = self._run_chat_web_bound(
                     messages,
                     prompt,
                     trace=trace,
@@ -1705,7 +1732,7 @@ class DiscordBotBridge(QObject):
                 trace.end("primary_generation", primary_generation_result="completed")
             if allow_web_fallback and answer_requires_web_fallback(prompt, answer):
                 used_web_response = True
-                answer = self._run_chat_web(
+                answer = self._run_chat_web_bound(
                     messages,
                     prompt,
                     trace=trace,
