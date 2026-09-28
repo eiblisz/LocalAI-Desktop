@@ -82,6 +82,7 @@ from .request_semantics import (
     request_profile_instruction,
 )
 from .search_query_validation import validate_search_queries, validate_search_query
+from .task_constraints import task_constraints_instruction
 from .runtime_control import ExecutionBudget, ExecutionControl
 from .scheduled_task_executor import ScheduledTaskExecutor
 from .weather_tool import get_weather, weather_context_text
@@ -2184,7 +2185,15 @@ class ChatWebWorker(QObject):
                             not temporal_literal_mismatch_requires_verify
                         ),
                     )
+            long_web_semantic_audit = (
+                self.synthesis_route == SYNTHESIS_WEB
+                and self.response_length == LENGTH_LONG
+                and not direct_factual_candidate
+            )
             if self.trace is not None:
+                self.trace.add_metadata(
+                    long_web_semantic_audit=bool(long_web_semantic_audit),
+                )
                 self.trace.begin("factual_validation")
             try:
                 answer = guard_grounded_answer(
@@ -2195,23 +2204,38 @@ class ChatWebWorker(QObject):
                     self.user_prompt + "\n\n" + factual_authority_text,
                     trace=self.trace,
                     force_verify=(
-                        factual_risk_request
-                        and not has_authoritative_current_fact
-                        and (
-                            not single_pass_factual
-                            or relation_mismatch_requires_verify
-                            or creator_mismatch_requires_verify
-                            or temporal_literal_mismatch_requires_verify
-                            or bool(release_named_literal_mismatches)
+                        long_web_semantic_audit
+                        or (
+                            factual_risk_request
+                            and not has_authoritative_current_fact
+                            and (
+                                not single_pass_factual
+                                or relation_mismatch_requires_verify
+                                or creator_mismatch_requires_verify
+                                or temporal_literal_mismatch_requires_verify
+                                or bool(release_named_literal_mismatches)
+                            )
                         )
                     ),
                     literal_authority_text=literal_guard_authority_text,
-                    prune_unsupported_sentences=(
-                        self.synthesis_route == SYNTHESIS_WEB
-                        and self.response_length == LENGTH_LONG
-                        and not direct_factual_candidate
+                    repair_authority_text=(
+                        literal_guard_authority_text
+                        if long_web_semantic_audit
+                        else None
                     ),
-                    language_instruction=self._conversation_language_instruction(),
+                    prune_unsupported_sentences=long_web_semantic_audit,
+                    language_instruction=(
+                        self._conversation_language_instruction()
+                        + (
+                            "\n"
+                            + task_constraints_instruction(
+                                self.constraints,
+                                current_subtask=self.user_prompt,
+                            )
+                            if long_web_semantic_audit and self.constraints is not None
+                            else ""
+                        )
+                    ),
                     output_budget=self.output_budget,
                     temperature=self.temperature,
                     seed=self.seed,
