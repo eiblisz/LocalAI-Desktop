@@ -27,7 +27,7 @@ from app.user_error_messages import public_error
 from app import workers
 
 
-def _contract(prompt, web_mode="ON"):
+def _contract(prompt, web_mode="AUTO"):
     return plan_chat_actions(ActionRuntime(), prompt, web_mode=web_mode)[0]
 
 
@@ -76,6 +76,19 @@ def test_case_02d_paragraph_parser_rejects_unknown_suffix_tail():
 
     assert contract.constraints.response_length != LENGTH_LONG
     assert "10 paragraphs" not in contract.constraints.format_constraints
+
+
+def test_case_02e_web_on_long_form_factual_essay_uses_web_and_keeps_budget():
+    prompt = (
+        "irj egy 10 bekezdesbol allo esszet a magyar 1848-as "
+        "szabadsagharcrol"
+    )
+    contract = _contract(prompt, web_mode="ON")
+
+    assert contract.route == ROUTE_WEB
+    assert contract.use_web is True
+    assert contract.constraints.response_length == LENGTH_LONG
+    assert contract.runtime_output_budget == 2048
 
 
 def test_case_03_partial_web_coverage_uses_hybrid_synthesis_policy():
