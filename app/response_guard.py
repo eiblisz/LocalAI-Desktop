@@ -1075,6 +1075,37 @@ def _splice_span_repairs(original, spans, replacements, *, user_text):
     return "".join(pieces)
 
 
+def _requested_paragraph_bounds(format_items):
+    for item in format_items:
+        canonical = str(item or "").strip().casefold()
+        ranged = re.fullmatch(r"(\d{1,2})-(\d{1,2}) paragraphs", canonical)
+        if ranged:
+            low, high = sorted((int(ranged.group(1)), int(ranged.group(2))))
+            return low, high
+        exact = re.fullmatch(r"(\d{1,2}) paragraphs", canonical)
+        if exact:
+            value = int(exact.group(1))
+            return value, value
+    return None
+
+
+def _split_prose_block(block):
+    """Split one prose block at a sentence boundary without rewriting content."""
+    parts = [
+        part.strip()
+        for part in re.split(r"(?<=[.!?])\s+", str(block or "").strip())
+        if part.strip()
+    ]
+    if len(parts) < 2:
+        return None
+    midpoint = max(1, len(parts) // 2)
+    left = " ".join(parts[:midpoint]).strip()
+    right = " ".join(parts[midpoint:]).strip()
+    if not left or not right:
+        return None
+    return left, right
+
+
 def normalize_user_visible_output(text, constraints=None):
     """Remove nonsemantic prose artifacts and enforce safe structural bounds."""
     value = str(text or "")
@@ -1086,8 +1117,15 @@ def normalize_user_visible_output(text, constraints=None):
     formats = {item.casefold() for item in format_items}
 
     if "html" not in formats:
-        # Some models double-escape HTML whitespace entities. Match one or
-        # more nested "amp;" layers without decoding arbitrary HTML markup.
+        # A whitespace entity emitted at the physical end of a line often
+        # represents a model-generated paragraph separator. Preserve that
+        # boundary before removing ordinary inline whitespace entities.
+        value = re.sub(
+            r"&(?:amp;)*#(?:x0*20|0*32);[ \t]*(?=\r?\n|$)",
+            "\n\n",
+            value,
+            flags=re.IGNORECASE,
+        )
         value = re.sub(
             r"&(?:amp;)*#(?:x0*20|0*32);",
             " ",
@@ -1095,27 +1133,39 @@ def normalize_user_visible_output(text, constraints=None):
             flags=re.IGNORECASE,
         )
 
-    paragraph_range = None
-    for item in format_items:
-        match = re.fullmatch(r"(\d{1,2})-(\d{1,2}) paragraphs", item.casefold())
-        if match:
-            low, high = sorted((int(match.group(1)), int(match.group(2))))
-            paragraph_range = (low, high)
-            break
+    paragraph_bounds = _requested_paragraph_bounds(format_items)
 
-    # When the user explicitly asks for an essay paragraph range, exceeding
-    # the maximum is a formatting error that can be corrected without another
-    # model call or any factual rewrite: merge trailing prose blocks.
+    # Paragraph count/range is a hard formatting contract. Deterministic
+    # normalization may merge or split existing prose at sentence boundaries,
+    # but never invents new factual content or asks the model for another draft.
     structural_formats = {"html", "json", "markdown", "table", "bulleted list"}
-    if paragraph_range and not (formats & structural_formats):
-        _low, high = paragraph_range
+    if paragraph_bounds and not (formats & structural_formats):
+        low, high = paragraph_bounds
         blocks = [
             block.strip()
             for block in re.split(r"\n\s*\n+", value.strip())
             if block.strip()
         ]
+
         while len(blocks) > high and len(blocks) >= 2:
             blocks[-2:] = [blocks[-2].rstrip() + " " + blocks[-1].lstrip()]
+
+        # For an exact/required minimum count, split only existing multi-sentence
+        # prose. This preserves every original word and factual literal.
+        while len(blocks) < low:
+            candidate_index = None
+            candidate_split = None
+            candidate_size = 0
+            for index, block in enumerate(blocks):
+                split = _split_prose_block(block)
+                if split and len(block) > candidate_size:
+                    candidate_index = index
+                    candidate_split = split
+                    candidate_size = len(block)
+            if candidate_index is None or candidate_split is None:
+                break
+            blocks[candidate_index:candidate_index + 1] = list(candidate_split)
+
         if blocks:
             value = "\n\n".join(blocks)
 
