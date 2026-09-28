@@ -526,8 +526,8 @@ def test_long_form_force_verify_uses_full_repair_authority_after_pruning():
     )
 
     assert "Kitalált Birodalom" not in result
-    assert "Pákozd" in result
-    assert "Schwechat" in result
+    assert "pákozdi" in result.casefold()
+    assert "schwechati" in result.casefold()
     assert "first" not in result.casefold()
     assert "első nagy magyar győzelem" not in result.casefold()
     assert full_authority in client.messages[-1]["content"]
