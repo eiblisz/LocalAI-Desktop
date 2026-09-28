@@ -639,6 +639,7 @@ def _run_hungarian_fluency_audit(
     control=None,
     trace=None,
     phase_callback=None,
+    run_model_fluency_audit=True,
 ):
     if _expected_language(user_text, constraints) != "hu":
         return FluencyAuditResult()
@@ -1239,16 +1240,33 @@ def guard_response(
         )
 
     try:
-        fluency_audit = _run_hungarian_fluency_audit(
-            client,
-            model,
-            user_text,
-            draft,
-            constraints=constraints,
-            control=control,
-            trace=trace,
-            phase_callback=phase_callback,
-        )
+        if run_model_fluency_audit:
+            fluency_audit = _run_hungarian_fluency_audit(
+                client,
+                model,
+                user_text,
+                draft,
+                constraints=constraints,
+                control=control,
+                trace=trace,
+                phase_callback=phase_callback,
+            )
+        else:
+            fluency_audit = FluencyAuditResult()
+            if trace is not None:
+                trace.add_metadata(
+                    hungarian_fluency_audit_result="deterministic_only",
+                    fluency_audit_transport="deterministic_only",
+                    fluency_audit_degraded_reason=(
+                        "model fluency audit skipped for long grounded WEB synthesis"
+                    ),
+                    fluency_audit_evidence="[]",
+                    fluency_audit_finding_count=0,
+                    fluency_sentences_audited=0,
+                    fluency_sentences_failed=0,
+                    fluency_sentences_unresolved=0,
+                    fluency_reason_codes="",
+                )
     except Exception as exc:
         if isinstance(exc, ExecutionCancelled):
             raise
