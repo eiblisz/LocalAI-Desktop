@@ -48,6 +48,7 @@ from .grounded_factual_guard import (
     guard_grounded_answer,
 )
 from .generation_policy import (
+    LENGTH_LONG,
     SAMPLING_FACTUAL_STRICT,
     SYNTHESIS_HYBRID,
     SYNTHESIS_LOCAL,
@@ -2201,6 +2202,10 @@ class ChatWebWorker(QObject):
                         )
                     ),
                     literal_authority_text=literal_guard_authority_text,
+                    prune_unsupported_sentences=(
+                        self.response_length == LENGTH_LONG
+                        and not direct_factual_candidate
+                    ),
                     language_instruction=self._conversation_language_instruction(),
                     output_budget=self.output_budget,
                     temperature=self.temperature,
