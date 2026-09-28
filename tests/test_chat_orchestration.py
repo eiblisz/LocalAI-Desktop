@@ -13,7 +13,7 @@ def test_common_orchestrator_preserves_web_modes():
     prompt = "Mikor írta Nimbus Szerző a Csillag Történetét?"
 
     auto = plan_chat_actions(runtime, prompt, web_mode="AUTO")
-    on = plan_chat_actions(runtime, "Magyarázd el röviden a TCP-t.", web_mode="ON")
+    on = plan_chat_actions(runtime, "Mutasd be röviden az 1848-as szabadságharcot.", web_mode="ON")
     off = plan_chat_actions(runtime, prompt, web_mode="OFF")
 
     assert auto[0].route == ROUTE_WEB
