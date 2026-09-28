@@ -225,6 +225,36 @@ def _canonicalize_identity_subject_expansion(
     return cleaned
 
 
+def _remove_sentences_with_unsupported_literals(text, unsupported_literals):
+    """Preserve supported long-form prose while removing risky sentences only."""
+    normalized_literals = [
+        canonical_match_text(item)
+        for item in (unsupported_literals or ())
+        if canonical_match_text(item)
+    ]
+    if not normalized_literals:
+        return str(text or "").strip()
+
+    output_blocks = []
+    for block in re.split(r"\n\s*\n+", str(text or "").strip()):
+        block = block.strip()
+        if not block:
+            continue
+        sentences = [
+            item.strip()
+            for item in re.split(r"(?<=[.!?])\s+", block)
+            if item.strip()
+        ]
+        kept = []
+        for sentence in sentences:
+            folded = canonical_match_text(sentence)
+            if any(item in folded for item in normalized_literals):
+                continue
+            kept.append(sentence)
+        if kept:
+            output_blocks.append(" ".join(kept).strip())
+    return "\n\n".join(output_blocks).strip()
+
 def guard_grounded_answer(
     client,
     model,
@@ -235,6 +265,7 @@ def guard_grounded_answer(
     trace=None,
     force_verify=False,
     literal_authority_text=None,
+    prune_unsupported_sentences=False,
     language_instruction="",
     output_budget=None,
     temperature=None,
@@ -264,6 +295,27 @@ def guard_grounded_answer(
             unsupported = unsupported_grounded_literals(draft, literal_authority)
     if not unsupported and not force_verify:
         return draft
+
+    if unsupported and prune_unsupported_sentences and not force_verify:
+        pruned = _remove_sentences_with_unsupported_literals(
+            draft,
+            unsupported,
+        )
+        remaining_after_prune = unsupported_grounded_literals(
+            pruned,
+            literal_authority,
+        )
+        if pruned and not remaining_after_prune:
+            if trace is not None:
+                trace.add_metadata(
+                    factual_guard_repair_status="deterministic_prune",
+                    factual_guard_pruned_unsupported_literals=", ".join(
+                        unsupported[:6]
+                    ),
+                    factual_guard_remaining_unsupported_literals="",
+                    factual_guard_remaining_literals="",
+                )
+            return pruned
 
     if trace is not None:
         trace.begin("factual_guard_repair")
