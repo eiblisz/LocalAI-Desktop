@@ -36,7 +36,7 @@ def run_long_form_synthesis_acceptance():
     contracts = plan_chat_actions(
         ActionRuntime(),
         LONG_FORM_STABLE_GENERAL_PROMPT,
-        web_mode="ON",
+        web_mode="AUTO",
     )
     if len(contracts) != 1:
         raise RuntimeError("Long-form acceptance prompt was split unexpectedly.")
