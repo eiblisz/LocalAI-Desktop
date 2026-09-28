@@ -76,7 +76,7 @@ def _benchmark_web_modes():
         "Keress rá a weben a legfrissebb Qwen modellre.",
         disable_web=True,
     )
-    on = runtime.plan_many("Írj egy rövid verset az őszről.", force_web=True)
+    on = runtime.plan_many("Magyarázd el röviden a TCP-t.", force_web=True)
 
     _assert(auto[0].route == ROUTE_WEB and auto[0].use_web,
             "WEB AUTO did not route a freshness-sensitive request to web")
