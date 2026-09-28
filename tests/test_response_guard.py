@@ -243,3 +243,20 @@ def test_output_hygiene_handles_nested_amp_escaped_space_entity():
     assert "x20" not in value
     assert "Első." in value
     assert "Második." in value
+
+
+def test_output_hygiene_enforces_exact_paragraph_count_without_model_call():
+    constraints = build_task_constraints(
+        "Írj egy 10 bekezdésből álló esszét a magyar történelemről."
+    )
+    draft = "\n\n".join(
+        f"{index}. bekezdés tartalma.&#x20;" for index in range(1, 15)
+    )
+
+    value = normalize_user_visible_output(draft, constraints)
+
+    blocks = [item for item in value.split("\n\n") if item.strip()]
+    assert len(blocks) == 10
+    assert "10. bekezdés tartalma." in blocks[-1]
+    assert "14. bekezdés tartalma." in blocks[-1]
+    assert "&#x20;" not in value

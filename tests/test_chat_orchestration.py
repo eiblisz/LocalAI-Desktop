@@ -18,8 +18,9 @@ def test_common_orchestrator_preserves_web_modes():
 
     assert auto[0].route == ROUTE_WEB
     assert auto[0].use_web is True
-    assert on[0].route == ROUTE_CHAT
-    assert on[0].use_web is False
+    assert on[0].route == ROUTE_WEB
+    assert on[0].use_web is True
+    assert on[0].routing_reason == "web_on"
     assert off[0].route == ROUTE_CHAT
     assert off[0].use_web is False
 
@@ -224,3 +225,30 @@ def test_multiline_questions_survive_followup_resolution_and_plan_independently(
         ("temporal", "formation"),
     ]
     assert profiles[1].premise_check_required is True
+
+
+def test_web_on_routes_factual_expository_essay_to_grounded_web():
+    contracts = plan_chat_actions(
+        ActionRuntime(),
+        "irj egy 10 bekezdesbol allo esszet a magyar 1848-as szabadsagharcrol",
+        web_mode="ON",
+    )
+
+    assert contracts[0].route == ROUTE_WEB
+    assert contracts[0].use_web is True
+    assert contracts[0].routing_reason == "web_on"
+    assert contracts[0].constraints.response_length == "long"
+    assert contracts[0].runtime_output_budget == 2048
+    assert "10 paragraphs" in contracts[0].constraints.format_constraints
+
+
+def test_web_on_keeps_ordinary_creative_writing_local():
+    contracts = plan_chat_actions(
+        ActionRuntime(),
+        "Írj egy rövid verset az őszi esőről.",
+        web_mode="ON",
+    )
+
+    assert contracts[0].route == ROUTE_CHAT
+    assert contracts[0].use_web is False
+    assert contracts[0].routing_reason == "stable_local"

@@ -133,7 +133,11 @@ def plan_chat_actions(
     contracts = action_runtime.plan_many(
         user_text,
         model_context_suffix=model_context_suffix,
-        force_web=False,
+        # WEB ON is an explicit operator choice for public/external factual
+        # augmentation. Conversation-local requests are still disabled below by
+        # the shared conversation_local resolver, and internal project authority
+        # remains local inside the action planner.
+        force_web=mode == "ON",
         disable_web=mode == "OFF",
         conversation_local=conversation_local_resolver,
         crypto_market_available=crypto_market_available,

@@ -1097,10 +1097,16 @@ def normalize_user_visible_output(text, constraints=None):
 
     paragraph_range = None
     for item in format_items:
-        match = re.fullmatch(r"(\d{1,2})-(\d{1,2}) paragraphs", item.casefold())
+        lowered = item.casefold()
+        match = re.fullmatch(r"(\d{1,2})-(\d{1,2}) paragraphs", lowered)
         if match:
             low, high = sorted((int(match.group(1)), int(match.group(2))))
             paragraph_range = (low, high)
+            break
+        exact = re.fullmatch(r"(\d{1,2}) paragraphs", lowered)
+        if exact:
+            count = int(exact.group(1))
+            paragraph_range = (count, count)
             break
 
     # When the user explicitly asks for an essay paragraph range, exceeding

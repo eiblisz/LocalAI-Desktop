@@ -823,6 +823,15 @@ def test_live_crypto_quotes_prefer_enabled_market_data_extension():
     assert run_source.index("MarketDataWorker(") < run_source.index("ChatWebWorker(")
 
 
+def test_web_worker_receives_canonical_task_constraints():
+    from app.main_window import MainWindow
+
+    run_source = inspect.getsource(MainWindow._run_next_action_contract)
+
+    assert "ChatWebWorker(" in run_source
+    assert "constraints=contract.constraints" in run_source
+
+
 def test_discord_bridge_receives_shared_extension_store_for_market_runtime():
     from app.main_window import MainWindow
 

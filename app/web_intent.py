@@ -446,57 +446,71 @@ def is_freshness_sensitive_request(text):
     return False
 
 
+def _looks_factual_expository_generation(text):
+    """Whether a generation command asks for factual/expository prose.
+
+    This keeps requests such as "írj egy esszét 1848-ról" separate from
+    genuinely creative writing. The classification is about requested work
+    shape, never about a specific historical entity.
+    """
+    normalized = _fold(text)
+    if not normalized:
+        return False
+
+    generation_markers = (
+        "irj", "keszits", "fogalmazz", "write", "prepare", "draft",
+        "schreib", "erstelle",
+    )
+    if not any(
+        re.search(rf"(?<!\w){re.escape(marker)}(?!\w)", normalized)
+        for marker in generation_markers
+    ):
+        return False
+
+    expository_markers = (
+        "essze", "esszet", "osszefoglalo", "osszefoglalot",
+        "attekintes", "bemutatas", "elemzes", "magyarazat",
+        "tanulmany", "riport",
+        "essay", "summary", "overview", "analysis", "explanation", "report",
+        "aufsatz", "zusammenfassung", "uberblick", "analyse", "bericht",
+    )
+    return _contains_any(normalized, expository_markers)
+
+
 def _looks_non_factual(text):
     normalized = _fold(text)
     if not normalized:
         return False
 
-    # A noun naming a creative work is not itself a generation request.
-    # For example, "Mikor írta X ezt a verset?" is a factual relation/date
-    # question even though it contains the word "verset". Only explicit
-    # generation/transformation instructions suppress factual-risk routing.
-    phrase_markers = (
-        "írj egy",
-        "irj egy",
-        "írj nekem",
-        "irj nekem",
-        "fogalmazd át",
-        "fogalmazd at",
-        "fordítsd le",
-        "forditsd le",
-        "találj ki",
-        "talalj ki",
-        "write a",
-        "write me",
-        "rewrite",
-        "translate",
-        "brainstorm",
-        "schreib",
-        "übersetz",
-        "ubersetz",
+    # Explicit factual/expository generation stays eligible for evidence
+    # routing. "Write an essay about X" is not equivalent to "write a poem".
+    if _looks_factual_expository_generation(text):
+        return False
+
+    transformation_markers = (
+        "fogalmazd at", "forditsd le", "ird at", "roviditsd le",
+        "rewrite", "translate", "rephrase", "summarize this",
+        "ubersetz", "umschreib",
     )
-    if _contains_any(normalized, phrase_markers):
+    if _contains_any(normalized, transformation_markers):
         return True
 
     generation_verbs = (
-        "írj",
-        "irj",
-        "rewrite",
-        "translate",
-        "brainstorm",
-        "schreib",
-        "übersetz",
-        "ubersetz",
+        "irj", "keszits", "fogalmazz", "talalj ki",
+        "write", "draft", "create", "brainstorm",
+        "schreib", "erstelle",
     )
-    return any(
-        re.search(
-            rf"(?<!\w){re.escape(marker)}(?!\w)",
-            normalized,
-            flags=re.IGNORECASE,
-        )
+    has_generation = any(
+        re.search(rf"(?<!\w){re.escape(marker)}(?!\w)", normalized)
         for marker in generation_verbs
     )
+    if not has_generation:
+        return False
 
+    # For ambiguous generation requests, stay local unless the user explicitly
+    # asks for web research. This preserves privacy and avoids needless search
+    # for letters, messages, code, fiction and other authored artifacts.
+    return True
 
 def answer_requires_web_fallback(user_text, answer):
     """
@@ -580,8 +594,15 @@ def plan_user_action(text, *, force_web=False, disable_web=False):
     if bool(disable_web):
         web_reason = inferred_web_reason
         needs_web = False
-    elif bool(force_web):
-        web_reason = "explicit_web"
+    elif (
+        bool(force_web)
+        and inferred_web_reason != "internal_project_authority"
+        and not _looks_non_factual(clean)
+    ):
+        # WEB ON is an operator-selected evidence preference for external
+        # factual/expository requests. It must not turn conversation-local,
+        # internal-project, or ordinary creative writing into web research.
+        web_reason = "web_on"
         needs_web = True
     else:
         web_reason = inferred_web_reason
