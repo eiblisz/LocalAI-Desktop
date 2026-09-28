@@ -69,7 +69,11 @@ from .language_policy import (
     response_language_matches,
 )
 from .ollama_client import OllamaClient, ollama_failure_metadata
-from .response_guard import ResponseValidationError, guard_response
+from .response_guard import (
+    ResponseValidationError,
+    guard_response,
+    normalize_user_visible_output,
+)
 from .request_semantics import (
     TASK_DIRECT_FACT,
     TASK_ENTITY_OVERVIEW,
@@ -391,12 +395,14 @@ class ChatWebWorker(QObject):
         explicit_batch_child=False,
         output_budget=None,
         synthesis_route=None,
+        constraints=None,
     ):
         super().__init__()
         self.client = client
         self.model = model
         self.messages = [dict(message) for message in messages]
         self.original_user_prompt = str(user_prompt or "").strip()
+        self.constraints = constraints
         self.followup_resolution = resolve_contextual_followup(
             self.original_user_prompt,
             self.messages,
@@ -407,7 +413,10 @@ class ChatWebWorker(QObject):
             or self.original_user_prompt
         )
         classification_started = perf_counter()
-        self.request_profile = classify_request(self.user_prompt)
+        self.request_profile = (
+            getattr(constraints, "request_profile", None)
+            or classify_request(self.user_prompt)
+        )
         default_generation_policy = build_generation_policy(
             self.user_prompt,
             profile=self.request_profile,
@@ -827,6 +836,7 @@ class ChatWebWorker(QObject):
                 self.model,
                 language_source,
                 answer,
+                constraints=self.constraints,
                 control=self.execution_control,
                 output_budget=self.output_budget,
                 trace=self.trace,
@@ -2408,6 +2418,10 @@ class ChatWebWorker(QObject):
                     page_fetch_count=self.execution_control.budget.page_fetches,
                     repair_count=self.execution_control.budget.repairs,
                 )
+            answer = normalize_user_visible_output(
+                answer,
+                self.constraints,
+            )
             self.token.emit(answer)
             self.finished.emit()
         except Exception as exc:
@@ -2445,6 +2459,7 @@ def run_chat_web_request(
     explicit_batch_child=False,
     output_budget=None,
     synthesis_route=None,
+    constraints=None,
 ):
     """Run the existing grounded web worker synchronously and collect its answer."""
     return _run_web_worker(
@@ -2457,6 +2472,7 @@ def run_chat_web_request(
             explicit_batch_child=explicit_batch_child,
             output_budget=output_budget,
             synthesis_route=synthesis_route,
+            constraints=constraints,
         )
     )
 
@@ -2671,6 +2687,13 @@ class AdaptiveChatWorker(QObject):
                     constraints=self.constraints,
                     control=self.execution_control,
                     output_budget=self.output_budget,
+                )
+                # Final delivery normalization runs after every repair/context
+                # stage so nonsemantic entities or structural overflow cannot
+                # be reintroduced after the response guard.
+                final = normalize_user_visible_output(
+                    final,
+                    self.constraints,
                 )
 
             if self._stop_event.is_set():
