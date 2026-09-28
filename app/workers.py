@@ -1929,6 +1929,22 @@ class ChatWebWorker(QObject):
                     ),
                 )
             self._factual_authority_text = factual_authority_text
+            literal_guard_authority_text = (
+                factual_authority_text
+                if direct_factual_candidate
+                else context_text
+            )
+            if self.trace is not None:
+                self.trace.add_metadata(
+                    factual_literal_authority_profile=(
+                        "direct_compact"
+                        if direct_factual_candidate
+                        else "full_generation_context"
+                    ),
+                    factual_literal_authority_chars=len(
+                        literal_guard_authority_text
+                    ),
+                )
             failure_text = ""
             if failed_queries:
                 failure_text = (
@@ -2184,6 +2200,7 @@ class ChatWebWorker(QObject):
                             or bool(release_named_literal_mismatches)
                         )
                     ),
+                    literal_authority_text=literal_guard_authority_text,
                     language_instruction=self._conversation_language_instruction(),
                     output_budget=self.output_budget,
                     temperature=self.temperature,
