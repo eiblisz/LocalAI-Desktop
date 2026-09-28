@@ -267,6 +267,7 @@ def guard_grounded_answer(
     literal_authority_text=None,
     repair_authority_text=None,
     prune_unsupported_sentences=False,
+    strict_relation_audit=False,
     language_instruction="",
     output_budget=None,
     temperature=None,
@@ -361,6 +362,16 @@ def guard_grounded_answer(
                     "answer language rather than inventing a new ordering. "
                     "Do not add any name, date, number, price, version, URL, or factual claim "
                     "that is absent from the authorized evidence or user request. "
+                    + (
+                        " For long-form factual synthesis, audit every sentence relation, not only "
+                        "its names and dates. KEEP a sentence only when the authorized evidence "
+                        "directly supports the relation it asserts. Mere co-occurrence of the same "
+                        "names is not support. Do not infer military or political leadership, "
+                        "chronology, causation, first/last/superlative status, institutional roles, "
+                        "quantities, or responsibility from nearby evidence. If an exact relation "
+                        "is not supported, delete that sentence rather than guessing or softening it."
+                        if strict_relation_audit else ""
+                    )
                     + (" " + str(language_instruction).strip()
                        if str(language_instruction or "").strip() else "")
                     + " Return only the repaired answer."
@@ -429,6 +440,28 @@ def guard_grounded_answer(
                 )
             return sanitized
         remaining = sanitized_remaining or remaining
+        repair = sanitized if sanitized else repair
+
+    if remaining and prune_unsupported_sentences:
+        post_pruned = _remove_sentences_with_unsupported_literals(
+            repair,
+            remaining,
+        )
+        post_pruned_remaining = unsupported_grounded_literals(
+            post_pruned,
+            literal_authority,
+        )
+        if post_pruned and not post_pruned_remaining:
+            if trace is not None:
+                trace.add_metadata(
+                    factual_guard_repair_status="pass_after_post_repair_prune",
+                    factual_guard_post_repair_pruned_literals=", ".join(
+                        remaining[:6]
+                    ),
+                    factual_guard_remaining_unsupported_literals="",
+                    factual_guard_remaining_literals="",
+                )
+            return post_pruned
 
     if remaining:
         if trace is not None:
