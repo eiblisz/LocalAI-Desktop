@@ -2641,6 +2641,7 @@ class AdaptiveChatWorker(QObject):
                             "output_budget": self.output_budget,
                             "synthesis_route": SYNTHESIS_WEB,
                         })
+                    web_kwargs["constraints"] = self.constraints
                     final = run_chat_web_request(
                         self.client,
                         self.model,
@@ -2657,6 +2658,7 @@ class AdaptiveChatWorker(QObject):
                             "output_budget": self.output_budget,
                             "synthesis_route": SYNTHESIS_WEB,
                         })
+                    web_kwargs["constraints"] = self.constraints
                     final = run_chat_web_request(
                         self.client,
                         self.model,
