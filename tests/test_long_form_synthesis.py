@@ -56,6 +56,20 @@ def test_case_02b_hungarian_paragraph_range_with_dash_is_long_form():
     assert contract.constraints.output_budget == 2048
 
 
+def test_case_02c_hungarian_inflected_exact_paragraph_count_is_long_form():
+    prompt = (
+        "irj egy 10 bekezdesbol allo esszet a magyar 1848-as "
+        "szabadsagharcrol"
+    )
+    contract = _contract(prompt)
+
+    assert contract.route == ROUTE_CHAT
+    assert contract.constraints.response_length == LENGTH_LONG
+    assert contract.constraints.output_budget == 2048
+    assert contract.runtime_output_budget == 2048
+    assert "10 paragraphs" in contract.constraints.format_constraints
+
+
 def test_case_03_partial_web_coverage_uses_hybrid_synthesis_policy():
     prompt = (
         "Mutasd be részletesen, hogyan működik a neurális háló, "
