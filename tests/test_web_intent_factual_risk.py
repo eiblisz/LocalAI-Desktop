@@ -61,3 +61,9 @@ def test_lowercase_inflected_band_first_album_selection_is_factual_risk():
     assert is_factual_risk_request(
         "melyik nagylemez volt az elso a sampleband zenekarnak?"
     ) is True
+
+
+def test_typed_band_case_suffix_uses_shared_morphology_for_factual_risk():
+    assert is_factual_risk_request(
+        "melyik nagylemez volt az elso a sampleband zenekarnal?"
+    ) is True
