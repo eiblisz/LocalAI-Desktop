@@ -1101,6 +1101,28 @@ def _is_heading_only_block(block):
     words = re.findall(r"\w+", plain, flags=re.UNICODE)
     return 1 <= len(words) <= 12 and not re.search(r"[.!?]$", plain)
 
+def _paragraph_blocks(value):
+    """Split model prose into logical paragraphs, including safe single newlines.
+
+    Models sometimes emit one newline between requested paragraphs. Treat a
+    single newline as a paragraph boundary only when the previous line ends a
+    sentence and the next line looks like a new prose/title start. Lowercase
+    continuation lines such as "19.\nszázad" stay in the same paragraph.
+    """
+    raw = str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not raw:
+        return []
+    raw = re.sub(
+        r"(?<=[.!?])\n(?=(?:\*\*|__|#{1,6}\s+|[A-ZÁÉÍÓÖŐÚÜŰ]))",
+        "\n\n",
+        raw,
+    )
+    return [
+        block.strip()
+        for block in re.split(r"\n\s*\n+", raw)
+        if block.strip()
+    ]
+
 def _split_prose_block(block):
     """Split one prose block at a sentence boundary without rewriting content."""
     parts = [
@@ -1153,11 +1175,7 @@ def normalize_user_visible_output(text, constraints=None):
     structural_formats = {"html", "json", "markdown", "table", "bulleted list"}
     if paragraph_bounds and not (formats & structural_formats):
         low, high = paragraph_bounds
-        blocks = [
-            block.strip()
-            for block in re.split(r"\n\s*\n+", value.strip())
-            if block.strip()
-        ]
+        blocks = _paragraph_blocks(value)
         heading_blocks = []
         while blocks and _is_heading_only_block(blocks[0]):
             heading_blocks.append(blocks.pop(0))
