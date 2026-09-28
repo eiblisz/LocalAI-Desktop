@@ -2,7 +2,11 @@ import re
 from urllib.parse import parse_qs, urlparse
 
 from .language_policy import detect_user_language
-from .text_normalization import canonical_match_text
+from .text_normalization import (
+    canonical_contains_inflected,
+    canonical_match_text,
+    hungarian_token_matches,
+)
 from .web_research_pipeline import is_generic_shopping_url
 
 
@@ -119,7 +123,7 @@ def is_generic_shopping_request(text):
     if any(marker in folded for marker in _STRONG_SHOPPING_MARKERS):
         return True
 
-    if re.search(r"\bkeress[a-z0-9]*\b", folded):
+    if canonical_contains_inflected(folded, "keress", profile="command"):
         return True
 
     return False
@@ -127,12 +131,16 @@ def is_generic_shopping_request(text):
 
 def _shopping_subject(text):
     raw = " ".join(str(text or "").split())
-    raw = re.sub(
-        r"^\s*keress\w*\s+(?:nekem\s+)?",
-        "",
-        raw,
-        flags=re.IGNORECASE,
-    ).strip()
+    parts = raw.split()
+    if parts and hungarian_token_matches(
+        parts[0],
+        "keress",
+        profile="command",
+    ):
+        parts = parts[1:]
+        if parts and canonical_match_text(parts[0]) == "nekem":
+            parts = parts[1:]
+        raw = " ".join(parts).strip()
     raw = re.sub(
         r"\b(\d+(?:[.,]\d+)?)\s*tb(?:-?os)?\b",
         lambda match: f"{match.group(1).replace(',', '.')} TB",
