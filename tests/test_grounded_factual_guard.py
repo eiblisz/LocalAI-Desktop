@@ -403,3 +403,43 @@ def test_grounded_guard_keeps_supported_extra_context_and_repairs_only_unsupport
 
     assert result == repaired
     assert client.calls == 1
+
+
+def test_grounded_guard_can_validate_literals_against_full_generation_authority():
+    compact_authority = (
+        "AUTHORIZED EVIDENCE: A forrás a szabadságharc általános leírását tartalmazza."
+    )
+    full_generation_authority = (
+        compact_authority
+        + " Kossuth Lajos a magyar politikai vezetők egyike volt 1848-ban."
+    )
+    client = RepairClient("must not be used")
+
+    result = guard_grounded_answer(
+        client,
+        "qwen-test",
+        "Írj esszét az 1848-as szabadságharcról.",
+        "Kossuth Lajos szerepet vállalt az eseményekben 1848-ban.",
+        compact_authority,
+        literal_authority_text=full_generation_authority,
+    )
+
+    assert "Kossuth Lajos" in result
+    assert "1848" in result
+    assert client.calls == 0
+
+
+def test_grounded_guard_still_rejects_literal_absent_from_full_generation_authority():
+    compact_authority = "AUTHORIZED EVIDENCE: Correct Author, 1912."
+    full_generation_authority = compact_authority + " Additional grounded context."
+    client = RepairClient("Other Person 1956-ban írta.")
+
+    with pytest.raises(GroundedFactualGuardError):
+        guard_grounded_answer(
+            client,
+            "qwen-test",
+            "Mikor írták?",
+            "Wrong Author 1956-ban írta.",
+            compact_authority,
+            literal_authority_text=full_generation_authority,
+        )
