@@ -87,6 +87,14 @@ def test_discord_uses_shared_authority_reason_and_blocks_internal_web_fallback()
     assert "and not internal_project_authority" in answer_source
 
 
+def test_discord_web_execution_preserves_task_constraints():
+    run_web_source = inspect.getsource(DiscordBotBridge._run_chat_web)
+    execute_source = inspect.getsource(DiscordBotBridge._execute_planned_action)
+
+    assert 'kwargs["constraints"] = constraints' in run_web_source
+    assert "constraints=constraints" in execute_source
+
+
 def test_split_discord_text_never_exceeds_limit():
     text = ("abc " * 1500).strip()
     chunks = split_discord_text(text, limit=500)
