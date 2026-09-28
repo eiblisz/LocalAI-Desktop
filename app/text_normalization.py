@@ -88,7 +88,7 @@ _HUNGARIAN_CASE_SUFFIXES = {
 _HUNGARIAN_NUMBER_POSSESSIVE_SUFFIXES = {
     "k", "ak", "ek", "ok",
     "m", "d", "a", "e", "am", "em", "om", "ad", "ed", "od",
-    "ja", "je", "unk", "atok", "etek", "otok", "uk", "juk",
+    "ja", "je", "jat", "jet", "unk", "atok", "etek", "otok", "uk", "juk",
     "ai", "ei", "aim", "eim", "aid", "eid",
     "anak", "enek", "janak", "jenek",
 }
@@ -152,7 +152,10 @@ def hungarian_token_matches(surface, lemma, *, profile="semantic"):
     base = lemma_tokens[0]
     if actual == base:
         return True
-    if not base or not actual.startswith(base):
+    # Short function words (for example "ki", "mi", "ma") are too easy to
+    # confuse with unrelated longer words. Their inflected forms remain explicit
+    # lexicon entries rather than being suffix-expanded generically.
+    if len(base) < 3 or not actual.startswith(base):
         return False
 
     suffixes = _HUNGARIAN_SUFFIX_PROFILES.get(profile)
