@@ -1052,8 +1052,8 @@ class MainWindow(QMainWindow):
                 "}"
             )
             self.web_button.setToolTip(
-                "WEB ON: web research is available for external, current, or explicit "
-                "web requests; conversation-local requests stay local."
+                "WEB ON: external factual/expository requests use grounded web research; "
+                "conversation-local, internal-project, and purely creative requests stay local."
             )
             return
 
@@ -1792,6 +1792,7 @@ class MainWindow(QMainWindow):
                     "synthesis_route",
                     None,
                 ),
+                constraints=contract.constraints,
             )
         elif contract.route == ROUTE_CHAT:
             self.worker = AdaptiveChatWorker(
