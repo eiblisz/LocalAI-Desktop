@@ -17,7 +17,11 @@ from .request_semantics import (
     TASK_EXPLANATION,
     TASK_GENERAL,
 )
-from .text_normalization import canonical_match_text
+from .text_normalization import (
+    canonical_match_text,
+    canonical_tokens,
+    hungarian_token_matches,
+)
 
 
 SYNTHESIS_LOCAL = "LOCAL"
@@ -54,41 +58,50 @@ def _fold(value):
     return canonical_match_text(value)
 
 
+def _is_paragraph_unit_token(token):
+    canonical = canonical_match_text(token)
+    return (
+        canonical in {"paragraph", "paragraphs", "absatz", "absatze"}
+        or hungarian_token_matches(
+            canonical,
+            "bekezdes",
+            profile="format",
+        )
+    )
+
+
 def requested_paragraph_range(text):
     """Return an explicit paragraph-count/range request as (low, high).
 
-    The parser operates on canonicalized text so accented/unaccented Hungarian
-    and dash variants share one path. Hungarian case suffixes are accepted
-    (for example "10 bekezdésből álló", "10 bekezdésben" and
-    "10 bekezdéses") instead of requiring the bare noun form.
+    Hungarian accents and grammatical suffixes are handled by the shared
+    morphology layer instead of a local wildcard regex.
     """
-    folded = _fold(text)
-    if not folded:
+    tokens = canonical_tokens(text)
+    if not tokens:
         return None
 
-    paragraph_word = r"(?:bekezdes[a-z]*|paragraphs?|absatz[a-z]*)"
+    for index, token in enumerate(tokens):
+        if not token.isdigit() or len(token) > 2:
+            continue
+        low = int(token)
 
-    paragraph_range = re.search(
-        r"(?:\b(?:legalabb|at least|mindestens)\s+)?"
-        r"\b(\d{1,2})\s+(?:(?:to|bis)\s+)?(\d{1,2})\s*"
-        + paragraph_word,
-        folded,
-    )
-    if paragraph_range:
-        low, high = sorted((
-            int(paragraph_range.group(1)),
-            int(paragraph_range.group(2)),
-        ))
-        return low, high
+        # Canonicalization turns dash ranges (8-12 / 8–12) into adjacent
+        # numeric tokens. English/German word ranges keep "to"/"bis".
+        if index + 2 < len(tokens) and tokens[index + 1].isdigit():
+            high = int(tokens[index + 1])
+            if _is_paragraph_unit_token(tokens[index + 2]):
+                return tuple(sorted((low, high)))
 
-    paragraph_count = re.search(
-        r"(?:\b(?:legalabb|at least|mindestens)\s*)?"
-        r"\b(\d{1,2})\s*" + paragraph_word,
-        folded,
-    )
-    if paragraph_count:
-        value = int(paragraph_count.group(1))
-        return value, value
+        if (
+            index + 3 < len(tokens)
+            and tokens[index + 1] in {"to", "bis"}
+            and tokens[index + 2].isdigit()
+            and _is_paragraph_unit_token(tokens[index + 3])
+        ):
+            return tuple(sorted((low, int(tokens[index + 2]))))
+
+        if index + 1 < len(tokens) and _is_paragraph_unit_token(tokens[index + 1]):
+            return low, low
 
     return None
 
