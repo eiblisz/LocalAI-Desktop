@@ -1931,10 +1931,14 @@ class ChatWebWorker(QObject):
                 )
             self._factual_authority_text = factual_authority_text
             literal_guard_authority_text = (
-                factual_authority_text
-                if direct_factual_candidate
-                else context_text
-            )
+                self.user_prompt
+                + "\n\n"
+                + (
+                    factual_authority_text
+                    if direct_factual_candidate
+                    else context_text
+                )
+            ).strip()
             if self.trace is not None:
                 self.trace.add_metadata(
                     factual_literal_authority_profile=(
