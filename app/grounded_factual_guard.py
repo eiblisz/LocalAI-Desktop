@@ -234,13 +234,15 @@ def guard_grounded_answer(
     *,
     trace=None,
     force_verify=False,
+    literal_authority_text=None,
     language_instruction="",
     output_budget=None,
     temperature=None,
     seed=None,
 ):
     draft = _collapse_adjacent_proper_name_repetition(str(answer or "").strip())
-    unsupported = unsupported_grounded_literals(draft, authority_text)
+    literal_authority = str(literal_authority_text or authority_text or "")
+    unsupported = unsupported_grounded_literals(draft, literal_authority)
     if trace is not None:
         trace.add_metadata(
             factual_guard_force_verify=bool(force_verify),
@@ -259,7 +261,7 @@ def guard_grounded_answer(
         )
         if canonicalized != draft:
             draft = canonicalized
-            unsupported = unsupported_grounded_literals(draft, authority_text)
+            unsupported = unsupported_grounded_literals(draft, literal_authority)
     if not unsupported and not force_verify:
         return draft
 
@@ -344,7 +346,7 @@ def guard_grounded_answer(
         )
 
     repair = _collapse_adjacent_proper_name_repetition(repair)
-    remaining = unsupported_grounded_literals(repair, authority_text)
+    remaining = unsupported_grounded_literals(repair, literal_authority)
     if trace is not None:
         trace.add_metadata(
             factual_guard_remaining_unsupported_literals=", ".join(remaining[:6]),
@@ -354,7 +356,7 @@ def guard_grounded_answer(
         sanitized = _strip_unsupported_source_attributions(repair, remaining)
         sanitized_remaining = unsupported_grounded_literals(
             sanitized,
-            authority_text,
+            literal_authority,
         )
         if sanitized and not sanitized_remaining:
             if trace is not None:
