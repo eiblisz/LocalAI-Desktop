@@ -1701,6 +1701,10 @@ class ChatWebWorker(QObject):
                     evidence_ledger_count=len(evidence_ledgers),
                     context_modes=context_modes,
                 )
+                answer = normalize_user_visible_output(
+                    answer,
+                    self.constraints,
+                )
                 self.token.emit(answer)
                 self.finished.emit()
                 return
@@ -1749,6 +1753,10 @@ class ChatWebWorker(QObject):
                                 evidence_coverage="unavailable_for_web_augmentation",
                                 source_count=0,
                             )
+                        answer = normalize_user_visible_output(
+                            answer,
+                            self.constraints,
+                        )
                         self.token.emit(answer)
                         self.finished.emit()
                         return
