@@ -2237,8 +2237,10 @@ class ChatWebWorker(QObject):
                         )
                     ),
                     output_budget=self.output_budget,
-                    temperature=self.temperature,
-                    seed=self.seed,
+                    temperature=(
+                        0.0 if long_web_semantic_audit else self.temperature
+                    ),
+                    seed=(42 if long_web_semantic_audit else self.seed),
                 )
             except GroundedFactualGuardError:
                 deterministic_fallback = ""
