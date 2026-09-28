@@ -370,7 +370,7 @@ def guard_grounded_answer(
                 "role": "user",
                 "content": (
                     f"USER REQUEST:\n{user_prompt}\n\n"
-                    f"AUTHORIZED EVIDENCE:\n{authority_text}\n\n"
+                    f"AUTHORIZED EVIDENCE:\n{repair_authority}\n\n"
                     f"DRAFT ANSWER:\n{draft}"
                 ),
             },
