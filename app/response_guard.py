@@ -1089,6 +1089,18 @@ def _requested_paragraph_bounds(format_items):
     return None
 
 
+def _is_heading_only_block(block):
+    """Whether a block is a standalone heading rather than a prose paragraph."""
+    value = str(block or "").strip()
+    if not value or "\n" in value:
+        return False
+    plain = re.sub(r"^(?:#{1,6}\s+|\*\*(.+)\*\*|__(.+)__)$", r"\1\2", value).strip()
+    if plain != value:
+        return bool(plain) and not re.search(r"[.!?]$", plain)
+    # Keep the heuristic narrow: short title-like lines without sentence punctuation.
+    words = re.findall(r"\w+", plain, flags=re.UNICODE)
+    return 1 <= len(words) <= 12 and not re.search(r"[.!?]$", plain)
+
 def _split_prose_block(block):
     """Split one prose block at a sentence boundary without rewriting content."""
     parts = [
@@ -1146,6 +1158,9 @@ def normalize_user_visible_output(text, constraints=None):
             for block in re.split(r"\n\s*\n+", value.strip())
             if block.strip()
         ]
+        heading_blocks = []
+        while blocks and _is_heading_only_block(blocks[0]):
+            heading_blocks.append(blocks.pop(0))
 
         while len(blocks) > high and len(blocks) >= 2:
             blocks[-2:] = [blocks[-2].rstrip() + " " + blocks[-1].lstrip()]
@@ -1166,8 +1181,9 @@ def normalize_user_visible_output(text, constraints=None):
                 break
             blocks[candidate_index:candidate_index + 1] = list(candidate_split)
 
-        if blocks:
-            value = "\n\n".join(blocks)
+        rebuilt = heading_blocks + blocks
+        if rebuilt:
+            value = "\n\n".join(rebuilt)
 
     return value
 
