@@ -840,6 +840,10 @@ class ChatWebWorker(QObject):
                 output_budget=self.output_budget,
                 trace=self.trace,
                 phase_callback=self.phase.emit,
+                run_model_fluency_audit=not (
+                    self.synthesis_route == SYNTHESIS_WEB
+                    and self.response_length == LENGTH_LONG
+                ),
             )
         except ResponseValidationError as exc:
             if self.trace is not None:
