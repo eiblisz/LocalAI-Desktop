@@ -73,3 +73,11 @@ def test_ordinal_first_album_selection_is_direct_fact_release_semantics():
     assert semantics.relation == "release"
     assert semantics.premise_check_required is True
     assert profile.kind == TASK_DIRECT_FACT
+
+
+def test_semantic_relation_marker_accepts_hungarian_number_inflection():
+    semantics = analyze_question("Mikor alakultak a Sample Band tagjai?")
+
+    assert semantics.requested_fact == "temporal"
+    assert semantics.relation == "formation"
+    assert semantics.premise_check_required is True

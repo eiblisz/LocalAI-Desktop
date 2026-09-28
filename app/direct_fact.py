@@ -9,7 +9,7 @@ import re
 
 from .question_semantics import analyze_question
 from .request_semantics import identity_lookup_subject
-from .text_normalization import canonical_match_text
+from .text_normalization import canonical_match_text, hungarian_token_matches
 
 
 def _clean(value):
@@ -138,14 +138,28 @@ def _release_subject_surface(prompt):
         # surrounding release/debut checks decide whether this surface is used.
         r"(?i)\b(?:a|az)\s+(?P<subject>[A-Za-z0-9.&'’_-]{2,}"
         r"(?:\s+[A-Za-z0-9.&'’_-]{2,}){0,4})\s+"
-        r"(?:egy[uü]ttes|zenekar)"
-        r"(?:nak|nek|n[aá]l|r[oó]l|ban|ben|b[oő]l|t[oő]l)?\b",
+        r"(?P<entity_type>(?:egy[uü]ttes|zenekar)\w*)\b",
         r"(?i)\b(?P<subject>[A-Za-z0-9.&'’_-]{2,}"
         r"(?:\s+[A-Za-z0-9.&'’_-]{2,}){0,4})\s+band\b",
     )
     for pattern in patterns:
         match = re.search(pattern, raw)
         if match:
+            entity_type = match.groupdict().get("entity_type")
+            if entity_type:
+                if (
+                    not hungarian_token_matches(
+                        entity_type,
+                        "egyuttes",
+                        profile="entity",
+                    )
+                    and not hungarian_token_matches(
+                        entity_type,
+                        "zenekar",
+                        profile="entity",
+                    )
+                ):
+                    continue
             subject = _clean(match.group("subject")).strip(" .?!,;:")
             if 2 <= len(subject) <= 120:
                 return subject

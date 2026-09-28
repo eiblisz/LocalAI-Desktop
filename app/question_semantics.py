@@ -12,7 +12,11 @@ from .semantic_lexicon_hu import (
     RELATION_MARKERS,
     REQUESTED_FACT_MARKERS,
 )
-from .text_normalization import canonical_match_text, canonical_request_text
+from .text_normalization import (
+    canonical_contains_inflected,
+    canonical_match_text,
+    canonical_request_text,
+)
 
 
 @dataclass(frozen=True)
@@ -26,8 +30,14 @@ class QuestionSemantics:
 
 def _has_marker(text, marker):
     marker = canonical_match_text(marker)
-    return bool(marker) and bool(
-        re.search(r"(?<!\w)" + re.escape(marker) + r"(?!\w)", text)
+    if not marker:
+        return False
+    if re.search(r"(?<!\w)" + re.escape(marker) + r"(?!\w)", text):
+        return True
+    return canonical_contains_inflected(
+        text,
+        marker,
+        profile="semantic",
     )
 
 
