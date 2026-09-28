@@ -289,3 +289,22 @@ def test_output_hygiene_can_split_existing_sentences_to_reach_exact_count():
     assert len(blocks) == 3
     assert "Első mondat." in value
     assert "Hatodik mondat." in value
+
+
+def test_heading_does_not_count_toward_exact_paragraph_contract():
+    constraints = build_task_constraints(
+        "Írj egy 10 bekezdésből álló esszét a történelemről."
+    )
+    draft = "**Történelmi esszé**\n\n" + "\n\n".join(
+        (
+            f"{index}. bekezdés első mondata. "
+            f"{index}. bekezdés második mondata."
+        )
+        for index in range(1, 10)
+    )
+
+    value = normalize_user_visible_output(draft, constraints)
+
+    blocks = [item for item in value.split("\n\n") if item.strip()]
+    assert blocks[0] == "**Történelmi esszé**"
+    assert len(blocks[1:]) == 10
