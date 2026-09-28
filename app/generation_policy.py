@@ -54,6 +54,44 @@ def _fold(value):
     return canonical_match_text(value)
 
 
+def requested_paragraph_range(text):
+    """Return an explicit paragraph-count/range request as (low, high).
+
+    The parser operates on canonicalized text so accented/unaccented Hungarian
+    and dash variants share one path. Hungarian case suffixes are accepted
+    (for example "10 bekezdésből álló", "10 bekezdésben" and
+    "10 bekezdéses") instead of requiring the bare noun form.
+    """
+    folded = _fold(text)
+    if not folded:
+        return None
+
+    paragraph_word = r"(?:bekezdes[a-z]*|paragraphs?|absatz[a-z]*)"
+
+    paragraph_range = re.search(
+        r"(?:\b(?:legalabb|at least|mindestens)\s+)?"
+        r"\b(\d{1,2})\s+(?:(?:to|bis)\s+)?(\d{1,2})\s*"
+        + paragraph_word,
+        folded,
+    )
+    if paragraph_range:
+        low, high = sorted((
+            int(paragraph_range.group(1)),
+            int(paragraph_range.group(2)),
+        ))
+        return low, high
+
+    paragraph_count = re.search(
+        r"(?:\b(?:legalabb|at least|mindestens)\s*)?"
+        r"\b(\d{1,2})\s*" + paragraph_word,
+        folded,
+    )
+    if paragraph_count:
+        value = int(paragraph_count.group(1))
+        return value, value
+
+    return None
+
 def requested_response_length(text, *, profile=None):
     """Classify requested answer length without treating depth as freshness."""
     folded = _fold(text)
@@ -76,26 +114,8 @@ def requested_response_length(text, *, profile=None):
     if any(marker in folded for marker in long_markers):
         return LENGTH_LONG
 
-    paragraph_count = re.search(
-        r"(?:legalabb|at least|mindestens)\s*(\d{1,2})\s*"
-        r"(?:bekezdes|paragraph|absatz)",
-        folded,
-    )
-    if paragraph_count and int(paragraph_count.group(1)) >= 6:
-        return LENGTH_LONG
-
-    # canonical_match_text removes punctuation, so numeric ranges such as
-    # 8-12 / 8–12 / 8—12 arrive here as "8 12". Accept that canonical
-    # form as well as language words such as "to" and "bis".
-    paragraph_range = re.search(
-        r"(?:\b(?:legalabb|at least|mindestens)\s+)?"
-        r"\b(\d{1,2})\s+(?:(?:to|bis)\s+)?(\d{1,2})\s*"
-        r"(?:bekezdes|paragraph|absatz)",
-        folded,
-    )
-    if paragraph_range and max(
-        int(paragraph_range.group(1)), int(paragraph_range.group(2))
-    ) >= 6:
+    paragraph_range = requested_paragraph_range(text)
+    if paragraph_range and paragraph_range[1] >= 6:
         return LENGTH_LONG
 
     if getattr(profile, "kind", "") == TASK_DEEP_RESEARCH:

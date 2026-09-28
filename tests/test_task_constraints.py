@@ -102,3 +102,23 @@ def test_paragraph_range_becomes_hard_format_constraint():
     assert "must stay within that paragraph count/range" in instruction
     assert "Sources/Források/References" in instruction
     assert "&#x20;" in instruction
+
+
+def test_inflected_hungarian_paragraph_count_becomes_hard_constraint():
+    constraints = build_task_constraints(
+        "Írj egy 10 bekezdésből álló esszét a magyar történelemről."
+    )
+
+    assert "10 paragraphs" in constraints.format_constraints
+    assert constraints.response_length == "long"
+    assert constraints.output_budget == 2048
+
+
+def test_unaccented_inflected_hungarian_paragraph_count_matches_same_contract():
+    constraints = build_task_constraints(
+        "irj egy 10 bekezdesbol allo esszet a magyar tortenelemrol"
+    )
+
+    assert "10 paragraphs" in constraints.format_constraints
+    assert constraints.response_length == "long"
+    assert constraints.output_budget == 2048

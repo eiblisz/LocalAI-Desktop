@@ -8,6 +8,7 @@ from .language_policy import (
 )
 from .generation_policy import (
     output_budget_for_response_length,
+    requested_paragraph_range,
     requested_response_length,
 )
 from .request_semantics import classify_request
@@ -86,22 +87,14 @@ def _format_constraints(text):
         if marker in folded and canonical not in result:
             result.append(canonical)
 
-    paragraph_range = re.search(
-        r"(?i)\b(\d{1,2})\s*[-–—]\s*(\d{1,2})\s*"
-        r"(?:bekezdés(?:es)?|bekezdes(?:es)?|paragraphs?|absätze?|absatze?)\b",
-        raw,
-    )
+    paragraph_range = requested_paragraph_range(raw)
     if paragraph_range:
-        low, high = sorted((int(paragraph_range.group(1)), int(paragraph_range.group(2))))
-        result.append(f"{low}-{high} paragraphs")
-    else:
-        paragraph_count = re.search(
-            r"(?i)\b(?:legalább\s+|legalabb\s+|at least\s+|mindestens\s+)?"
-            r"(\d{1,2})\s*(?:bekezdés(?:es)?|bekezdes(?:es)?|paragraphs?|absätze?|absatze?)\b",
-            raw,
+        low, high = paragraph_range
+        result.append(
+            f"{low}-{high} paragraphs"
+            if low != high
+            else f"{low} paragraphs"
         )
-        if paragraph_count:
-            result.append(f"{int(paragraph_count.group(1))} paragraphs")
 
     return tuple(dict.fromkeys(result))[:8]
 
