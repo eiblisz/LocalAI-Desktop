@@ -27,11 +27,11 @@ from app.user_error_messages import public_error
 from app import workers
 
 
-def _contract(prompt, web_mode="ON"):
+def _contract(prompt, web_mode="AUTO"):
     return plan_chat_actions(ActionRuntime(), prompt, web_mode=web_mode)[0]
 
 
-def test_case_01_stable_general_knowledge_with_web_on_stays_local():
+def test_case_01_stable_general_knowledge_with_auto_stays_local():
     contract = _contract(LONG_FORM_STABLE_GENERAL_PROMPT)
     assert contract.route == ROUTE_CHAT
     assert contract.synthesis_policy.synthesis_route == SYNTHESIS_LOCAL
