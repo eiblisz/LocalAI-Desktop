@@ -308,3 +308,40 @@ def test_heading_does_not_count_toward_exact_paragraph_contract():
     blocks = [item for item in value.split("\n\n") if item.strip()]
     assert blocks[0] == "**Történelmi esszé**"
     assert len(blocks[1:]) == 10
+
+
+def test_exact_paragraph_contract_recognizes_single_newline_model_paragraphs():
+    constraints = build_task_constraints(
+        "Írj egy 10 bekezdésből álló esszét a történelemről."
+    )
+    draft = "**Történelmi esszé**\n" + "\n".join(
+        (
+            f"{index}. bekezdés első mondata. "
+            f"{index}. bekezdés második mondata."
+        )
+        for index in range(1, 10)
+    )
+
+    value = normalize_user_visible_output(draft, constraints)
+    blocks = [item for item in value.split("\n\n") if item.strip()]
+
+    assert blocks[0] == "**Történelmi esszé**"
+    assert len(blocks[1:]) == 10
+
+
+def test_long_grounded_path_can_skip_optional_model_fluency_audit():
+    prompt = "Írj magyarul egy hosszú történelmi esszét."
+    constraints = build_task_constraints(prompt)
+    client = RepairClient("this must not be used")
+
+    result = guard_response(
+        client,
+        "qwen-test",
+        prompt,
+        "Ez egy teljesen magyar mondat.",
+        constraints=constraints,
+        run_model_fluency_audit=False,
+    )
+
+    assert result == "Ez egy teljesen magyar mondat."
+    assert client.calls == []
