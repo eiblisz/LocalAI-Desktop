@@ -1223,13 +1223,17 @@ class DiscordBotBridge(QObject):
         constraints=None,
     ):
         """Call the shared web path while preserving compatibility with test/plugin overrides."""
-        kwargs = {
-            "trace": trace,
-            "explicit_batch_child": explicit_batch_child,
-            "output_budget": output_budget,
-            "synthesis_route": synthesis_route,
-            "constraints": constraints,
-        }
+        kwargs = {}
+        if trace is not None:
+            kwargs["trace"] = trace
+        if explicit_batch_child:
+            kwargs["explicit_batch_child"] = True
+        if output_budget is not None:
+            kwargs["output_budget"] = output_budget
+        if synthesis_route is not None:
+            kwargs["synthesis_route"] = synthesis_route
+        if constraints is not None:
+            kwargs["constraints"] = constraints
         try:
             return self._run_chat_web(messages, prompt, **kwargs)
         except TypeError as exc:
