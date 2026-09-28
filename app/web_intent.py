@@ -6,7 +6,11 @@ from .internal_authority import internal_project_authority_reason
 from .memory_extractor import is_explicit_memory_request
 from .question_semantics import analyze_question
 from .request_semantics import is_entity_identity_question
-from .text_normalization import canonical_match_text
+from .text_normalization import (
+    canonical_contains_inflected,
+    canonical_match_text,
+    hungarian_token_matches,
+)
 
 
 ACTION_MEMORY_WRITE = "memory_write"
@@ -132,14 +136,22 @@ def is_factual_risk_request(text):
     # Explicit entity-type grammar is authoritative even when the user types
     # the entity in lowercase. Casing must not decide whether a concrete
     # relation question receives factual-risk verification.
-    typed_entity = bool(
-        re.search(
-            r"(?i)\b(?:a|az)\s+[A-Za-z0-9.&'’_-]{2,}"
-            r"(?:\s+[A-Za-z0-9.&'’_-]{2,}){0,3}\s+"
-            r"(?:egy[uü]ttes|zenekar)"
-            r"(?:nak|nek|n[aá]l|r[oó]l|ban|ben|b[oő]l|t[oő]l)?\b",
-            raw,
+    typed_hu_match = re.search(
+        r"(?i)\b(?:a|az)\s+[A-Za-z0-9.&'’_-]{2,}"
+        r"(?:\s+[A-Za-z0-9.&'’_-]{2,}){0,3}\s+"
+        r"(?P<kind>(?:egy[uü]ttes|zenekar)\w*)\b",
+        raw,
+    )
+    typed_hu_entity = False
+    if typed_hu_match:
+        kind = typed_hu_match.group("kind")
+        typed_hu_entity = bool(
+            hungarian_token_matches(kind, "egyuttes", profile="entity")
+            or hungarian_token_matches(kind, "zenekar", profile="entity")
         )
+
+    typed_entity = bool(
+        typed_hu_entity
         or re.search(
             r"(?i)\b[A-Za-z0-9.&'’_-]{2,}"
             r"(?:\s+[A-Za-z0-9.&'’_-]{2,}){0,3}\s+band\b",
@@ -223,7 +235,7 @@ def _legacy_looks_like_web_request(text):
     return (
         any(contains_marker(marker) for marker in markers)
         or currency_cue
-        or bool(re.search(r"\bkeress\w*\b", normalized, flags=re.IGNORECASE))
+        or canonical_contains_inflected(normalized, "keress", profile="command")
         or is_freshness_sensitive_request(text)
         or is_factual_risk_request(text)
     )
@@ -232,11 +244,18 @@ def _legacy_looks_like_web_request(text):
 def _has_explicit_web_request(text):
     normalized = _fold(text)
     explicit_markers = (
-        "keress", "keresd meg", "nezd meg online", "nezz utana",
+        "keresd meg", "nezd meg online", "nezz utana",
         "interneten", "weben", "online", "look up", "search for",
         "search the web", "find online", "browse the web",
     )
-    return any(marker in normalized for marker in explicit_markers)
+    return (
+        canonical_contains_inflected(
+            normalized,
+            "keress",
+            profile="command",
+        )
+        or any(marker in normalized for marker in explicit_markers)
+    )
 
 
 def web_request_reason(text):
