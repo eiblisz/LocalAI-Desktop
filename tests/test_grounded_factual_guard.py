@@ -487,3 +487,47 @@ def test_direct_fact_guard_does_not_prune_unsupported_sentence_by_default():
         )
 
     assert client.calls == 1
+
+
+def test_long_form_force_verify_uses_full_repair_authority_after_pruning():
+    compact_authority = (
+        "AUTHORIZED EVIDENCE: Pákozd and Schwechat are named historical events."
+    )
+    full_authority = (
+        "AUTHORIZED EVIDENCE: Pákozd was a Hungarian victory on 29 September 1848. "
+        "Schwechat was fought later, on 30 October 1848."
+    )
+
+    class AuditClient:
+        def __init__(self):
+            self.messages = None
+
+        def chat_once(self, model, messages, timeout=600.0, **kwargs):
+            self.messages = messages
+            return (
+                "A pákozdi ütközet 1848. szeptember 29-én magyar győzelemmel zárult. "
+                "A schwechati csatára később, október 30-án került sor."
+            )
+
+    client = AuditClient()
+    result = guard_grounded_answer(
+        client,
+        "qwen-test",
+        "Írj történelmi esszét.",
+        (
+            "A Kitalált Birodalom döntötte el a harcot. "
+            "A schwechati csata volt az első nagy magyar győzelem."
+        ),
+        compact_authority,
+        force_verify=True,
+        literal_authority_text=full_authority,
+        repair_authority_text=full_authority,
+        prune_unsupported_sentences=True,
+    )
+
+    assert "Kitalált Birodalom" not in result
+    assert "Pákozd" in result
+    assert "Schwechat" in result
+    assert "first" not in result.casefold()
+    assert "első nagy magyar győzelem" not in result.casefold()
+    assert full_authority in client.messages[-1]["content"]
