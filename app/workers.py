@@ -2203,7 +2203,8 @@ class ChatWebWorker(QObject):
                     ),
                     literal_authority_text=literal_guard_authority_text,
                     prune_unsupported_sentences=(
-                        self.response_length == LENGTH_LONG
+                        self.synthesis_route == SYNTHESIS_WEB
+                        and self.response_length == LENGTH_LONG
                         and not direct_factual_candidate
                     ),
                     language_instruction=self._conversation_language_instruction(),
