@@ -446,57 +446,55 @@ def is_freshness_sensitive_request(text):
     return False
 
 
-def _looks_non_factual(text):
+def is_creative_or_transform_request(text):
+    """Return True only when the requested output itself is non-research work.
+
+    A writing verb alone is not enough: "write an essay about 1848" is factual
+    exposition and may need evidence, while a poem, fictional story, rewrite,
+    translation, message, or code-generation request can remain local unless the
+    user explicitly asks for web research.
+    """
     normalized = _fold(text)
     if not normalized:
         return False
 
-    # A noun naming a creative work is not itself a generation request.
-    # For example, "Mikor írta X ezt a verset?" is a factual relation/date
-    # question even though it contains the word "verset". Only explicit
-    # generation/transformation instructions suppress factual-risk routing.
-    phrase_markers = (
-        "írj egy",
-        "irj egy",
-        "írj nekem",
-        "irj nekem",
-        "fogalmazd át",
-        "fogalmazd at",
-        "fordítsd le",
-        "forditsd le",
-        "találj ki",
-        "talalj ki",
-        "write a",
-        "write me",
-        "rewrite",
-        "translate",
-        "brainstorm",
-        "schreib",
-        "übersetz",
-        "ubersetz",
+    transform_markers = (
+        "fogalmazd at", "ird at", "forditsd le", "rewrite", "translate",
+        "ubersetz", "paraphrase", "roviditsd le", "summarize this",
     )
-    if _contains_any(normalized, phrase_markers):
+    if _contains_any(normalized, transform_markers):
         return True
 
-    generation_verbs = (
-        "írj",
-        "irj",
-        "rewrite",
-        "translate",
-        "brainstorm",
-        "schreib",
-        "übersetz",
-        "ubersetz",
+    creative_markers = (
+        "verset", "verset irj", "koltemenyt", "meset", "novellat",
+        "fikcios", "kitalalt tortenet", "dalszoveget", "viccet",
+        "slogent", "emailt", "e mailt", "levelet", "uzenetet",
+        "posztot", "kodot", "programot", "scriptet",
+        "poem", "fiction", "short story", "song lyrics", "joke",
+        "email", "letter", "message", "social post", "write code",
+        "gedicht", "geschichte", "witz", "email", "brief", "nachricht",
     )
-    return any(
+    generation_verbs = (
+        "irj", "irnal", "keszits", "talalj ki",
+        "write", "draft", "create", "brainstorm", "schreib", "erstelle",
+    )
+    has_generation_verb = any(
         re.search(
-            rf"(?<!\w){re.escape(marker)}(?!\w)",
+            rf"(?<!\w){re.escape(_fold(marker))}(?!\w)",
             normalized,
             flags=re.IGNORECASE,
         )
         for marker in generation_verbs
     )
+    return bool(
+        has_generation_verb
+        and _contains_any(normalized, creative_markers)
+    )
 
+
+def _looks_non_factual(text):
+    """Backward-compatible name for non-research generation detection."""
+    return is_creative_or_transform_request(text)
 
 def answer_requires_web_fallback(user_text, answer):
     """
@@ -581,8 +579,15 @@ def plan_user_action(text, *, force_web=False, disable_web=False):
         web_reason = inferred_web_reason
         needs_web = False
     elif bool(force_web):
-        web_reason = "explicit_web"
-        needs_web = True
+        force_web_allowed = (
+            inferred_web_reason != "internal_project_authority"
+            and (
+                not is_creative_or_transform_request(clean)
+                or inferred_web_reason == "explicit_web"
+            )
+        )
+        web_reason = "web_on" if force_web_allowed else inferred_web_reason
+        needs_web = force_web_allowed
     else:
         web_reason = inferred_web_reason
         needs_web = web_reason in {
@@ -669,7 +674,11 @@ def plan_user_actions(text, *, force_web=False, disable_web=False):
             prompt=unit,
             plan=plan_user_action(
                 unit,
-                force_web=force_web,
+                force_web=(
+                    force_web(unit)
+                    if callable(force_web)
+                    else force_web
+                ),
                 disable_web=(
                     disable_web(unit)
                     if callable(disable_web)
