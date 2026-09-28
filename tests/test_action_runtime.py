@@ -279,3 +279,18 @@ def test_action_runtime_default_host_authorities_accept_existing_bounded_actions
     )
 
     assert runtime.validate_many(contracts) == contracts
+
+
+def test_plan_many_evaluates_force_and_disable_resolvers_per_action():
+    runtime = ActionRuntime()
+    contracts = runtime.plan_many(
+        "1. Mutasd be röviden az 1848-as szabadságharcot.\n"
+        "2. Magyarázd el röviden a helyi állapotot.",
+        force_web=lambda prompt: "1848" in prompt,
+        disable_web=lambda prompt: "helyi állapotot" in prompt,
+    )
+
+    assert contracts[0].route == ROUTE_WEB
+    assert contracts[0].use_web is True
+    assert contracts[1].route == ROUTE_CHAT
+    assert contracts[1].use_web is False
