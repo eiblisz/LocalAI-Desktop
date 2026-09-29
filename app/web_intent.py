@@ -641,11 +641,43 @@ def split_user_action_units(text):
     # every non-empty line to be a complete question preserves ordinary wrapped
     # prose and multi-line artifact instructions as a single action.
     plain_lines = [line.strip() for line in raw.splitlines() if line.strip()]
+
+    def standalone_line_task(line):
+        candidate = str(line or "").strip()
+        if not candidate:
+            return False
+
+        # Test/paste batches often carry a trailing Markdown hard-break slash
+        # after a complete question. Treat only trailing presentation escapes
+        # as ignorable; preserve the original line text for execution.
+        semantic = re.sub(r"[\\\\]+\\s*$", "", candidate).strip()
+        if semantic.endswith("?"):
+            return True
+
+        folded = canonical_match_text(semantic)
+        first = folded.split()[0] if folded.split() else ""
+        # Conservative command/opening verbs across the supported UI languages.
+        # This is intentionally a batch-boundary recognizer, not an intent
+        # classifier; individual units are still routed by plan_user_action().
+        command_openers = {
+            "irj", "ird", "keszits", "keszitsd", "mutasd", "magyarazd",
+            "elemezd", "hasonlitsd", "keress", "nezz", "adj", "foglald",
+            "jegyezd", "emlekeztess",
+            "write", "create", "make", "explain", "analyze", "compare",
+            "find", "search", "show", "summarize", "remember",
+            "schreib", "erstelle", "erklar", "analysiere", "vergleiche",
+            "suche", "zeige", "fass",
+        }
+        return first in command_openers
+
     if (
         len(plain_lines) >= 2
-        and all(line.endswith("?") for line in plain_lines)
+        and all(standalone_line_task(line) for line in plain_lines)
     ):
-        return plain_lines
+        return [
+            re.sub(r"[\\\\]+\\s*$", "", line).strip()
+            for line in plain_lines
+        ]
 
     matches = list(_NUMBERED_TASK_START.finditer(raw))
     if len(matches) <= 1:
