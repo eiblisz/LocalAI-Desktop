@@ -64,6 +64,23 @@ def test_debut_release_variants_share_temporal_release_semantics(prompt):
 
 
 
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "mi volt a sampleband elso albumanak a cime?",
+        "milyen cimmel jelent meg a sampleband elso albuma?",
+        "what was the title of sampleband first album?",
+    ],
+)
+def test_first_album_title_wording_is_selection_release_semantics(prompt):
+    semantics = analyze_question(prompt)
+    profile = classify_request(prompt)
+
+    assert semantics.requested_fact == "selection"
+    assert semantics.relation == "release"
+    assert profile.kind == TASK_DIRECT_FACT
+
+
 def test_ordinal_first_album_selection_is_direct_fact_release_semantics():
     prompt = "Melyik nagylemez volt az első a sampleband zenekarnak?"
     semantics = analyze_question(prompt)
