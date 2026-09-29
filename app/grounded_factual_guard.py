@@ -356,7 +356,7 @@ def _sentence_support_audit(
     """Gate long-form sentences against exact evidence fragments without rewriting."""
     _blocks, _headings, units = _grounded_sentence_units(draft)
     if not units:
-        return None
+        return None, None
     sentence_payload = "\n".join(
         f"S{unit['id']}: {unit['text']}"
         for unit in units
