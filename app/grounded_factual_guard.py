@@ -290,10 +290,10 @@ def _grounded_sentence_units(text):
     return blocks, headings, units
 
 
-def _parse_sentence_support_gate(raw, unit_count, authority_text):
+def _parse_sentence_support_gate(raw, units, authority_text):
     """Parse bounded KEEP/DROP judgments and verify KEEP evidence is source-bound."""
     judgments = {}
-    authority = canonical_match_text(authority_text)
+    unit_count = len(units)
     for raw_line in str(raw or "").replace("```", "").splitlines():
         line = raw_line.strip()
         if not line:
@@ -312,9 +312,11 @@ def _parse_sentence_support_gate(raw, unit_count, authority_text):
         status = match.group(2).upper()
         evidence = str(match.group(3) or "").strip().strip('"“”„')
         if status == "KEEP":
-            normalized_evidence = canonical_match_text(evidence)
-            # KEEP must carry a nontrivial verbatim/canonical evidence fragment.
-            if len(normalized_evidence) < 16 or normalized_evidence not in authority:
+            if not _evidence_fragment_supports_sentence(
+                units[identifier]["text"],
+                evidence,
+                authority_text,
+            ):
                 status = "DROP"
         judgments[identifier] = status
     if set(judgments) != set(range(unit_count)):
@@ -340,6 +342,89 @@ def _apply_sentence_support_gate(text, judgments):
         if sentences:
             rebuilt.append(" ".join(sentences).strip())
     return "\n\n".join(rebuilt).strip()
+
+
+_RELATION_MARKER_GROUPS = {
+    "exclusive": ("only", "sole", "exclusively", "egyetlen", "egyeduli", "kizarolag", "einzig", "ausschliesslich"),
+    "first": ("first", "earliest", "elso", "legkorabbi", "erste", "fruheste"),
+    "last": ("last", "final", "latest", "utolso", "vegso", "legkesobbi", "letzte", "endgultig"),
+    "father": ("father", "apja", "apa", "vater"),
+    "mother": ("mother", "anyja", "anya", "mutter"),
+    "uncle": ("uncle", "nagybacsi", "nagybáty", "onkel"),
+    "aunt": ("aunt", "nagyneni", "nagynéni", "tante"),
+    "son": ("son", "fia", "fiú", "sohn"),
+    "daughter": ("daughter", "lanya", "lánya", "tochter"),
+    "victory": ("victory", "won", "gyozelem", "gyozott", "sieg", "gewann"),
+    "defeat": ("defeat", "lost", "vereseg", "vesztett", "niederlage", "verlor"),
+    "surrender": ("surrender", "capitulat", "letette a fegyvert", "fegyverletetel", "kapitul", "ergab"),
+    "leader": ("leader", "led", "vezeto", "vezette", "iranyitotta", "fuhrte"),
+    "commander": ("commander", "commanded", "parancsnok", "parancsnoka", "befehlshaber"),
+    "ally": ("ally", "allied", "szovetseges", "verbundet"),
+    "support": ("support", "supported", "tamogat", "unterstutz"),
+    "intervention": ("interven", "intervention", "beavatkoz", "intervention"),
+    "ended": ("ended", "marked the end", "veget jelent", "vege lett", "endete", "beendete"),
+    "caused": ("caused", "resulted in", "led to", "okoz", "eredmenyez", "vezetett", "fuhrte zu"),
+    "basis": ("basis for", "foundation for", "alapja", "alapjava", "grundlage"),
+}
+
+
+def _relation_marker_classes(text):
+    folded = canonical_match_text(text)
+    found = set()
+    for relation, markers in _RELATION_MARKER_GROUPS.items():
+        if any(canonical_match_text(marker) in folded for marker in markers):
+            found.add(relation)
+    return found
+
+
+def _strict_numeric_literals(text):
+    value = str(text or "")
+    patterns = (
+        r"(?<!\d)(?:1[0-9]{3}|20[0-9]{2})(?!\d)",
+        r"\b\d{4}-\d{2}-\d{2}\b",
+        r"\b\d{1,2}[./]\d{1,2}[./](?:19|20)\d{2}\b",
+        r"(?<!\w)[$€£]\s*\d+(?:[.,]\d+)?(?:\s*(?:usd|eur|gbp|huf))?",
+        r"\b\d+(?:[.,]\d+)?\s*(?:usd|eur|gbp|huf|btc|eth|%)\b",
+        r"(?<![A-Za-z0-9])v?\d+\.\d+(?:\.\d+){0,2}(?:[-+][0-9A-Za-z.-]+)?(?![A-Za-z0-9])",
+    )
+    result = []
+    for pattern in patterns:
+        result.extend(match.group(0).rstrip(".,;:") for match in re.finditer(pattern, value, flags=re.IGNORECASE))
+    return tuple(dict.fromkeys(result))
+
+
+def _evidence_fragment_supports_sentence(sentence, evidence, authority_text):
+    evidence_text = str(evidence or "").strip()
+    normalized_evidence = canonical_match_text(evidence_text)
+    authority = canonical_match_text(authority_text)
+
+    if len(normalized_evidence) < 16 or normalized_evidence not in authority:
+        return False
+
+    # Source URLs or a bibliography row are metadata, not factual evidence.
+    prose_without_urls = re.sub(r"https?://\S+", " ", evidence_text, flags=re.IGNORECASE)
+    prose_without_urls = re.sub(r"\[[^\]]+\]\([^\)]+\)", " ", prose_without_urls)
+    if len(re.findall(r"[A-Za-zÁÉÍÓÖŐÚÜŰáéíóöőúüű]{2,}", prose_without_urls)) < 4:
+        return False
+
+    # Keep fragments focused enough that an unrelated relation elsewhere in a
+    # whole source dump cannot certify the current sentence.
+    if len(evidence_text) > 700:
+        return False
+
+    for literal in _strict_numeric_literals(sentence):
+        if canonical_match_text(literal) not in normalized_evidence:
+            return False
+
+    # High-risk factual relations require the evidence fragment to explicitly
+    # state the same relation class. This remains entity-agnostic and supports
+    # Hungarian/English/German surface forms.
+    sentence_relations = _relation_marker_classes(sentence)
+    evidence_relations = _relation_marker_classes(evidence_text)
+    if not sentence_relations.issubset(evidence_relations):
+        return False
+
+    return True
 
 
 def _sentence_support_audit(
@@ -375,7 +460,12 @@ def _sentence_support_audit(
                 "role, quantity, first/last status, or other relation is not directly supported. "
                 "If support is missing, delete that sentence rather than guessing. "
                 "The KEEP evidence fragment must be copied from AUTHORIZED EVIDENCE, not from "
-                "the user request or draft. Do not rewrite sentences and return no commentary."
+                "the user request or draft. Copy a focused factual fragment, never a URL list, "
+                "source list, bibliography row, or an entire source dump. For claims involving "
+                "only/first/last/final status, family roles, leadership or command, alliance or "
+                "support, intervention, victory/defeat/surrender, causation, institutional role, "
+                "or an asserted ending, the copied fragment must explicitly state that same "
+                "relation. Do not rewrite sentences and return no commentary."
             ),
         },
         {
@@ -421,7 +511,7 @@ def _sentence_support_audit(
             kwargs.pop(unsupported)
     judgments = _parse_sentence_support_gate(
         raw,
-        len(units),
+        units,
         authority_text,
     )
     if judgments is None:
