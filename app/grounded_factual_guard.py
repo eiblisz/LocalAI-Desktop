@@ -501,11 +501,11 @@ def guard_grounded_answer(
             if not force_verify:
                 return draft
 
-    prefetched_repair = None
+    audit_raw = None
     if strict_relation_audit:
         if trace is not None:
             trace.begin("factual_sentence_support_audit")
-        gated, prefetched_repair = _sentence_support_audit(
+        gated, audit_raw = _sentence_support_audit(
             client,
             model,
             user_prompt,
@@ -579,6 +579,9 @@ def guard_grounded_answer(
                     "answer language rather than inventing a new ordering. "
                     "Do not add any name, date, number, price, version, URL, or factual claim "
                     "that is absent from the authorized evidence or user request. "
+                    "Do not expose verification protocol, sentence IDs, KEEP/DROP labels, "
+                    "audit commentary, or reasoning about whether the evidence supports the draft. "
+                    "Return only the user-facing repaired answer. "
                     + (
                         " For long-form factual synthesis, audit every sentence relation, not only "
                         "its names and dates. KEEP a sentence only when the authorized evidence "
@@ -604,31 +607,41 @@ def guard_grounded_answer(
             },
         ],
     }
+    repair_kwargs["call_phase"] = "factual_guard_repair"
     if output_budget is not None:
         repair_kwargs["num_predict"] = int(output_budget)
     if temperature is not None:
         repair_kwargs["temperature"] = float(temperature)
     if seed is not None:
         repair_kwargs["seed"] = int(seed)
-    if prefetched_repair is not None:
-        repair = str(prefetched_repair or "").strip()
-    else:
-        while True:
-            try:
-                repair = client.chat_once(**repair_kwargs).strip()
-                break
-            except TypeError as exc:
-                unsupported = next(
-                    (
-                        name
-                        for name in ("num_predict", "temperature", "seed")
-                        if name in str(exc) and name in repair_kwargs
-                    ),
-                    "",
-                )
-                if not unsupported:
-                    raise
-                repair_kwargs.pop(unsupported)
+    # A malformed sentence-audit response is internal protocol output, never
+    # a candidate user answer. The old one-call fallback reused that raw text as
+    # the repaired answer, which could leak S0/KEEP rows or audit commentary.
+    # On protocol failure, run the normal grounded repair as a separate bounded
+    # model call instead.
+    if trace is not None and audit_raw is not None:
+        trace.add_metadata(
+            factual_sentence_support_audit_protocol=(
+                "malformed_fallback_to_grounded_repair"
+            ),
+            factual_sentence_support_audit_raw_reused=False,
+        )
+    while True:
+        try:
+            repair = client.chat_once(**repair_kwargs).strip()
+            break
+        except TypeError as exc:
+            unsupported = next(
+                (
+                    name
+                    for name in ("num_predict", "temperature", "seed", "call_phase")
+                    if name in str(exc) and name in repair_kwargs
+                ),
+                "",
+            )
+            if not unsupported:
+                raise
+            repair_kwargs.pop(unsupported)
 
     if trace is not None:
         trace.end("factual_guard_repair")
