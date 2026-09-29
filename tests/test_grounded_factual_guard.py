@@ -776,7 +776,7 @@ def test_sentence_support_gate_drops_relation_not_directly_supported():
     assert client.calls == 1
 
 
-def test_sentence_support_gate_uses_long_form_budget_and_named_call_phase():
+def test_sentence_support_gate_uses_compact_reference_budget_and_named_call_phase():
     authority = "AUTHORIZED EVIDENCE: Correct Author wrote Silver Story in 1912."
 
     class BudgetClient:
@@ -804,8 +804,78 @@ def test_sentence_support_gate_uses_long_form_budget_and_named_call_phase():
     )
 
     assert result == "Correct Author wrote Silver Story in 1912."
-    assert client.kwargs["num_predict"] == 2048
+    assert client.kwargs["num_predict"] == 384
     assert client.kwargs["call_phase"] == "factual_sentence_support_audit"
+    audit_prompt = client.kwargs["messages"][1]["content"]
+    assert "NUMBERED AUTHORIZED EVIDENCE:" in audit_prompt
+    assert "E0:" in audit_prompt
+
+
+def test_sentence_support_gate_accepts_compact_evidence_reference():
+    authority = "AUTHORIZED EVIDENCE: Correct Author wrote Silver Story in 1912."
+
+    class ReferenceClient:
+        def __init__(self):
+            self.kwargs = None
+
+        def chat_once(self, **kwargs):
+            self.kwargs = dict(kwargs)
+            return "S0|KEEP|E0"
+
+    client = ReferenceClient()
+    result = guard_grounded_answer(
+        client,
+        "qwen-test",
+        "Írj ismertetőt.",
+        "Correct Author wrote Silver Story in 1912.",
+        authority,
+        force_verify=True,
+        literal_authority_text=authority,
+        repair_authority_text=authority,
+        strict_relation_audit=True,
+        output_budget=2048,
+        temperature=0.0,
+        seed=42,
+    )
+
+    assert result == "Correct Author wrote Silver Story in 1912."
+    assert "S0|KEEP|E0" not in result
+    assert "NEVER copy evidence text" in client.kwargs["messages"][0]["content"]
+
+
+def test_sentence_support_gate_rejects_unknown_compact_evidence_reference():
+    authority = "AUTHORIZED EVIDENCE: Correct Author wrote Silver Story in 1912."
+
+    class SequenceClient:
+        def __init__(self):
+            self.calls = 0
+
+        def chat_once(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return "S0|KEEP|E999"
+            if self.calls == 2:
+                return "Correct Author wrote Silver Story in 1912."
+            return "S0|KEEP|E0"
+
+    client = SequenceClient()
+    result = guard_grounded_answer(
+        client,
+        "qwen-test",
+        "Írj ismertetőt.",
+        "Correct Author wrote Silver Story in 1912.",
+        authority,
+        force_verify=True,
+        literal_authority_text=authority,
+        repair_authority_text=authority,
+        strict_relation_audit=True,
+        output_budget=2048,
+        temperature=0.0,
+        seed=42,
+    )
+
+    assert result == "Correct Author wrote Silver Story in 1912."
+    assert client.calls == 3
 
 
 def test_sentence_support_gate_rejects_url_only_keep_evidence():
