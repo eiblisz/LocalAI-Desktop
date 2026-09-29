@@ -632,6 +632,38 @@ def test_sentence_support_gate_drops_relation_not_directly_supported():
     assert client.calls == 1
 
 
+def test_sentence_support_gate_uses_long_form_budget_and_named_call_phase():
+    authority = "AUTHORIZED EVIDENCE: Correct Author wrote Silver Story in 1912."
+
+    class BudgetClient:
+        def __init__(self):
+            self.kwargs = None
+
+        def chat_once(self, **kwargs):
+            self.kwargs = dict(kwargs)
+            return "S0\tKEEP\tCorrect Author wrote Silver Story in 1912."
+
+    client = BudgetClient()
+    result = guard_grounded_answer(
+        client,
+        "qwen-test",
+        "Írj hosszú ismertetőt.",
+        "Correct Author wrote Silver Story in 1912.",
+        authority,
+        force_verify=True,
+        literal_authority_text=authority,
+        repair_authority_text=authority,
+        strict_relation_audit=True,
+        output_budget=2048,
+        temperature=0.0,
+        seed=42,
+    )
+
+    assert result == "Correct Author wrote Silver Story in 1912."
+    assert client.kwargs["num_predict"] == 2048
+    assert client.kwargs["call_phase"] == "factual_sentence_support_audit"
+
+
 def test_sentence_support_gate_requires_evidence_fragment_to_exist_in_authority():
     authority = (
         "AUTHORIZED EVIDENCE: Correct Author wrote Silver Story in 1912. "
