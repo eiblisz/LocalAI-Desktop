@@ -639,7 +639,6 @@ def _run_hungarian_fluency_audit(
     control=None,
     trace=None,
     phase_callback=None,
-    run_model_fluency_audit=True,
 ):
     if _expected_language(user_text, constraints) != "hu":
         return FluencyAuditResult()
@@ -1114,6 +1113,11 @@ def _paragraph_blocks(value):
     if not raw:
         return []
     raw = re.sub(
+        r"(?m)^(?P<heading>\s*(?:#{1,6}\s+.+|\*\*.+\*\*|__.+__))\n(?=\S)",
+        r"\g<heading>\n\n",
+        raw,
+    )
+    raw = re.sub(
         r"(?<=[.!?])\n(?=(?:\*\*|__|#{1,6}\s+|[A-ZÁÉÍÓÖŐÚÜŰ]))",
         "\n\n",
         raw,
@@ -1218,6 +1222,7 @@ def guard_response(
     output_budget=None,
     trace=None,
     phase_callback=None,
+    run_model_fluency_audit=True,
 ):
     """
     Validate one final model response and perform at most one bounded repair.
