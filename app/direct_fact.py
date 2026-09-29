@@ -6,6 +6,7 @@ checking whether its evidence includes the kind of fact the user asked for.
 """
 
 import re
+from difflib import SequenceMatcher
 
 from .question_semantics import analyze_question
 from .request_semantics import identity_lookup_subject
@@ -206,28 +207,28 @@ def _is_debut_release_request(prompt):
     return _debut_release_surface_supported(prompt)
 
 
-def _single_edit_or_exact(left, right):
+def _entity_surface_similar(left, right):
+    """Tolerate ordinary spelling noise without allowing broad entity drift."""
     left = re.sub(r"[^a-z0-9]", "", _fold(left))
     right = re.sub(r"[^a-z0-9]", "", _fold(right))
     if not left or not right:
         return False
     if left == right:
         return True
-    if min(len(left), len(right)) < 6 or abs(len(left) - len(right)) > 1:
+
+    shortest = min(len(left), len(right))
+    longest = max(len(left), len(right))
+    if shortest < 6:
         return False
-    if len(left) == len(right):
-        return sum(a != b for a, b in zip(left, right)) == 1
-    short, long = (left, right) if len(left) < len(right) else (right, left)
-    short_index = 0
-    edits = 0
-    for char in long:
-        if short_index < len(short) and char == short[short_index]:
-            short_index += 1
-        else:
-            edits += 1
-            if edits > 1:
-                return False
-    return True
+
+    # Large truncations/expansions are different entities, not typos.
+    if shortest / longest < 0.72:
+        return False
+
+    # SequenceMatcher naturally tolerates substitutions, insertions,
+    # deletions and common transpositions. 0.80 keeps normal misspellings
+    # usable while rejecting short/unrelated neighbors such as Pogo/Pokogep.
+    return SequenceMatcher(None, left, right).ratio() >= 0.80
 
 
 def _subject_supported_in_text(text, subject):
@@ -241,7 +242,7 @@ def _subject_supported_in_text(text, subject):
     subject_tokens = folded_subject.split()
     if len(subject_tokens) == 1 and len(subject_tokens[0]) >= 6:
         for token in re.findall(r"[A-Za-zÁÉÍÓÖŐÚÜŰáéíóöőúüű0-9]+", str(text or "")):
-            if _single_edit_or_exact(subject_tokens[0], token):
+            if _entity_surface_similar(subject_tokens[0], token):
                 return True
 
     # Entity names may be written with or without punctuation/spaces
@@ -936,7 +937,7 @@ def _subject_display_surface(text, subject):
             r"[A-Za-zÁÉÍÓÖŐÚÜŰáéíóöőúüű0-9]{6,}",
             raw,
         ):
-            if _single_edit_or_exact(subject_tokens[0], match.group(0)):
+            if _entity_surface_similar(subject_tokens[0], match.group(0)):
                 return match.group(0)
 
     # Punctuated compact forms such as WASP / W.A.S.P.
