@@ -1,5 +1,6 @@
 import re
 
+from .generation_policy import requested_paragraph_range
 from .request_semantics import identity_lookup_subject
 from .text_normalization import (
     canonical_equal,
@@ -353,6 +354,48 @@ def _apply_sentence_support_gate(text, judgments):
     return "\n\n".join(rebuilt).strip()
 
 
+def _grounded_gate_shape(text):
+    blocks, headings, units = _grounded_sentence_units(text)
+    heading_indexes = {index for index, _value in headings}
+    prose_blocks = sum(
+        1
+        for index, _block in enumerate(blocks)
+        if index not in heading_indexes
+    )
+    return {
+        "sentence_count": len(units),
+        "prose_blocks": prose_blocks,
+        "heading_count": len(headings),
+    }
+
+
+def _grounded_gate_result_is_sufficient(original, gated, user_prompt):
+    """Reject structurally collapsed audit output before it becomes user-visible."""
+    if not str(gated or "").strip():
+        return False
+
+    original_shape = _grounded_gate_shape(original)
+    gated_shape = _grounded_gate_shape(gated)
+    if gated_shape["sentence_count"] < 1 or gated_shape["prose_blocks"] < 1:
+        return False
+
+    paragraph_range = requested_paragraph_range(user_prompt)
+    if paragraph_range:
+        low, _high = paragraph_range
+        if gated_shape["prose_blocks"] < int(low):
+            return False
+
+    # For ordinary long-form prose without an explicit paragraph contract, do
+    # not accept a verifier result that stripped almost the entire draft.
+    original_sentences = int(original_shape["sentence_count"])
+    if original_sentences >= 8:
+        minimum_sentences = max(3, (original_sentences + 3) // 4)
+        if gated_shape["sentence_count"] < minimum_sentences:
+            return False
+
+    return True
+
+
 _RELATION_MARKER_GROUPS = {
     "exclusive": ("only", "sole", "exclusively", "egyetlen", "egyeduli", "kizarolag", "einzig", "ausschliesslich"),
     "first": ("first", "earliest", "elso", "legkorabbi", "erste", "fruheste"),
@@ -639,7 +682,19 @@ def guard_grounded_answer(
                     "pass" if gated else "fallback_to_repair"
                 ),
             )
-        if gated:
+        if trace is not None:
+            original_shape = _grounded_gate_shape(draft)
+            gated_shape = _grounded_gate_shape(gated or "")
+            trace.add_metadata(
+                factual_sentence_units_input=original_shape["sentence_count"],
+                factual_sentence_units_kept=gated_shape["sentence_count"],
+                factual_sentence_prose_blocks_kept=gated_shape["prose_blocks"],
+            )
+        if gated and _grounded_gate_result_is_sufficient(
+            draft,
+            gated,
+            user_prompt,
+        ):
             gated_remaining = unsupported_grounded_literals(
                 gated,
                 literal_authority,
@@ -854,14 +909,30 @@ def guard_grounded_answer(
                     "pass" if post_gated else "fail_closed"
                 ),
             )
-        if not post_gated:
+        if trace is not None:
+            repair_shape = _grounded_gate_shape(repair)
+            post_shape = _grounded_gate_shape(post_gated or "")
+            trace.add_metadata(
+                factual_post_repair_sentence_units_input=repair_shape["sentence_count"],
+                factual_post_repair_sentence_units_kept=post_shape["sentence_count"],
+                factual_post_repair_prose_blocks_kept=post_shape["prose_blocks"],
+            )
+        if (
+            not post_gated
+            or not _grounded_gate_result_is_sufficient(
+                repair,
+                post_gated,
+                user_prompt,
+            )
+        ):
             if trace is not None:
                 trace.add_metadata(
                     factual_guard_repair_status="post_repair_semantic_audit_failed",
                     factual_post_repair_audit_raw_present=bool(post_audit_raw),
                 )
             raise GroundedFactualGuardError(
-                "Grounded factual repair could not be semantically verified."
+                "Grounded factual repair could not be semantically verified "
+                "without collapsing the requested answer structure."
             )
         post_remaining = unsupported_grounded_literals(
             post_gated,
