@@ -238,7 +238,8 @@ def test_action_runtime_splits_mixed_question_and_command_lines_independently():
         "irj egy 10 bekezdesbol allo esszet egy tortenelmi esemenyrol",
     ]
     assert all(contract.explicit_batch_child for contract in contracts)
-    assert contracts[3].constraints.requested_paragraph_count == 10
+    assert "10 paragraphs" in contracts[3].constraints.format_constraints
+    assert contracts[3].constraints.parent_intent == contracts[3].prompt
 
 
 def test_action_runtime_keeps_a_wrapped_question_as_one_request():
