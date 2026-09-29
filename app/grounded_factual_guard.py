@@ -358,7 +358,7 @@ def _sentence_support_audit(
     if not units:
         return None
     sentence_payload = "\n".join(
-        f"S{unit[\'id\']}: {unit[\'text\']}"
+        f"S{unit['id']}: {unit['text']}"
         for unit in units
     )
     messages = [
