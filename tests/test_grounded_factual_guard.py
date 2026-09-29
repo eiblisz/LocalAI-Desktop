@@ -558,7 +558,52 @@ def test_long_form_post_repair_prunes_reintroduced_unsupported_literals():
     assert "1912" in result
     assert "Other Person" not in result
     assert "1956" not in result
-    assert client.calls == 1
+    assert client.calls == 2
+
+
+def test_malformed_sentence_audit_is_never_reused_as_user_answer():
+    authority = (
+        "AUTHORIZED EVIDENCE: Correct Author wrote Silver Story in 1912. "
+        "The work was published in the same year."
+    )
+
+    class SequenceClient:
+        def __init__(self):
+            self.calls = []
+
+        def chat_once(self, **kwargs):
+            self.calls.append(dict(kwargs))
+            if len(self.calls) == 1:
+                return (
+                    "The sentences directly quote key facts from the authorized evidence. "
+                    "All factual claims are supported."
+                )
+            return (
+                "Correct Author wrote Silver Story in 1912. "
+                "The work was published in the same year."
+            )
+
+    client = SequenceClient()
+    result = guard_grounded_answer(
+        client,
+        "qwen-test",
+        "Írj ismertetőt a Silver Storyról.",
+        "Correct Author wrote Silver Story in 1912.",
+        authority,
+        force_verify=True,
+        literal_authority_text=authority,
+        repair_authority_text=authority,
+        strict_relation_audit=True,
+        output_budget=2048,
+        temperature=0.0,
+        seed=42,
+    )
+
+    assert result.startswith("Correct Author wrote Silver Story")
+    assert "The sentences directly quote" not in result
+    assert len(client.calls) == 2
+    assert client.calls[0]["call_phase"] == "factual_sentence_support_audit"
+    assert client.calls[1]["call_phase"] == "factual_guard_repair"
 
 
 def test_strict_relation_audit_instruction_rejects_name_cooccurrence_as_support():
