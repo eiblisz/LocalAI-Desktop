@@ -369,7 +369,7 @@ def _sentence_support_audit(
                 "For every sentence id return exactly one line in this form: "
                 "S0<TAB>KEEP<TAB>exact evidence fragment, or S0<TAB>DROP<TAB>-. "
                 "KEEP only when the evidence directly supports every factual relation in "
-                "the sentence. Mere co-occurrence of the same names is not support; matching "
+                "the sentence. Mere co-occurrence of the same names is not support. Matching "
                 "names or dates alone is not enough. DROP claims "
                 "whose chronology, kinship, leadership, authorship, causation, institutional "
                 "role, quantity, first/last status, or other relation is not directly supported. "
