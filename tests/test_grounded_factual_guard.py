@@ -545,11 +545,13 @@ def test_long_form_post_repair_prunes_reintroduced_unsupported_literals():
         def chat_once(self, **kwargs):
             self.calls += 1
             if self.calls == 1:
+                return "This audit response is malformed."
+            if self.calls == 2:
                 return (
                     "Correct Author wrote Silver Story in 1912. "
                     "Other Person later changed it in 1956."
                 )
-            return "S0\tKEEP\tCorrect Author wrote Silver Story in 1912."
+            return "S0|KEEP|Correct Author wrote Silver Story in 1912."
 
     client = RepairThenAuditClient()
 
@@ -568,7 +570,7 @@ def test_long_form_post_repair_prunes_reintroduced_unsupported_literals():
     assert "1912" in result
     assert "Other Person" not in result
     assert "1956" not in result
-    assert client.calls == 2
+    assert client.calls == 3
 
 
 def test_malformed_sentence_audit_is_never_reused_as_user_answer():
@@ -633,7 +635,7 @@ def test_strict_relation_audit_instruction_rejects_name_cooccurrence_as_support(
 
         def chat_once(self, model, messages, timeout=600.0, **kwargs):
             self.messages = messages
-            return "Correct Author wrote Silver Story in 1912."
+            return "S0|KEEP|Correct Author wrote Silver Story in 1912."
 
     client = CaptureClient()
     result = guard_grounded_answer(
@@ -650,6 +652,31 @@ def test_strict_relation_audit_instruction_rejects_name_cooccurrence_as_support(
     system = client.messages[0]["content"]
     assert "Mere co-occurrence of the same names is not support." in system
     assert "delete that sentence rather than guessing" in system
+
+
+def test_sentence_support_gate_accepts_literal_tab_placeholder_protocol():
+    authority = "AUTHORIZED EVIDENCE: Correct Author wrote Silver Story in 1912."
+
+    class PlaceholderClient:
+        def chat_once(self, **kwargs):
+            return r"S0\<TAB>KEEP\<TAB>Correct Author wrote Silver Story in 1912."
+
+    result = guard_grounded_answer(
+        PlaceholderClient(),
+        "qwen-test",
+        "Írj ismertetőt.",
+        "Correct Author wrote Silver Story in 1912.",
+        authority,
+        force_verify=True,
+        literal_authority_text=authority,
+        repair_authority_text=authority,
+        strict_relation_audit=True,
+        output_budget=2048,
+        temperature=0.0,
+        seed=42,
+    )
+
+    assert result == "Correct Author wrote Silver Story in 1912."
 
 
 def test_sentence_support_gate_drops_relation_not_directly_supported():
