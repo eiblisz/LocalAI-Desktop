@@ -650,7 +650,7 @@ def split_user_action_units(text):
         # Test/paste batches often carry a trailing Markdown hard-break slash
         # after a complete question. Treat only trailing presentation escapes
         # as ignorable; preserve the original line text for execution.
-        semantic = re.sub(r"[\\\\]+\\s*$", "", candidate).strip()
+        semantic = re.sub(r"[\\]+\s*$", "", candidate).strip()
         if semantic.endswith("?"):
             return True
 
@@ -675,7 +675,7 @@ def split_user_action_units(text):
         and all(standalone_line_task(line) for line in plain_lines)
     ):
         return [
-            re.sub(r"[\\\\]+\\s*$", "", line).strip()
+            re.sub(r"[\\]+\s*$", "", line).strip()
             for line in plain_lines
         ]
 
