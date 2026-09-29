@@ -1020,8 +1020,8 @@ def _debut_title_candidates_from_item(item, request_text):
         ),
         re.compile(
             r"(?i)\b(?:els[őo]\w*|deb[uü]t\w*)\s+"
-            r"(?:album\w*|nagylemez\w*|lemez\w*)\s*[,;:-]?\s*"
-            r"(?:a|az)?\s*(?P<title>[^\n.!?;,]{2,100})"
+            r"(?:album\w*|nagylemez\w*|lemez\w*)\s*[,;:-]\s*"
+            r"(?:a|az)\s+(?P<title>[^\n.!?;,]{2,100})"
         ),
     )
     for field in fields[:3]:
