@@ -123,6 +123,10 @@ def _release_subject_surface(prompt):
     """Extract the named entity in a first/debut-release question when structural."""
     raw = _clean(prompt)
     patterns = (
+        r"(?i)\b(?:mi|melyik)\s+volt\s+(?:a|az)\s+"
+        r"(?P<subject>.+?)\s+(?:els[őo]\w*|deb[uü]t\w*)\s+"
+        r"(?:album\w*|nagylemez\w*|lemez\w*)\s+(?:a\s+)?"
+        r"(?:c[ií]m\w*|neve)\b",
         r"(?i)\bmikor\s+(?:adta|adtak|kiadta|kiadtak)\s+(?:ki\s+)?"
         r"(?:a|az)\s+(?:els[őo]|deb[uü]t\w*)\s+[^?]{0,40}?\s+"
         r"(?:a|az)\s+(?P<subject>.+?)\s+(?:egy[uü]ttes|zenekar)\b",
