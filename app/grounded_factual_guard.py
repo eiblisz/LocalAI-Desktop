@@ -387,10 +387,17 @@ def _sentence_support_audit(
             ),
         },
     ]
+    # The audit emits one verdict plus a source fragment per generated sentence.
+    # A long-form answer can legitimately require more than the old fixed
+    # 768-token ceiling even though the primary response budget is 2048.
+    # Preserve the caller's smaller budget for short callers, but allow the
+    # long-form contract to fund this bounded verification pass.
+    audit_output_budget = min(2048, int(output_budget or 768))
     kwargs = {
         "model": model,
         "messages": messages,
-        "num_predict": min(768, int(output_budget or 768)),
+        "num_predict": audit_output_budget,
+        "call_phase": "factual_sentence_support_audit",
     }
     if temperature is not None:
         kwargs["temperature"] = float(temperature)
@@ -404,7 +411,7 @@ def _sentence_support_audit(
             unsupported = next(
                 (
                     name
-                    for name in ("num_predict", "temperature", "seed")
+                    for name in ("num_predict", "temperature", "seed", "call_phase")
                     if name in str(exc) and name in kwargs
                 ),
                 "",
