@@ -480,6 +480,25 @@ def test_host_resolves_self_titled_debut_selection_from_bound_evidence():
     assert "1984" in answer
 
 
+def test_host_resolves_hungarian_first_album_title_sentence():
+    prompt = "mi volt a sampleband elso albumanak a cime?"
+    evidence = {
+        "results": [{
+            "title": "Sampleband diszkográfia",
+            "snippet": (
+                "A Sample Album a Sampleband első nagylemeze, "
+                "1984-ben jelent meg."
+            ),
+        }],
+    }
+
+    fact = resolve_debut_release_fact(evidence, prompt)
+
+    assert fact["subject"] == "Sampleband"
+    assert fact["title"] == "Sample Album"
+    assert fact["year"] == "1984"
+
+
 def test_host_direct_fact_fallback_fails_closed_on_conflicting_debut_titles():
     prompt = "Melyik nagylemez volt az első a sampleband zenekarnak?"
     evidence = {
