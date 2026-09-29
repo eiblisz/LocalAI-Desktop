@@ -589,3 +589,73 @@ def test_strict_relation_audit_instruction_rejects_name_cooccurrence_as_support(
     system = client.messages[0]["content"]
     assert "Mere co-occurrence of the same names is not support." in system
     assert "delete that sentence rather than guessing" in system
+
+
+def test_sentence_support_gate_drops_relation_not_directly_supported():
+    authority = (
+        "AUTHORIZED EVIDENCE: Ferdinand I was Franz Joseph's uncle. "
+        "Franz Joseph became emperor in December 1848."
+    )
+
+    class GateClient:
+        def __init__(self):
+            self.calls = 0
+
+        def chat_once(self, model, messages, timeout=600.0, **kwargs):
+            self.calls += 1
+            return (
+                "S0\tDROP\t-\n"
+                "S1\tKEEP\tFranz Joseph became emperor in December 1848."
+            )
+
+    client = GateClient()
+    result = guard_grounded_answer(
+        client,
+        "qwen-test",
+        "Írj történelmi ismertetőt.",
+        (
+            "Ferdinand I was Franz Joseph's father. "
+            "Franz Joseph became emperor in December 1848."
+        ),
+        authority,
+        force_verify=True,
+        literal_authority_text=authority,
+        repair_authority_text=authority,
+        prune_unsupported_sentences=True,
+        strict_relation_audit=True,
+        temperature=0.0,
+        seed=42,
+    )
+
+    assert "father" not in result
+    assert "December 1848" in result
+    assert client.calls == 1
+
+
+def test_sentence_support_gate_requires_evidence_fragment_to_exist_in_authority():
+    authority = "AUTHORIZED EVIDENCE: Correct Author wrote Silver Story in 1912."
+
+    class GateClient:
+        def chat_once(self, model, messages, timeout=600.0, **kwargs):
+            return (
+                "S0\tKEEP\tInvented support fragment that is not in evidence.\n"
+                "S1\tKEEP\tCorrect Author wrote Silver Story in 1912."
+            )
+
+    result = guard_grounded_answer(
+        GateClient(),
+        "qwen-test",
+        "Írj kétmondatos ismertetőt.",
+        "Other Person wrote it in 1956. Correct Author wrote Silver Story in 1912.",
+        authority,
+        force_verify=True,
+        literal_authority_text=authority,
+        repair_authority_text=authority,
+        prune_unsupported_sentences=True,
+        strict_relation_audit=True,
+    )
+
+    assert "Other Person" not in result
+    assert "1956" not in result
+    assert "Correct Author" in result
+    assert "1912" in result
