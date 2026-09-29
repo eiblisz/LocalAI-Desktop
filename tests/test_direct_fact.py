@@ -379,6 +379,36 @@ def test_first_album_title_typo_can_bind_only_to_one_edit_evidence_entity():
     assert fact["title"] == "Sampleband"
 
 
+def test_first_album_title_typo_tolerates_high_similarity_entity_surface():
+    prompt = "mi volt a samplbnd elso albumanak a cime?"
+    evidence = {
+        "results": [{
+            "title": "Sampleband discography",
+            "snippet": "Sampleband released its self-titled debut album in 1984.",
+        }],
+    }
+
+    fact = resolve_debut_release_fact(evidence, prompt)
+
+    assert fact["subject"] == "Sampleband"
+    assert fact["title"] == "Sampleband"
+
+
+def test_first_album_title_transposition_tolerates_high_similarity_entity_surface():
+    prompt = "mi volt a sampelband elso albumanak a cime?"
+    evidence = {
+        "results": [{
+            "title": "Sampleband discography",
+            "snippet": "Sampleband released its self-titled debut album in 1984.",
+        }],
+    }
+
+    fact = resolve_debut_release_fact(evidence, prompt)
+
+    assert fact["subject"] == "Sampleband"
+    assert fact["title"] == "Sampleband"
+
+
 def test_first_album_title_typo_does_not_bind_to_unrelated_short_entity():
     prompt = "mi volt a sampleban elso albumanak a cime?"
     evidence = {
