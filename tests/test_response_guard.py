@@ -212,6 +212,30 @@ def test_normal_output_hygiene_removes_html_space_entities_from_prose():
     assert "Második mondat." in value
 
 
+def test_output_hygiene_decodes_general_numeric_entities_in_plain_prose():
+    constraints = build_task_constraints("Írj magyar történelmi esszét.")
+    value = normalize_user_visible_output(
+        "Jela&#x10D;i&#x107; neve. Aradn&#xE1;l.&#x20;\nVil&#xE1;gosn&#xE1;l.",
+        constraints,
+    )
+
+    assert "&#" not in value
+    assert "Jelačić" in value
+    assert "Aradnál" in value
+    assert "Világosnál" in value
+
+
+def test_output_hygiene_removes_plain_prose_markdown_hard_break_backslash():
+    constraints = build_task_constraints("Írj magyar esszét.")
+    value = normalize_user_visible_output(
+        "**Cím**\\\nKövetkező mondat.",
+        constraints,
+    )
+
+    assert "\\\n" not in value
+    assert "**Cím**\nKövetkező mondat." == value
+
+
 def test_output_hygiene_preserves_entities_when_html_is_requested():
     constraints = build_task_constraints("Adj HTML példát.")
     value = normalize_user_visible_output("<p>A&#x20;B</p>", constraints)
@@ -243,3 +267,105 @@ def test_output_hygiene_handles_nested_amp_escaped_space_entity():
     assert "x20" not in value
     assert "Első." in value
     assert "Második." in value
+
+
+def test_output_hygiene_enforces_exact_paragraph_count_without_new_facts():
+    constraints = build_task_constraints(
+        "Írj egy 10 bekezdésből álló esszét a történelemről."
+    )
+    draft = "\n\n".join(
+        f"{index}. bekezdés. Ez a meglévő tartalom második mondata."
+        for index in range(1, 15)
+    )
+
+    value = normalize_user_visible_output(draft, constraints)
+
+    blocks = [item for item in value.split("\n\n") if item.strip()]
+    assert len(blocks) == 10
+    assert "14. bekezdés." in blocks[-1]
+
+
+def test_output_hygiene_preserves_paragraph_boundary_when_space_entity_ends_line():
+    constraints = build_task_constraints(
+        "Írj egy 2 bekezdésből álló esszét a történelemről."
+    )
+    draft = "Első bekezdés.&#x20;\nMásodik bekezdés.&amp;#x20;"
+
+    value = normalize_user_visible_output(draft, constraints)
+
+    assert "&#x20;" not in value
+    assert "&amp;#x20;" not in value
+    assert len([item for item in value.split("\n\n") if item.strip()]) == 2
+
+
+def test_output_hygiene_can_split_existing_sentences_to_reach_exact_count():
+    constraints = build_task_constraints(
+        "Írj egy 3 bekezdésből álló esszét a történelemről."
+    )
+    draft = (
+        "Első mondat. Második mondat. Harmadik mondat. "
+        "Negyedik mondat. Ötödik mondat. Hatodik mondat."
+    )
+
+    value = normalize_user_visible_output(draft, constraints)
+
+    blocks = [item for item in value.split("\n\n") if item.strip()]
+    assert len(blocks) == 3
+    assert "Első mondat." in value
+    assert "Hatodik mondat." in value
+
+
+def test_heading_does_not_count_toward_exact_paragraph_contract():
+    constraints = build_task_constraints(
+        "Írj egy 10 bekezdésből álló esszét a történelemről."
+    )
+    draft = "**Történelmi esszé**\n\n" + "\n\n".join(
+        (
+            f"{index}. bekezdés első mondata. "
+            f"{index}. bekezdés második mondata."
+        )
+        for index in range(1, 10)
+    )
+
+    value = normalize_user_visible_output(draft, constraints)
+
+    blocks = [item for item in value.split("\n\n") if item.strip()]
+    assert blocks[0] == "**Történelmi esszé**"
+    assert len(blocks[1:]) == 10
+
+
+def test_exact_paragraph_contract_recognizes_single_newline_model_paragraphs():
+    constraints = build_task_constraints(
+        "Írj egy 10 bekezdésből álló esszét a történelemről."
+    )
+    draft = "**Történelmi esszé**\n" + "\n".join(
+        (
+            f"{index}. bekezdés első mondata. "
+            f"{index}. bekezdés második mondata."
+        )
+        for index in range(1, 10)
+    )
+
+    value = normalize_user_visible_output(draft, constraints)
+    blocks = [item for item in value.split("\n\n") if item.strip()]
+
+    assert blocks[0] == "**Történelmi esszé**"
+    assert len(blocks[1:]) == 10
+
+
+def test_long_grounded_path_can_skip_optional_model_fluency_audit():
+    prompt = "Írj magyarul egy hosszú történelmi esszét."
+    constraints = build_task_constraints(prompt)
+    client = RepairClient("this must not be used")
+
+    result = guard_response(
+        client,
+        "qwen-test",
+        prompt,
+        "Ez egy teljesen magyar mondat.",
+        constraints=constraints,
+        run_model_fluency_audit=False,
+    )
+
+    assert result == "Ez egy teljesen magyar mondat."
+    assert client.calls == []

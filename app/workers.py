@@ -48,6 +48,7 @@ from .grounded_factual_guard import (
     guard_grounded_answer,
 )
 from .generation_policy import (
+    LENGTH_LONG,
     SAMPLING_FACTUAL_STRICT,
     SYNTHESIS_HYBRID,
     SYNTHESIS_LOCAL,
@@ -69,7 +70,11 @@ from .language_policy import (
     response_language_matches,
 )
 from .ollama_client import OllamaClient, ollama_failure_metadata
-from .response_guard import ResponseValidationError, guard_response
+from .response_guard import (
+    ResponseValidationError,
+    guard_response,
+    normalize_user_visible_output,
+)
 from .request_semantics import (
     TASK_DIRECT_FACT,
     TASK_ENTITY_OVERVIEW,
@@ -77,6 +82,7 @@ from .request_semantics import (
     request_profile_instruction,
 )
 from .search_query_validation import validate_search_queries, validate_search_query
+from .task_constraints import task_constraints_instruction
 from .runtime_control import ExecutionBudget, ExecutionControl
 from .scheduled_task_executor import ScheduledTaskExecutor
 from .weather_tool import get_weather, weather_context_text
@@ -391,12 +397,14 @@ class ChatWebWorker(QObject):
         explicit_batch_child=False,
         output_budget=None,
         synthesis_route=None,
+        constraints=None,
     ):
         super().__init__()
         self.client = client
         self.model = model
         self.messages = [dict(message) for message in messages]
         self.original_user_prompt = str(user_prompt or "").strip()
+        self.constraints = constraints
         self.followup_resolution = resolve_contextual_followup(
             self.original_user_prompt,
             self.messages,
@@ -827,10 +835,15 @@ class ChatWebWorker(QObject):
                 self.model,
                 language_source,
                 answer,
+                constraints=self.constraints,
                 control=self.execution_control,
                 output_budget=self.output_budget,
                 trace=self.trace,
                 phase_callback=self.phase.emit,
+                run_model_fluency_audit=not (
+                    self.synthesis_route == SYNTHESIS_WEB
+                    and self.response_length == LENGTH_LONG
+                ),
             )
         except ResponseValidationError as exc:
             if self.trace is not None:
@@ -1922,6 +1935,26 @@ class ChatWebWorker(QObject):
                     ),
                 )
             self._factual_authority_text = factual_authority_text
+            literal_guard_authority_text = (
+                self.user_prompt
+                + "\n\n"
+                + (
+                    factual_authority_text
+                    if direct_factual_candidate
+                    else context_text
+                )
+            ).strip()
+            if self.trace is not None:
+                self.trace.add_metadata(
+                    factual_literal_authority_profile=(
+                        "direct_compact"
+                        if direct_factual_candidate
+                        else "full_generation_context"
+                    ),
+                    factual_literal_authority_chars=len(
+                        literal_guard_authority_text
+                    ),
+                )
             failure_text = ""
             if failed_queries:
                 failure_text = (
@@ -2156,7 +2189,15 @@ class ChatWebWorker(QObject):
                             not temporal_literal_mismatch_requires_verify
                         ),
                     )
+            long_web_semantic_audit = (
+                self.synthesis_route == SYNTHESIS_WEB
+                and self.response_length == LENGTH_LONG
+                and not direct_factual_candidate
+            )
             if self.trace is not None:
+                self.trace.add_metadata(
+                    long_web_semantic_audit=bool(long_web_semantic_audit),
+                )
                 self.trace.begin("factual_validation")
             try:
                 answer = guard_grounded_answer(
@@ -2167,20 +2208,44 @@ class ChatWebWorker(QObject):
                     self.user_prompt + "\n\n" + factual_authority_text,
                     trace=self.trace,
                     force_verify=(
-                        factual_risk_request
-                        and not has_authoritative_current_fact
-                        and (
-                            not single_pass_factual
-                            or relation_mismatch_requires_verify
-                            or creator_mismatch_requires_verify
-                            or temporal_literal_mismatch_requires_verify
-                            or bool(release_named_literal_mismatches)
+                        long_web_semantic_audit
+                        or (
+                            factual_risk_request
+                            and not has_authoritative_current_fact
+                            and (
+                                not single_pass_factual
+                                or relation_mismatch_requires_verify
+                                or creator_mismatch_requires_verify
+                                or temporal_literal_mismatch_requires_verify
+                                or bool(release_named_literal_mismatches)
+                            )
                         )
                     ),
-                    language_instruction=self._conversation_language_instruction(),
+                    literal_authority_text=literal_guard_authority_text,
+                    repair_authority_text=(
+                        context_text
+                        if long_web_semantic_audit
+                        else None
+                    ),
+                    prune_unsupported_sentences=long_web_semantic_audit,
+                    strict_relation_audit=long_web_semantic_audit,
+                    language_instruction=(
+                        self._conversation_language_instruction()
+                        + (
+                            "\n"
+                            + task_constraints_instruction(
+                                self.constraints,
+                                current_subtask=self.user_prompt,
+                            )
+                            if long_web_semantic_audit and self.constraints is not None
+                            else ""
+                        )
+                    ),
                     output_budget=self.output_budget,
-                    temperature=self.temperature,
-                    seed=self.seed,
+                    temperature=(
+                        0.0 if long_web_semantic_audit else self.temperature
+                    ),
+                    seed=(42 if long_web_semantic_audit else self.seed),
                 )
             except GroundedFactualGuardError:
                 deterministic_fallback = ""
@@ -2408,6 +2473,10 @@ class ChatWebWorker(QObject):
                     page_fetch_count=self.execution_control.budget.page_fetches,
                     repair_count=self.execution_control.budget.repairs,
                 )
+            answer = normalize_user_visible_output(
+                answer,
+                self.constraints,
+            )
             self.token.emit(answer)
             self.finished.emit()
         except Exception as exc:
@@ -2445,6 +2514,7 @@ def run_chat_web_request(
     explicit_batch_child=False,
     output_budget=None,
     synthesis_route=None,
+    constraints=None,
 ):
     """Run the existing grounded web worker synchronously and collect its answer."""
     return _run_web_worker(
@@ -2457,6 +2527,7 @@ def run_chat_web_request(
             explicit_batch_child=explicit_batch_child,
             output_budget=output_budget,
             synthesis_route=synthesis_route,
+            constraints=constraints,
         )
     )
 
@@ -2616,6 +2687,7 @@ class AdaptiveChatWorker(QObject):
                         web_kwargs.update({
                             "output_budget": self.output_budget,
                             "synthesis_route": SYNTHESIS_WEB,
+                            "constraints": self.constraints,
                         })
                     final = run_chat_web_request(
                         self.client,
@@ -2632,6 +2704,7 @@ class AdaptiveChatWorker(QObject):
                         web_kwargs.update({
                             "output_budget": self.output_budget,
                             "synthesis_route": SYNTHESIS_WEB,
+                            "constraints": self.constraints,
                         })
                     final = run_chat_web_request(
                         self.client,
@@ -2671,6 +2744,10 @@ class AdaptiveChatWorker(QObject):
                     constraints=self.constraints,
                     control=self.execution_control,
                     output_budget=self.output_budget,
+                )
+                final = normalize_user_visible_output(
+                    final,
+                    self.constraints,
                 )
 
             if self._stop_event.is_set():

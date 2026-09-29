@@ -18,7 +18,19 @@ def test_web_auto_routes_current_request_to_web_and_stable_request_local():
     assert stable[0].use_web is False
 
 
-def test_web_on_forces_stable_chat_to_web():
+def test_web_on_forces_stable_factual_chat_to_web():
+    runtime = ActionRuntime()
+
+    contracts = runtime.plan_many(
+        "Mutasd be roviden az 1848-as szabadsagharcot.",
+        force_web=True,
+    )
+
+    assert contracts[0].route == ROUTE_WEB
+    assert contracts[0].use_web is True
+
+
+def test_web_on_keeps_pure_creative_generation_local():
     runtime = ActionRuntime()
 
     contracts = runtime.plan_many(
@@ -26,8 +38,8 @@ def test_web_on_forces_stable_chat_to_web():
         force_web=True,
     )
 
-    assert contracts[0].route == ROUTE_WEB
-    assert contracts[0].use_web is True
+    assert contracts[0].route == ROUTE_CHAT
+    assert contracts[0].use_web is False
 
 
 def test_web_off_forces_explicit_search_request_to_local_chat():

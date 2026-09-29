@@ -1190,6 +1190,7 @@ class DiscordBotBridge(QObject):
         explicit_batch_child=False,
         output_budget=None,
         synthesis_route=None,
+        constraints=None,
     ):
         kwargs = {}
         if trace is not None:
@@ -1200,6 +1201,8 @@ class DiscordBotBridge(QObject):
             kwargs["output_budget"] = int(output_budget)
         if synthesis_route is not None and isinstance(self.ollama_client, OllamaClient):
             kwargs["synthesis_route"] = str(synthesis_route)
+        if constraints is not None:
+            kwargs["constraints"] = constraints
         return run_chat_web_request(
             self.ollama_client,
             self.settings.model,
@@ -1207,6 +1210,37 @@ class DiscordBotBridge(QObject):
             prompt,
             **kwargs,
         ).strip()
+
+    def _run_chat_web_bound(
+        self,
+        messages,
+        prompt,
+        *,
+        trace=None,
+        explicit_batch_child=False,
+        output_budget=None,
+        synthesis_route=None,
+        constraints=None,
+    ):
+        """Call the shared web path while preserving compatibility with test/plugin overrides."""
+        kwargs = {}
+        if trace is not None:
+            kwargs["trace"] = trace
+        if explicit_batch_child:
+            kwargs["explicit_batch_child"] = True
+        if output_budget is not None:
+            kwargs["output_budget"] = output_budget
+        if synthesis_route is not None:
+            kwargs["synthesis_route"] = synthesis_route
+        if constraints is not None:
+            kwargs["constraints"] = constraints
+        try:
+            return self._run_chat_web(messages, prompt, **kwargs)
+        except TypeError as exc:
+            if "constraints" not in str(exc):
+                raise
+            kwargs.pop("constraints", None)
+            return self._run_chat_web(messages, prompt, **kwargs)
 
     def _run_market_web(
         self,
@@ -1243,11 +1277,12 @@ class DiscordBotBridge(QObject):
             constraints=constraints,
             trace=trace,
         )
-        return self._run_chat_web(
+        return self._run_chat_web_bound(
             messages,
             prompt,
             trace=trace,
             explicit_batch_child=explicit_batch_child,
+            constraints=constraints,
         )
 
     def _crypto_market_extension(self):
@@ -1671,13 +1706,14 @@ class DiscordBotBridge(QObject):
                         explicit_batch_child=explicit_batch_child,
                     )
             else:
-                answer = self._run_chat_web(
+                answer = self._run_chat_web_bound(
                     messages,
                     prompt,
                     trace=trace,
                     explicit_batch_child=explicit_batch_child,
                     output_budget=output_budget,
                     synthesis_route=synthesis_route,
+                    constraints=constraints,
                 )
         else:
             if trace is not None:
@@ -1700,13 +1736,14 @@ class DiscordBotBridge(QObject):
                 trace.end("primary_generation", primary_generation_result="completed")
             if allow_web_fallback and answer_requires_web_fallback(prompt, answer):
                 used_web_response = True
-                answer = self._run_chat_web(
+                answer = self._run_chat_web_bound(
                     messages,
                     prompt,
                     trace=trace,
                     explicit_batch_child=explicit_batch_child,
                     output_budget=output_budget,
                     synthesis_route="WEB",
+                    constraints=constraints,
                 )
 
         if not answer:

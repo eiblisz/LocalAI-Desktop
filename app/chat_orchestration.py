@@ -130,11 +130,33 @@ def plan_chat_actions(
             window_memory=window_memory,
         )
 
+    def local_authority_resolver(unit):
+        # "conversation_local" is deliberately False for explicit other-window
+        # recall so the memory layer may retrieve cross-window context. That
+        # does NOT mean the public web is authoritative for the request.
+        # Explicit cross-window/global-memory recall must remain local even
+        # while the operator has WEB ON selected.
+        return bool(
+            conversation_local_resolver(unit)
+            or is_other_window_request(unit)
+            or is_global_memory_request(unit)
+        )
+
     contracts = action_runtime.plan_many(
         user_text,
         model_context_suffix=model_context_suffix,
-        force_web=False,
-        disable_web=mode == "OFF",
+        force_web=(
+            (lambda unit: (
+                mode == "ON"
+                and not local_authority_resolver(unit)
+            ))
+        ),
+        disable_web=(
+            (lambda unit: (
+                mode == "OFF"
+                or local_authority_resolver(unit)
+            ))
+        ),
         conversation_local=conversation_local_resolver,
         crypto_market_available=crypto_market_available,
         multi_asset_market_available=multi_asset_market_available,

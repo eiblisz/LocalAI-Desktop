@@ -6,10 +6,11 @@ checking whether its evidence includes the kind of fact the user asked for.
 """
 
 import re
+from difflib import SequenceMatcher
 
 from .question_semantics import analyze_question
 from .request_semantics import identity_lookup_subject
-from .text_normalization import canonical_match_text
+from .text_normalization import canonical_match_text, hungarian_token_matches
 
 
 def _clean(value):
@@ -123,6 +124,12 @@ def _release_subject_surface(prompt):
     """Extract the named entity in a first/debut-release question when structural."""
     raw = _clean(prompt)
     patterns = (
+        r"(?i)\b(?:mi|melyik)\s+volt\s+(?:a|az)\s+"
+        r"(?P<subject>.+?)\s+(?:els[őo]\w*|deb[uü]t\w*)\s+"
+        r"(?:album\w*|nagylemez\w*|lemez\w*)\s+(?:a\s+)?"
+        r"(?:c[ií]m\w*|neve)\b",
+        r"(?i)\b(?:what|which)\s+was\s+(?P<subject>.+?)(?:'s|\s+)"
+        r"(?:first|debut)\s+(?:studio\s+)?album(?:'s)?\s+(?:title|name)\b",
         r"(?i)\bmikor\s+(?:adta|adtak|kiadta|kiadtak)\s+(?:ki\s+)?"
         r"(?:a|az)\s+(?:els[őo]|deb[uü]t\w*)\s+[^?]{0,40}?\s+"
         r"(?:a|az)\s+(?P<subject>.+?)\s+(?:egy[uü]ttes|zenekar)\b",
@@ -138,14 +145,28 @@ def _release_subject_surface(prompt):
         # surrounding release/debut checks decide whether this surface is used.
         r"(?i)\b(?:a|az)\s+(?P<subject>[A-Za-z0-9.&'’_-]{2,}"
         r"(?:\s+[A-Za-z0-9.&'’_-]{2,}){0,4})\s+"
-        r"(?:egy[uü]ttes|zenekar)"
-        r"(?:nak|nek|n[aá]l|r[oó]l|ban|ben|b[oő]l|t[oő]l)?\b",
+        r"(?P<entity_type>(?:egy[uü]ttes|zenekar)\w*)\b",
         r"(?i)\b(?P<subject>[A-Za-z0-9.&'’_-]{2,}"
         r"(?:\s+[A-Za-z0-9.&'’_-]{2,}){0,4})\s+band\b",
     )
     for pattern in patterns:
         match = re.search(pattern, raw)
         if match:
+            entity_type = match.groupdict().get("entity_type")
+            if entity_type:
+                if (
+                    not hungarian_token_matches(
+                        entity_type,
+                        "egyuttes",
+                        profile="entity",
+                    )
+                    and not hungarian_token_matches(
+                        entity_type,
+                        "zenekar",
+                        profile="entity",
+                    )
+                ):
+                    continue
             subject = _clean(match.group("subject")).strip(" .?!,;:")
             if 2 <= len(subject) <= 120:
                 return subject
@@ -186,6 +207,30 @@ def _is_debut_release_request(prompt):
     return _debut_release_surface_supported(prompt)
 
 
+def _entity_surface_similar(left, right):
+    """Tolerate ordinary spelling noise without allowing broad entity drift."""
+    left = re.sub(r"[^a-z0-9]", "", _fold(left))
+    right = re.sub(r"[^a-z0-9]", "", _fold(right))
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+
+    shortest = min(len(left), len(right))
+    longest = max(len(left), len(right))
+    if shortest < 6:
+        return False
+
+    # Large truncations/expansions are different entities, not typos.
+    if shortest / longest < 0.72:
+        return False
+
+    # SequenceMatcher naturally tolerates substitutions, insertions,
+    # deletions and common transpositions. 0.80 keeps normal misspellings
+    # usable while rejecting short/unrelated neighbors such as Pogo/Pokogep.
+    return SequenceMatcher(None, left, right).ratio() >= 0.80
+
+
 def _subject_supported_in_text(text, subject):
     folded_text = _fold(text)
     folded_subject = _fold(subject)
@@ -193,6 +238,12 @@ def _subject_supported_in_text(text, subject):
         return False
     if re.search(r"(?<!\w)" + re.escape(folded_subject) + r"(?!\w)", folded_text):
         return True
+
+    subject_tokens = folded_subject.split()
+    if len(subject_tokens) == 1 and len(subject_tokens[0]) >= 6:
+        for token in re.findall(r"[A-Za-zÁÉÍÓÖŐÚÜŰáéíóöőúüű0-9]+", str(text or "")):
+            if _entity_surface_similar(subject_tokens[0], token):
+                return True
 
     # Entity names may be written with or without punctuation/spaces
     # (for example WASP/W.A.S.P.). Match the same alphanumeric surface
@@ -880,6 +931,15 @@ def _subject_display_surface(text, subject):
         if match:
             return _clean(match.group(0)).strip(" ,;:")
 
+    subject_tokens = folded_subject.split()
+    if len(subject_tokens) == 1 and len(subject_tokens[0]) >= 6:
+        for match in re.finditer(
+            r"[A-Za-zÁÉÍÓÖŐÚÜŰáéíóöőúüű0-9]{6,}",
+            raw,
+        ):
+            if _entity_surface_similar(subject_tokens[0], match.group(0)):
+                return match.group(0)
+
     # Punctuated compact forms such as WASP / W.A.S.P.
     raw_subject = re.sub(r"[^A-Za-z0-9]", "", str(subject or ""))
     if 2 <= len(raw_subject) <= 32 and re.fullmatch(r"[A-Za-z0-9]+", raw_subject):
@@ -949,6 +1009,31 @@ def _debut_title_candidates_from_item(item, request_text):
     for field in fields[:3]:
         for match in title_pattern.finditer(field):
             add(match.group("title"))
+
+    # Hungarian evidence commonly uses either
+    # "A Title a Band első nagylemeze" or "első nagylemeze, a Title".
+    hungarian_title_patterns = (
+        re.compile(
+            r"(?i)(?:^|[.!?]\s+)(?:a|az)?\s*"
+            r"(?P<title>[^\n.!?]{2,100}?)\s+(?:a|az)\s+"
+            r"[^\n.!?]{0,80}?\s+(?:els[őo]\w*|deb[uü]t\w*)\s+"
+            r"(?:album\w*|nagylemez\w*|lemez\w*)\b"
+        ),
+        re.compile(
+            r"(?i)\b(?:els[őo]\w*|deb[uü]t\w*)\s+"
+            r"(?:album\w*|nagylemez\w*|lemez\w*)\s*[,;:-]\s*"
+            r"(?:a|az)\s+(?P<title>[^\n.!?;,]{2,100})"
+        ),
+    )
+    for field in fields[:3]:
+        for pattern in hungarian_title_patterns:
+            for match in pattern.finditer(field):
+                candidate = re.sub(
+                    r"(?i)^(?:a|az)\s+",
+                    "",
+                    match.group("title").strip(),
+                )
+                add(candidate)
 
     # Band/artist overview pages often summarize the first releases as
     # "first two studio albums, Title A (1984) and Title B (1985)". The first

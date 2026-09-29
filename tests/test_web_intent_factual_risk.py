@@ -1,6 +1,9 @@
 import pytest
 
-from app.web_intent import is_factual_risk_request
+from app.web_intent import (
+    is_creative_or_transform_request,
+    is_factual_risk_request,
+)
 
 
 def test_factual_relation_question_about_a_poem_is_not_treated_as_creative_generation():
@@ -60,4 +63,25 @@ def test_debut_release_question_variants_are_factual_risk_independent_of_casing(
 def test_lowercase_inflected_band_first_album_selection_is_factual_risk():
     assert is_factual_risk_request(
         "melyik nagylemez volt az elso a sampleband zenekarnak?"
+    ) is True
+
+
+def test_typed_band_case_suffix_uses_shared_morphology_for_factual_risk():
+    assert is_factual_risk_request(
+        "melyik nagylemez volt az elso a sampleband zenekarnal?"
+    ) is True
+
+
+def test_writing_verb_does_not_make_factual_essay_creative():
+    assert is_creative_or_transform_request(
+        "Írj egy 10 bekezdésből álló esszét az 1848-as szabadságharcról."
+    ) is False
+
+
+def test_true_creative_and_transform_requests_remain_non_research():
+    assert is_creative_or_transform_request(
+        "Írj egy rövid verset az őszi esőről."
+    ) is True
+    assert is_creative_or_transform_request(
+        "Fogalmazd át ezt a levelet rövidebbre."
     ) is True

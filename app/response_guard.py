@@ -1,3 +1,4 @@
+import html
 import json
 import re
 from dataclasses import dataclass
@@ -1075,6 +1076,76 @@ def _splice_span_repairs(original, spans, replacements, *, user_text):
     return "".join(pieces)
 
 
+def _requested_paragraph_bounds(format_items):
+    for item in format_items:
+        canonical = str(item or "").strip().casefold()
+        ranged = re.fullmatch(r"(\d{1,2})-(\d{1,2}) paragraphs", canonical)
+        if ranged:
+            low, high = sorted((int(ranged.group(1)), int(ranged.group(2))))
+            return low, high
+        exact = re.fullmatch(r"(\d{1,2}) paragraphs", canonical)
+        if exact:
+            value = int(exact.group(1))
+            return value, value
+    return None
+
+
+def _is_heading_only_block(block):
+    """Whether a block is a standalone heading rather than a prose paragraph."""
+    value = str(block or "").strip()
+    if not value or "\n" in value:
+        return False
+    plain = re.sub(r"^(?:#{1,6}\s+|\*\*(.+)\*\*|__(.+)__)$", r"\1\2", value).strip()
+    if plain != value:
+        return bool(plain) and not re.search(r"[.!?]$", plain)
+    # Keep the heuristic narrow: short title-like lines without sentence punctuation.
+    words = re.findall(r"\w+", plain, flags=re.UNICODE)
+    return 1 <= len(words) <= 12 and not re.search(r"[.!?]$", plain)
+
+def _paragraph_blocks(value):
+    """Split model prose into logical paragraphs, including safe single newlines.
+
+    Models sometimes emit one newline between requested paragraphs. Treat a
+    single newline as a paragraph boundary only when the previous line ends a
+    sentence and the next line looks like a new prose/title start. Lowercase
+    continuation lines such as "19.\nszázad" stay in the same paragraph.
+    """
+    raw = str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not raw:
+        return []
+    raw = re.sub(
+        r"(?m)^(?P<heading>\s*(?:#{1,6}\s+.+|\*\*.+\*\*|__.+__))\n(?=\S)",
+        r"\g<heading>\n\n",
+        raw,
+    )
+    raw = re.sub(
+        r"(?<=[.!?])\n(?=(?:\*\*|__|#{1,6}\s+|[A-ZÁÉÍÓÖŐÚÜŰ]))",
+        "\n\n",
+        raw,
+    )
+    return [
+        block.strip()
+        for block in re.split(r"\n\s*\n+", raw)
+        if block.strip()
+    ]
+
+def _split_prose_block(block):
+    """Split one prose block at a sentence boundary without rewriting content."""
+    parts = [
+        part.strip()
+        for part in re.split(r"(?<=[.!?])\s+", str(block or "").strip())
+        if part.strip()
+    ]
+    if len(parts) < 2:
+        return None
+    midpoint = max(1, len(parts) // 2)
+    left = " ".join(parts[:midpoint]).strip()
+    right = " ".join(parts[midpoint:]).strip()
+    if not left or not right:
+        return None
+    return left, right
+
+
 def normalize_user_visible_output(text, constraints=None):
     """Remove nonsemantic prose artifacts and enforce safe structural bounds."""
     value = str(text or "")
@@ -1086,8 +1157,15 @@ def normalize_user_visible_output(text, constraints=None):
     formats = {item.casefold() for item in format_items}
 
     if "html" not in formats:
-        # Some models double-escape HTML whitespace entities. Match one or
-        # more nested "amp;" layers without decoding arbitrary HTML markup.
+        # A whitespace entity emitted at the physical end of a line often
+        # represents a model-generated paragraph separator. Preserve that
+        # boundary before removing ordinary inline whitespace entities.
+        value = re.sub(
+            r"&(?:amp;)*#(?:x0*20|0*32);[ \t]*(?=\r?\n|$)",
+            "\n\n",
+            value,
+            flags=re.IGNORECASE,
+        )
         value = re.sub(
             r"&(?:amp;)*#(?:x0*20|0*32);",
             " ",
@@ -1095,29 +1173,56 @@ def normalize_user_visible_output(text, constraints=None):
             flags=re.IGNORECASE,
         )
 
-    paragraph_range = None
-    for item in format_items:
-        match = re.fullmatch(r"(\d{1,2})-(\d{1,2}) paragraphs", item.casefold())
-        if match:
-            low, high = sorted((int(match.group(1)), int(match.group(2))))
-            paragraph_range = (low, high)
-            break
+        # Models can emit arbitrary numeric HTML entities in ordinary prose
+        # (for example &#x4A; inside a person's name), sometimes nested behind
+        # one or more &amp; escapes. Decode them only for non-HTML output and
+        # keep the pass bounded so malformed input cannot loop indefinitely.
+        for _ in range(3):
+            decoded = html.unescape(value)
+            if decoded == value:
+                break
+            value = decoded
 
-    # When the user explicitly asks for an essay paragraph range, exceeding
-    # the maximum is a formatting error that can be corrected without another
-    # model call or any factual rewrite: merge trailing prose blocks.
+        # A model may use a Markdown hard-break backslash even when the user
+        # requested plain prose. It is presentation syntax, not content.
+        if "markdown" not in formats:
+            value = re.sub(r"\\[ \t]*(?=\r?\n)", "", value)
+
+    paragraph_bounds = _requested_paragraph_bounds(format_items)
+
+    # Paragraph count/range is a hard formatting contract. Deterministic
+    # normalization may merge or split existing prose at sentence boundaries,
+    # but never invents new factual content or asks the model for another draft.
     structural_formats = {"html", "json", "markdown", "table", "bulleted list"}
-    if paragraph_range and not (formats & structural_formats):
-        _low, high = paragraph_range
-        blocks = [
-            block.strip()
-            for block in re.split(r"\n\s*\n+", value.strip())
-            if block.strip()
-        ]
+    if paragraph_bounds and not (formats & structural_formats):
+        low, high = paragraph_bounds
+        blocks = _paragraph_blocks(value)
+        heading_blocks = []
+        while blocks and _is_heading_only_block(blocks[0]):
+            heading_blocks.append(blocks.pop(0))
+
         while len(blocks) > high and len(blocks) >= 2:
             blocks[-2:] = [blocks[-2].rstrip() + " " + blocks[-1].lstrip()]
-        if blocks:
-            value = "\n\n".join(blocks)
+
+        # For an exact/required minimum count, split only existing multi-sentence
+        # prose. This preserves every original word and factual literal.
+        while len(blocks) < low:
+            candidate_index = None
+            candidate_split = None
+            candidate_size = 0
+            for index, block in enumerate(blocks):
+                split = _split_prose_block(block)
+                if split and len(block) > candidate_size:
+                    candidate_index = index
+                    candidate_split = split
+                    candidate_size = len(block)
+            if candidate_index is None or candidate_split is None:
+                break
+            blocks[candidate_index:candidate_index + 1] = list(candidate_split)
+
+        rebuilt = heading_blocks + blocks
+        if rebuilt:
+            value = "\n\n".join(rebuilt)
 
     return value
 
@@ -1133,6 +1238,7 @@ def guard_response(
     output_budget=None,
     trace=None,
     phase_callback=None,
+    run_model_fluency_audit=True,
 ):
     """
     Validate one final model response and perform at most one bounded repair.
@@ -1155,16 +1261,33 @@ def guard_response(
         )
 
     try:
-        fluency_audit = _run_hungarian_fluency_audit(
-            client,
-            model,
-            user_text,
-            draft,
-            constraints=constraints,
-            control=control,
-            trace=trace,
-            phase_callback=phase_callback,
-        )
+        if run_model_fluency_audit:
+            fluency_audit = _run_hungarian_fluency_audit(
+                client,
+                model,
+                user_text,
+                draft,
+                constraints=constraints,
+                control=control,
+                trace=trace,
+                phase_callback=phase_callback,
+            )
+        else:
+            fluency_audit = FluencyAuditResult()
+            if trace is not None:
+                trace.add_metadata(
+                    hungarian_fluency_audit_result="deterministic_only",
+                    fluency_audit_transport="deterministic_only",
+                    fluency_audit_degraded_reason=(
+                        "model fluency audit skipped for long grounded WEB synthesis"
+                    ),
+                    fluency_audit_evidence="[]",
+                    fluency_audit_finding_count=0,
+                    fluency_sentences_audited=0,
+                    fluency_sentences_failed=0,
+                    fluency_sentences_unresolved=0,
+                    fluency_reason_codes="",
+                )
     except Exception as exc:
         if isinstance(exc, ExecutionCancelled):
             raise

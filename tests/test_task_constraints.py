@@ -101,7 +101,8 @@ def test_paragraph_range_becomes_hard_format_constraint():
     assert "STRICT PARAGRAPH CONTRACT: 6-8 paragraphs" in instruction
     assert "must stay within that paragraph count/range" in instruction
     assert "Sources/Források/References" in instruction
-    assert "&#x20;" in instruction
+    assert "HTML whitespace entities" in instruction
+    assert "&#x20;" not in instruction
 
 
 def test_inflected_hungarian_paragraph_count_becomes_hard_constraint():

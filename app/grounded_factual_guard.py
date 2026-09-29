@@ -1,5 +1,7 @@
+import json
 import re
 
+from .generation_policy import requested_paragraph_range
 from .request_semantics import identity_lookup_subject
 from .text_normalization import (
     canonical_equal,
@@ -225,6 +227,487 @@ def _canonicalize_identity_subject_expansion(
     return cleaned
 
 
+def _remove_sentences_with_unsupported_literals(text, unsupported_literals):
+    """Preserve supported long-form prose while removing risky sentences only."""
+    normalized_literals = [
+        canonical_match_text(item)
+        for item in (unsupported_literals or ())
+        if canonical_match_text(item)
+    ]
+    if not normalized_literals:
+        return str(text or "").strip()
+
+    output_blocks = []
+    for block in re.split(r"\n\s*\n+", str(text or "").strip()):
+        block = block.strip()
+        if not block:
+            continue
+        sentences = [
+            item.strip()
+            for item in re.split(r"(?<=[.!?])\s+", block)
+            if item.strip()
+        ]
+        kept = []
+        for sentence in sentences:
+            folded = canonical_match_text(sentence)
+            if any(item in folded for item in normalized_literals):
+                continue
+            kept.append(sentence)
+        if kept:
+            output_blocks.append(" ".join(kept).strip())
+    return "\n\n".join(output_blocks).strip()
+
+def _grounded_sentence_units(text):
+    """Return prose sentences with paragraph indexes; preserve heading-only blocks."""
+    blocks = [
+        block.strip()
+        for block in re.split(r"\n\s*\n+|(?<=[.!?])\n(?=[A-ZÁÉÍÓÖŐÚÜŰ])", str(text or "").strip())
+        if block.strip()
+    ]
+    headings = []
+    units = []
+    for block_index, block in enumerate(blocks):
+        if (
+            re.fullmatch(r"(?:#{1,6}\s+.+|\*\*.+\*\*|__.+__)", block)
+            and not re.search(r"[.!?]\s*$", block)
+        ):
+            headings.append((block_index, block))
+            continue
+        parts = [
+            item.strip()
+            for item in re.split(
+                r"(?<=[.!?])\s+(?=[A-ZÁÉÍÓÖŐÚÜŰ0-9„“\"(])",
+                block,
+            )
+            if item.strip()
+        ]
+        if not parts:
+            parts = [block]
+        for sentence in parts:
+            units.append({
+                "id": len(units),
+                "block": block_index,
+                "text": sentence,
+            })
+    return blocks, headings, units
+
+
+def _evidence_reference_catalog(authority_text):
+    """Build bounded source-bound evidence units for compact verifier references."""
+    raw = str(authority_text or "").replace("\r\n", "\n").replace("\r", "\n")
+    candidates = []
+    for line in raw.splitlines():
+        clean = " ".join(line.strip().split())
+        if not clean:
+            continue
+        parts = re.split(
+            r"(?<=[.!?])\s+(?=[A-ZÁÉÍÓÖŐÚÜŰ0-9„“\"(])",
+            clean,
+        )
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+            # Keep evidence units focused enough for relation binding. Very long
+            # unpunctuated payloads are split at word boundaries.
+            while len(part) > 600:
+                cut = part.rfind(" ", 0, 600)
+                if cut < 120:
+                    cut = 600
+                candidates.append(part[:cut].strip())
+                part = part[cut:].strip()
+            if part:
+                candidates.append(part)
+
+    catalog = {}
+    seen = set()
+    for candidate in candidates:
+        normalized = canonical_match_text(candidate)
+        if not normalized or normalized in seen:
+            continue
+        prose_without_urls = re.sub(
+            r"https?://\S+",
+            " ",
+            candidate,
+            flags=re.IGNORECASE,
+        )
+        prose_without_urls = re.sub(
+            r"\[[^\]]+\]\([^\)]+\)",
+            " ",
+            prose_without_urls,
+        )
+        if len(re.findall(r"[A-Za-zÁÉÍÓÖŐÚÜŰáéíóöőúüű]{2,}", prose_without_urls)) < 4:
+            continue
+        seen.add(normalized)
+        catalog[f"E{len(catalog)}"] = candidate
+    return catalog
+
+
+def _parse_sentence_support_gate(
+    raw,
+    units,
+    authority_text,
+    *,
+    evidence_catalog=None,
+):
+    """Parse bounded KEEP/DROP judgments and verify KEEP evidence is source-bound."""
+    judgments = {}
+    unit_count = len(units)
+
+    # Preferred production protocol: JSON mode prevents verifier prose drift.
+    try:
+        parsed = json.loads(str(raw or "").strip())
+    except (TypeError, ValueError, json.JSONDecodeError):
+        parsed = None
+    if isinstance(parsed, dict) and isinstance(parsed.get("verdicts"), list):
+        for item in parsed["verdicts"]:
+            if not isinstance(item, dict):
+                return None
+            try:
+                identifier = int(item.get("s"))
+            except (TypeError, ValueError):
+                return None
+            if identifier < 0 or identifier >= unit_count or identifier in judgments:
+                return None
+            status = str(item.get("v") or "").strip().upper()
+            if status not in {"KEEP", "DROP"}:
+                return None
+            evidence = str(item.get("e") or "").strip()
+            if status == "KEEP":
+                catalog = dict(evidence_catalog or {})
+                reference_match = re.fullmatch(r"(?i)E(\d+)", evidence)
+                reference_id = f"E{int(reference_match.group(1))}" if reference_match else ""
+                evidence_text = str(catalog.get(reference_id) or "")
+                if not _evidence_fragment_supports_sentence(
+                    units[identifier]["text"],
+                    evidence_text,
+                    authority_text,
+                ):
+                    status = "DROP"
+            judgments[identifier] = status
+        if set(judgments) == set(range(unit_count)):
+            return judgments
+        return None
+    for raw_line in str(raw or "").replace("```", "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        # Small/local models sometimes render the requested tab separator
+        # literally as <TAB>, \<TAB>, or \t. Normalize those protocol-only
+        # spellings before parsing; this never touches the user-facing draft.
+        line = re.sub(
+            r"(?i)\\?<TAB>|\\t|<TAB>",
+            "|",
+            line,
+        )
+        line = re.sub(r"^[-*•]+\s*", "", line)
+        match = re.match(
+            r"^S?(\d+)\s*(?:\t|\||:|-)+\s*(KEEP|DROP)"
+            r"(?:\s*(?:\t|\||:|-)+\s*(.*))?$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            continue
+        identifier = int(match.group(1))
+        if identifier < 0 or identifier >= unit_count or identifier in judgments:
+            return None
+        status = match.group(2).upper()
+        evidence = str(match.group(3) or "").strip().strip('"“”„')
+        if status == "KEEP":
+            evidence_text = evidence
+            catalog = dict(evidence_catalog or {})
+            if catalog:
+                reference_match = re.fullmatch(r"(?i)E(\d+)", evidence)
+                if reference_match:
+                    reference_id = f"E{int(reference_match.group(1))}"
+                    evidence_text = str(catalog.get(reference_id) or "")
+                elif re.search(r"(?i)\bE\d+\b", evidence):
+                    # Production protocol permits exactly one evidence id. Do
+                    # not combine unrelated evidence units to manufacture a
+                    # relation from co-occurring facts.
+                    evidence_text = ""
+            if not _evidence_fragment_supports_sentence(
+                units[identifier]["text"],
+                evidence_text,
+                authority_text,
+            ):
+                status = "DROP"
+        judgments[identifier] = status
+    if set(judgments) != set(range(unit_count)):
+        return None
+    return judgments
+
+
+def _apply_sentence_support_gate(text, judgments):
+    blocks, headings, units = _grounded_sentence_units(text)
+    if not units:
+        return str(text or "").strip()
+    kept_by_block = {}
+    for unit in units:
+        if judgments.get(unit["id"]) == "KEEP":
+            kept_by_block.setdefault(unit["block"], []).append(unit["text"])
+    heading_map = {index: value for index, value in headings}
+    rebuilt = []
+    for index, _block in enumerate(blocks):
+        if index in heading_map:
+            rebuilt.append(heading_map[index])
+            continue
+        sentences = kept_by_block.get(index) or []
+        if sentences:
+            rebuilt.append(" ".join(sentences).strip())
+    return "\n\n".join(rebuilt).strip()
+
+
+def _grounded_gate_shape(text):
+    blocks, headings, units = _grounded_sentence_units(text)
+    heading_indexes = {index for index, _value in headings}
+    prose_blocks = sum(
+        1
+        for index, _block in enumerate(blocks)
+        if index not in heading_indexes
+    )
+    return {
+        "sentence_count": len(units),
+        "prose_blocks": prose_blocks,
+        "heading_count": len(headings),
+    }
+
+
+def _grounded_gate_result_is_sufficient(original, gated, user_prompt):
+    """Reject structurally collapsed audit output before it becomes user-visible."""
+    if not str(gated or "").strip():
+        return False
+
+    original_shape = _grounded_gate_shape(original)
+    gated_shape = _grounded_gate_shape(gated)
+    if gated_shape["sentence_count"] < 1 or gated_shape["prose_blocks"] < 1:
+        return False
+
+    paragraph_range = requested_paragraph_range(user_prompt)
+    if paragraph_range:
+        low, _high = paragraph_range
+        # Response normalization may split already-supported multi-sentence
+        # prose into the requested paragraph count without inventing facts.
+        # Require enough surviving factual sentence units to make that
+        # deterministic normalization possible; headings alone never qualify.
+        if gated_shape["sentence_count"] < int(low):
+            return False
+
+    # For ordinary long-form prose without an explicit paragraph contract, do
+    # not accept a verifier result that stripped almost the entire draft.
+    original_sentences = int(original_shape["sentence_count"])
+    if original_sentences >= 8:
+        minimum_sentences = max(3, (original_sentences + 3) // 4)
+        if gated_shape["sentence_count"] < minimum_sentences:
+            return False
+
+    return True
+
+
+_RELATION_MARKER_GROUPS = {
+    "exclusive": ("only", "sole", "exclusively", "egyetlen", "egyeduli", "kizarolag", "einzig", "ausschliesslich"),
+    "first": ("first", "earliest", "elso", "legkorabbi", "erste", "fruheste"),
+    "last": ("last", "final", "latest", "utolso", "vegso", "legkesobbi", "letzte", "endgultig"),
+    "father": ("father", "apja", "apa", "vater"),
+    "mother": ("mother", "anyja", "anya", "mutter"),
+    "uncle": ("uncle", "nagybacsi", "nagybáty", "onkel"),
+    "aunt": ("aunt", "nagyneni", "nagynéni", "tante"),
+    "son": ("son", "fia", "fiú", "sohn"),
+    "daughter": ("daughter", "lanya", "lánya", "tochter"),
+    "victory": ("victory", "won", "gyozelem", "gyozott", "sieg", "gewann"),
+    "defeat": ("defeat", "lost", "vereseg", "vesztett", "niederlage", "verlor"),
+    "surrender": ("surrender", "capitulat", "letette a fegyvert", "fegyverletetel", "kapitul", "ergab"),
+    "leader": ("leader", "led", "vezeto", "vezette", "iranyitotta", "fuhrte"),
+    "commander": ("commander", "commanded", "parancsnok", "parancsnoka", "befehlshaber"),
+    "ally": ("ally", "allied", "szovetseges", "verbundet"),
+    "support": ("support", "supported", "tamogat", "unterstutz"),
+    "intervention": ("interven", "intervention", "beavatkoz", "intervention"),
+    "ended": ("ended", "marked the end", "veget jelent", "vege lett", "endete", "beendete"),
+    "caused": ("caused", "resulted in", "led to", "okoz", "eredmenyez", "vezetett", "fuhrte zu"),
+    "basis": ("basis for", "foundation for", "alapja", "alapjava", "grundlage"),
+    "speech": ("speech", "speeches", "beszed", "beszedei", "szonoklat", "rede"),
+    "authorship": ("wrote", "written by", "author", "irta", "szerzo", "verfasste", "autor"),
+    "majority": ("majority", "most of", "tobbseg", "mehrheit"),
+    "representation": ("represent", "represented", "kepvisel", "vertrat", "vertreten"),
+    "power_transfer": ("took power", "seized power", "atvette a hatalmat", "machtubernahme", "macht ubernahm"),
+    "month_january": ("january", "januar", "januar", "januar"),
+    "month_february": ("february", "februar", "februar"),
+    "month_march": ("march", "marcius", "marz", "maerz"),
+    "month_april": ("april", "aprilis"),
+    "month_may": ("may", "majus", "mai"),
+    "month_june": ("june", "junius", "juni"),
+    "month_july": ("july", "julius", "juli"),
+    "month_august": ("august", "augusztus"),
+    "month_september": ("september", "szeptember"),
+    "month_october": ("october", "oktober"),
+    "month_november": ("november",),
+    "month_december": ("december",),
+}
+
+
+def _relation_marker_classes(text):
+    folded = canonical_match_text(text)
+    found = set()
+    for relation, markers in _RELATION_MARKER_GROUPS.items():
+        if any(canonical_match_text(marker) in folded for marker in markers):
+            found.add(relation)
+    return found
+
+
+def _strict_numeric_literals(text):
+    value = str(text or "")
+    patterns = (
+        r"(?<!\d)(?:1[0-9]{3}|20[0-9]{2})(?!\d)",
+        r"\b\d{4}-\d{2}-\d{2}\b",
+        r"\b\d{1,2}[./]\d{1,2}[./](?:19|20)\d{2}\b",
+        r"(?<!\w)[$€£]\s*\d+(?:[.,]\d+)?(?:\s*(?:usd|eur|gbp|huf))?",
+        r"\b\d+(?:[.,]\d+)?\s*(?:usd|eur|gbp|huf|btc|eth|%)\b",
+        r"(?<![A-Za-z0-9])v?\d+\.\d+(?:\.\d+){0,2}(?:[-+][0-9A-Za-z.-]+)?(?![A-Za-z0-9])",
+    )
+    result = []
+    for pattern in patterns:
+        result.extend(match.group(0).rstrip(".,;:") for match in re.finditer(pattern, value, flags=re.IGNORECASE))
+    return tuple(dict.fromkeys(result))
+
+
+def _evidence_fragment_supports_sentence(sentence, evidence, authority_text):
+    evidence_text = str(evidence or "").strip()
+    normalized_evidence = canonical_match_text(evidence_text)
+    authority = canonical_match_text(authority_text)
+
+    if len(normalized_evidence) < 16 or normalized_evidence not in authority:
+        return False
+
+    # Source URLs or a bibliography row are metadata, not factual evidence.
+    prose_without_urls = re.sub(r"https?://\S+", " ", evidence_text, flags=re.IGNORECASE)
+    prose_without_urls = re.sub(r"\[[^\]]+\]\([^\)]+\)", " ", prose_without_urls)
+    if len(re.findall(r"[A-Za-zÁÉÍÓÖŐÚÜŰáéíóöőúüű]{2,}", prose_without_urls)) < 4:
+        return False
+
+    # Keep fragments focused enough that an unrelated relation elsewhere in a
+    # whole source dump cannot certify the current sentence.
+    if len(evidence_text) > 700:
+        return False
+
+    for literal in _strict_numeric_literals(sentence):
+        if canonical_match_text(literal) not in normalized_evidence:
+            return False
+
+    # High-risk factual relations require the evidence fragment to explicitly
+    # state the same relation class. This remains entity-agnostic and supports
+    # Hungarian/English/German surface forms.
+    sentence_relations = _relation_marker_classes(sentence)
+    evidence_relations = _relation_marker_classes(evidence_text)
+    if not sentence_relations.issubset(evidence_relations):
+        return False
+
+    return True
+
+
+def _sentence_support_audit(
+    client,
+    model,
+    user_prompt,
+    draft,
+    authority_text,
+    *,
+    output_budget=None,
+    temperature=None,
+    seed=None,
+):
+    """Gate long-form sentences against exact evidence fragments without rewriting."""
+    _blocks, _headings, units = _grounded_sentence_units(draft)
+    if not units:
+        return None, None
+    sentence_payload = "\n".join(
+        f"S{unit['id']}: {unit['text']}"
+        for unit in units
+    )
+    evidence_catalog = _evidence_reference_catalog(authority_text)
+    if not evidence_catalog:
+        return None, None
+    evidence_payload = "\n".join(
+        f"{reference_id}: {fragment}"
+        for reference_id, fragment in evidence_catalog.items()
+    )
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Audit each sentence independently against ONLY the numbered evidence "
+                "references supplied below. Return ONLY one JSON object with key verdicts. "
+                "Each verdict must contain integer s, string v (KEEP or DROP), and string e "
+                "(one E-number for KEEP, or - for DROP). Include exactly one verdict for "
+                "every supplied sentence id. Never copy evidence text. KEEP only when that "
+                "single evidence unit directly supports every factual relation in the sentence. "
+                "Mere co-occurrence of the same names is not support. Matching names or dates "
+                "alone is not enough. DROP claims whose chronology, kinship, leadership, "
+                "authorship, causation, institutional role, quantity, first/last status, or "
+                "other relation is not directly supported. If support is missing, delete that "
+                "sentence rather than guessing. For claims involving only/first/last/final "
+                "status, family roles, leadership or command, alliance or support, "
+                "intervention, victory/defeat/surrender, causation, institutional role, or an "
+                "asserted ending, the referenced evidence unit must explicitly state that same "
+                "relation. Do not rewrite sentences and return no commentary."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"USER REQUEST (NOT EVIDENCE):\n{user_prompt}\n\n"
+                f"NUMBERED AUTHORIZED EVIDENCE:\n{evidence_payload}\n\n"
+                f"SENTENCES TO AUDIT:\n{sentence_payload}"
+            ),
+        },
+    ]
+    # The host owns the evidence text; the model emits only compact E<n>
+    # references. This keeps long-form verification bounded without weakening
+    # source binding or raising the output-token ceiling.
+    audit_output_budget = min(
+        1024,
+        max(384, min(int(output_budget or 768), 96 + (len(units) * 24))),
+    )
+    kwargs = {
+        "model": model,
+        "messages": messages,
+        "num_predict": audit_output_budget,
+        "response_format": "json",
+        "call_phase": "factual_sentence_support_audit",
+    }
+    if temperature is not None:
+        kwargs["temperature"] = float(temperature)
+    if seed is not None:
+        kwargs["seed"] = int(seed)
+    while True:
+        try:
+            raw = client.chat_once(**kwargs).strip()
+            break
+        except TypeError as exc:
+            unsupported = next(
+                (
+                    name
+                    for name in (
+                        "num_predict", "temperature", "seed",
+                        "response_format", "call_phase",
+                    )
+                    if name in str(exc) and name in kwargs
+                ),
+                "",
+            )
+            if not unsupported:
+                raise
+            kwargs.pop(unsupported)
+    judgments = _parse_sentence_support_gate(
+        raw,
+        units,
+        authority_text,
+        evidence_catalog=evidence_catalog,
+    )
+    if judgments is None:
+        return None, raw
+    return _apply_sentence_support_gate(draft, judgments), raw
+
 def guard_grounded_answer(
     client,
     model,
@@ -234,13 +717,19 @@ def guard_grounded_answer(
     *,
     trace=None,
     force_verify=False,
+    literal_authority_text=None,
+    repair_authority_text=None,
+    prune_unsupported_sentences=False,
+    strict_relation_audit=False,
     language_instruction="",
     output_budget=None,
     temperature=None,
     seed=None,
 ):
     draft = _collapse_adjacent_proper_name_repetition(str(answer or "").strip())
-    unsupported = unsupported_grounded_literals(draft, authority_text)
+    literal_authority = str(literal_authority_text or authority_text or "")
+    repair_authority = str(repair_authority_text or authority_text or "")
+    unsupported = unsupported_grounded_literals(draft, literal_authority)
     if trace is not None:
         trace.add_metadata(
             factual_guard_force_verify=bool(force_verify),
@@ -259,12 +748,114 @@ def guard_grounded_answer(
         )
         if canonicalized != draft:
             draft = canonicalized
-            unsupported = unsupported_grounded_literals(draft, authority_text)
+            unsupported = unsupported_grounded_literals(draft, literal_authority)
     if not unsupported and not force_verify:
         return draft
 
+    if unsupported and prune_unsupported_sentences:
+        pruned_literals = unsupported
+        pruned = _remove_sentences_with_unsupported_literals(
+            draft,
+            unsupported,
+        )
+        remaining_after_prune = unsupported_grounded_literals(
+            pruned,
+            literal_authority,
+        )
+        if pruned and not remaining_after_prune:
+            draft = pruned
+            unsupported = ()
+            if trace is not None:
+                trace.add_metadata(
+                    factual_guard_repair_status=(
+                        "deterministic_prune_pending_semantic_audit"
+                        if force_verify
+                        else "deterministic_prune"
+                    ),
+                    factual_guard_pruned_unsupported_literals=", ".join(
+                        pruned_literals[:6]
+                    ),
+                    factual_guard_remaining_unsupported_literals="",
+                    factual_guard_remaining_literals="",
+                )
+            if not force_verify:
+                return draft
+
+    audit_raw = None
+    if strict_relation_audit:
+        if trace is not None:
+            trace.begin("factual_sentence_support_audit")
+        gated, audit_raw = _sentence_support_audit(
+            client,
+            model,
+            user_prompt,
+            draft,
+            repair_authority,
+            output_budget=output_budget,
+            temperature=temperature,
+            seed=seed,
+        )
+        if trace is not None:
+            trace.end(
+                "factual_sentence_support_audit",
+                factual_sentence_support_audit=(
+                    "pass" if gated else "fallback_to_repair"
+                ),
+            )
+        if trace is not None:
+            original_shape = _grounded_gate_shape(draft)
+            gated_shape = _grounded_gate_shape(gated or "")
+            trace.add_metadata(
+                factual_sentence_units_input=original_shape["sentence_count"],
+                factual_sentence_units_kept=gated_shape["sentence_count"],
+                factual_sentence_prose_blocks_kept=gated_shape["prose_blocks"],
+            )
+        if gated and _grounded_gate_result_is_sufficient(
+            draft,
+            gated,
+            user_prompt,
+        ):
+            gated_remaining = unsupported_grounded_literals(
+                gated,
+                literal_authority,
+            )
+            if gated_remaining and prune_unsupported_sentences:
+                gated = _remove_sentences_with_unsupported_literals(
+                    gated,
+                    gated_remaining,
+                )
+                gated_remaining = unsupported_grounded_literals(
+                    gated,
+                    literal_authority,
+                )
+            if gated and not gated_remaining:
+                if trace is not None:
+                    trace.add_metadata(
+                        factual_guard_repair_status="pass_sentence_support_gate",
+                        factual_guard_remaining_unsupported_literals="",
+                        factual_guard_remaining_literals="",
+                    )
+                return gated
+
     if trace is not None:
         trace.begin("factual_guard_repair")
+
+    paragraph_contract = ""
+    requested_paragraphs = requested_paragraph_range(user_prompt)
+    if requested_paragraphs:
+        low, high = requested_paragraphs
+        if low == high:
+            paragraph_contract = (
+                f" Preserve exactly {low} substantive prose paragraphs. "
+                "Headings are optional and do not count as paragraphs; never replace "
+                "requested prose with a heading-only outline."
+            )
+        else:
+            paragraph_contract = (
+                f" Preserve between {low} and {high} substantive prose paragraphs. "
+                "Headings are optional and do not count as paragraphs; never replace "
+                "requested prose with a heading-only outline."
+            )
 
     repair_kwargs = {
         "model": model,
@@ -297,6 +888,20 @@ def guard_grounded_answer(
                     "answer language rather than inventing a new ordering. "
                     "Do not add any name, date, number, price, version, URL, or factual claim "
                     "that is absent from the authorized evidence or user request. "
+                    "Do not expose verification protocol, sentence IDs, KEEP/DROP labels, "
+                    "audit commentary, or reasoning about whether the evidence supports the draft. "
+                    "Return only the user-facing repaired answer. "
+                    + (
+                        " For long-form factual synthesis, audit every sentence relation, not only "
+                        "its names and dates. KEEP a sentence only when the authorized evidence "
+                        "directly supports the relation it asserts. Mere co-occurrence of the same "
+                        "names is not support. Do not infer military or political leadership, "
+                        "chronology, causation, first/last/superlative status, institutional roles, "
+                        "quantities, or responsibility from nearby evidence. If an exact relation "
+                        "is not supported, delete that sentence rather than guessing or softening it."
+                        if strict_relation_audit else ""
+                    )
+                    + paragraph_contract
                     + (" " + str(language_instruction).strip()
                        if str(language_instruction or "").strip() else "")
                     + " Return only the repaired answer."
@@ -306,18 +911,31 @@ def guard_grounded_answer(
                 "role": "user",
                 "content": (
                     f"USER REQUEST:\n{user_prompt}\n\n"
-                    f"AUTHORIZED EVIDENCE:\n{authority_text}\n\n"
+                    f"AUTHORIZED EVIDENCE:\n{repair_authority}\n\n"
                     f"DRAFT ANSWER:\n{draft}"
                 ),
             },
         ],
     }
+    repair_kwargs["call_phase"] = "factual_guard_repair"
     if output_budget is not None:
         repair_kwargs["num_predict"] = int(output_budget)
     if temperature is not None:
         repair_kwargs["temperature"] = float(temperature)
     if seed is not None:
         repair_kwargs["seed"] = int(seed)
+    # A malformed sentence-audit response is internal protocol output, never
+    # a candidate user answer. The old one-call fallback reused that raw text as
+    # the repaired answer, which could leak S0/KEEP rows or audit commentary.
+    # On protocol failure, run the normal grounded repair as a separate bounded
+    # model call instead.
+    if trace is not None and audit_raw is not None:
+        trace.add_metadata(
+            factual_sentence_support_audit_protocol=(
+                "malformed_fallback_to_grounded_repair"
+            ),
+            factual_sentence_support_audit_raw_reused=False,
+        )
     while True:
         try:
             repair = client.chat_once(**repair_kwargs).strip()
@@ -326,7 +944,7 @@ def guard_grounded_answer(
             unsupported = next(
                 (
                     name
-                    for name in ("num_predict", "temperature", "seed")
+                    for name in ("num_predict", "temperature", "seed", "call_phase")
                     if name in str(exc) and name in repair_kwargs
                 ),
                 "",
@@ -344,7 +962,7 @@ def guard_grounded_answer(
         )
 
     repair = _collapse_adjacent_proper_name_repetition(repair)
-    remaining = unsupported_grounded_literals(repair, authority_text)
+    remaining = unsupported_grounded_literals(repair, literal_authority)
     if trace is not None:
         trace.add_metadata(
             factual_guard_remaining_unsupported_literals=", ".join(remaining[:6]),
@@ -354,17 +972,43 @@ def guard_grounded_answer(
         sanitized = _strip_unsupported_source_attributions(repair, remaining)
         sanitized_remaining = unsupported_grounded_literals(
             sanitized,
-            authority_text,
+            literal_authority,
         )
         if sanitized and not sanitized_remaining:
+            repair = sanitized
+            remaining = ()
             if trace is not None:
                 trace.add_metadata(
-                    factual_guard_repair_status="pass_after_source_cleanup",
+                    factual_guard_repair_status="source_cleanup_pending_semantic_audit",
                     factual_guard_remaining_unsupported_literals="",
                     factual_guard_remaining_literals="",
                 )
-            return sanitized
-        remaining = sanitized_remaining or remaining
+        else:
+            remaining = sanitized_remaining or remaining
+            repair = sanitized if sanitized else repair
+
+    if remaining and prune_unsupported_sentences:
+        post_pruned = _remove_sentences_with_unsupported_literals(
+            repair,
+            remaining,
+        )
+        post_pruned_remaining = unsupported_grounded_literals(
+            post_pruned,
+            literal_authority,
+        )
+        if post_pruned and not post_pruned_remaining:
+            post_repair_pruned_literals = remaining
+            repair = post_pruned
+            remaining = ()
+            if trace is not None:
+                trace.add_metadata(
+                    factual_guard_repair_status="post_repair_prune_pending_semantic_audit",
+                    factual_guard_post_repair_pruned_literals=", ".join(
+                        post_repair_pruned_literals[:6]
+                    ),
+                    factual_guard_remaining_unsupported_literals="",
+                    factual_guard_remaining_literals="",
+                )
 
     if remaining:
         if trace is not None:
@@ -377,6 +1021,83 @@ def guard_grounded_answer(
             "Grounded answer still contains unsupported factual literals: "
             + ", ".join(remaining[:6])
         )
+
+    # A repair is a new factual draft. For strict long-form grounding it may
+    # not bypass the relation gate merely because its names/dates are literal-
+    # safe. Re-audit the repaired prose once and expose only the source-bound
+    # sentences. If the protocol is malformed again, fail closed instead of
+    # returning semantically unchecked repair text.
+    if strict_relation_audit:
+        if trace is not None:
+            trace.begin("factual_post_repair_sentence_support_audit")
+        post_gated, post_audit_raw = _sentence_support_audit(
+            client,
+            model,
+            user_prompt,
+            repair,
+            repair_authority,
+            output_budget=output_budget,
+            temperature=temperature,
+            seed=seed,
+        )
+        if trace is not None:
+            trace.end(
+                "factual_post_repair_sentence_support_audit",
+                factual_post_repair_sentence_support_audit=(
+                    "pass" if post_gated else "fail_closed"
+                ),
+            )
+        if trace is not None:
+            repair_shape = _grounded_gate_shape(repair)
+            post_shape = _grounded_gate_shape(post_gated or "")
+            trace.add_metadata(
+                factual_post_repair_sentence_units_input=repair_shape["sentence_count"],
+                factual_post_repair_sentence_units_kept=post_shape["sentence_count"],
+                factual_post_repair_prose_blocks_kept=post_shape["prose_blocks"],
+            )
+        if (
+            not post_gated
+            or not _grounded_gate_result_is_sufficient(
+                repair,
+                post_gated,
+                user_prompt,
+            )
+        ):
+            if trace is not None:
+                trace.add_metadata(
+                    factual_guard_repair_status="post_repair_semantic_audit_failed",
+                    factual_post_repair_audit_raw_present=bool(post_audit_raw),
+                )
+            raise GroundedFactualGuardError(
+                "Grounded factual repair could not be semantically verified "
+                "without collapsing the requested answer structure."
+            )
+        post_remaining = unsupported_grounded_literals(
+            post_gated,
+            literal_authority,
+        )
+        if post_remaining and prune_unsupported_sentences:
+            post_gated = _remove_sentences_with_unsupported_literals(
+                post_gated,
+                post_remaining,
+            )
+            post_remaining = unsupported_grounded_literals(
+                post_gated,
+                literal_authority,
+            )
+        if not post_gated or post_remaining:
+            raise GroundedFactualGuardError(
+                "Grounded factual repair failed post-repair verification."
+            )
+        repair = post_gated
+        if trace is not None:
+            trace.add_metadata(
+                factual_guard_repair_status="pass_after_post_repair_semantic_audit",
+                factual_guard_remaining_unsupported_literals="",
+                factual_guard_remaining_literals="",
+            )
+        return repair
+
     if trace is not None:
         trace.add_metadata(
             factual_guard_repair_status="pass",

@@ -13,13 +13,13 @@ def test_common_orchestrator_preserves_web_modes():
     prompt = "Mikor írta Nimbus Szerző a Csillag Történetét?"
 
     auto = plan_chat_actions(runtime, prompt, web_mode="AUTO")
-    on = plan_chat_actions(runtime, "Magyarázd el röviden a TCP-t.", web_mode="ON")
+    on = plan_chat_actions(runtime, "Mutasd be röviden az 1848-as szabadságharcot.", web_mode="ON")
     off = plan_chat_actions(runtime, prompt, web_mode="OFF")
 
     assert auto[0].route == ROUTE_WEB
     assert auto[0].use_web is True
-    assert on[0].route == ROUTE_CHAT
-    assert on[0].use_web is False
+    assert on[0].route == ROUTE_WEB
+    assert on[0].use_web is True
     assert off[0].route == ROUTE_CHAT
     assert off[0].use_web is False
 
@@ -81,6 +81,35 @@ def test_current_window_recall_stays_local_with_web_on():
     assert contracts[0].route == ROUTE_CHAT
     assert contracts[0].use_web is False
     assert contracts[0].conversation_local is True
+
+
+def test_other_window_recall_stays_local_with_web_on():
+    prompt = "Mi volt a másik ablakban a tesztprojekt kódneve?"
+
+    contracts = plan_chat_actions(
+        ActionRuntime(),
+        prompt,
+        web_mode="ON",
+    )
+
+    assert contracts[0].route == ROUTE_CHAT
+    assert contracts[0].use_web is False
+    # Keep this False so the memory layer can request cross-window context.
+    assert contracts[0].conversation_local is False
+
+
+def test_explicit_global_memory_recall_stays_local_with_web_on():
+    prompt = "Mi van a globális memóriában a projektemről?"
+
+    contracts = plan_chat_actions(
+        ActionRuntime(),
+        prompt,
+        web_mode="ON",
+    )
+
+    assert contracts[0].route == ROUTE_CHAT
+    assert contracts[0].use_web is False
+    assert contracts[0].conversation_local is False
 
 
 def test_memory_architecture_feature_explanation_is_not_conversation_recall():
@@ -188,6 +217,42 @@ def test_mixed_batch_routes_recall_locally_and_fresh_query_to_web():
     assert [contract.conversation_local for contract in contracts] == [True, False]
 
 
+def test_mixed_manual_test_batch_keeps_memory_and_web_children_isolated():
+    prompt = (
+        "mi volt az elso nagylemeze a sampleband zenekarnak?\\\n"
+        "mi volt egy masik ablakban a tesztprojekt kodneve?\n"
+        "mi volt a metalband elso albumanak a cime?\n"
+        "irj egy 10 bekezdesbol allo esszet egy tortenelmi esemenyrol"
+    )
+
+    resolution = resolve_contextual_followup(prompt, [])
+    contracts = plan_chat_actions(
+        ActionRuntime(),
+        resolution.resolved_intent,
+        web_mode="ON",
+    )
+
+    assert len(contracts) == 4
+    assert [contract.route for contract in contracts] == [
+        ROUTE_WEB,
+        ROUTE_CHAT,
+        ROUTE_WEB,
+        ROUTE_WEB,
+    ]
+    assert [contract.use_web for contract in contracts] == [
+        True,
+        False,
+        True,
+        True,
+    ]
+    assert contracts[1].conversation_local is False
+    assert all(contract.explicit_batch_child for contract in contracts)
+    assert [contract.constraints.parent_intent for contract in contracts] == [
+        contract.prompt for contract in contracts
+    ]
+    assert "10 paragraphs" in contracts[3].constraints.format_constraints
+
+
 def test_invalid_mode_normalizes_to_auto():
     assert normalize_web_mode("weird") == "AUTO"
 
@@ -224,3 +289,39 @@ def test_multiline_questions_survive_followup_resolution_and_plan_independently(
         ("temporal", "formation"),
     ]
     assert profiles[1].premise_check_required is True
+
+
+def test_web_on_routes_external_factual_essay_to_grounded_web():
+    contracts = plan_chat_actions(
+        ActionRuntime(),
+        "irj egy 10 bekezdesbol allo esszet a magyar 1848-as szabadsagharcrol",
+        web_mode="ON",
+    )
+
+    assert contracts[0].route == ROUTE_WEB
+    assert contracts[0].use_web is True
+    assert contracts[0].routing_reason == "web_on"
+    assert contracts[0].constraints.response_length == "long"
+    assert contracts[0].runtime_output_budget == 2048
+
+
+def test_web_on_keeps_true_creative_generation_local():
+    contracts = plan_chat_actions(
+        ActionRuntime(),
+        "Írj egy rövid verset az őszi esőről.",
+        web_mode="ON",
+    )
+
+    assert contracts[0].route == ROUTE_CHAT
+    assert contracts[0].use_web is False
+
+
+def test_explicit_web_request_can_still_augment_creative_work():
+    contracts = plan_chat_actions(
+        ActionRuntime(),
+        "Keress rá az 1848-as eseményekre, majd írj róluk egy verset.",
+        web_mode="ON",
+    )
+
+    assert contracts[0].route == ROUTE_WEB
+    assert contracts[0].use_web is True

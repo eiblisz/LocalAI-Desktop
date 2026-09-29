@@ -357,6 +357,70 @@ def test_debut_release_evidence_acceptance_is_case_and_wording_invariant(prompt)
 
 
 
+def test_first_album_title_question_without_entity_type_builds_bound_query():
+    prompt = "mi volt a sampleband elso albumanak a cime?"
+    query, strategy = derive_premise_neutral_query(prompt, "selection")
+
+    assert query == "sampleband debut first album discography"
+    assert strategy == "premise_neutral_entity_release_relation"
+
+
+def test_first_album_title_typo_can_bind_only_to_one_edit_evidence_entity():
+    prompt = "mi volt a sampleban elso albumanak a cime?"
+    evidence = {
+        "results": [{
+            "title": "Sampleband discography",
+            "snippet": "Sampleband released its self-titled debut album in 1984.",
+        }],
+    }
+
+    fact = resolve_debut_release_fact(evidence, prompt)
+    assert fact["subject"] == "Sampleband"
+    assert fact["title"] == "Sampleband"
+
+
+def test_first_album_title_typo_tolerates_high_similarity_entity_surface():
+    prompt = "mi volt a samplbnd elso albumanak a cime?"
+    evidence = {
+        "results": [{
+            "title": "Sampleband discography",
+            "snippet": "Sampleband released its self-titled debut album in 1984.",
+        }],
+    }
+
+    fact = resolve_debut_release_fact(evidence, prompt)
+
+    assert fact["subject"] == "Sampleband"
+    assert fact["title"] == "Sampleband"
+
+
+def test_first_album_title_transposition_tolerates_high_similarity_entity_surface():
+    prompt = "mi volt a sampelband elso albumanak a cime?"
+    evidence = {
+        "results": [{
+            "title": "Sampleband discography",
+            "snippet": "Sampleband released its self-titled debut album in 1984.",
+        }],
+    }
+
+    fact = resolve_debut_release_fact(evidence, prompt)
+
+    assert fact["subject"] == "Sampleband"
+    assert fact["title"] == "Sampleband"
+
+
+def test_first_album_title_typo_does_not_bind_to_unrelated_short_entity():
+    prompt = "mi volt a sampleban elso albumanak a cime?"
+    evidence = {
+        "results": [{
+            "title": "Sam discography",
+            "snippet": "Sam released its self-titled debut album in 1984.",
+        }],
+    }
+
+    assert resolve_debut_release_fact(evidence, prompt) == {}
+
+
 def test_first_album_selection_builds_premise_neutral_entity_query():
     prompt = "Melyik nagylemez volt az első a sampleband zenekarnak?"
     query, strategy = derive_premise_neutral_query(prompt, "selection")
@@ -444,6 +508,25 @@ def test_host_resolves_self_titled_debut_selection_from_bound_evidence():
     assert "első nagylemeze" in answer
     assert "W.A.S.P" in answer
     assert "1984" in answer
+
+
+def test_host_resolves_hungarian_first_album_title_sentence():
+    prompt = "mi volt a sampleband elso albumanak a cime?"
+    evidence = {
+        "results": [{
+            "title": "Sampleband diszkográfia",
+            "snippet": (
+                "A Sample Album a Sampleband első nagylemeze, "
+                "1984-ben jelent meg."
+            ),
+        }],
+    }
+
+    fact = resolve_debut_release_fact(evidence, prompt)
+
+    assert fact["subject"] == "Sampleband"
+    assert fact["title"] == "Sample Album"
+    assert fact["year"] == "1984"
 
 
 def test_host_direct_fact_fallback_fails_closed_on_conflicting_debut_titles():

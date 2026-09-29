@@ -6,7 +6,11 @@ from .internal_authority import internal_project_authority_reason
 from .memory_extractor import is_explicit_memory_request
 from .question_semantics import analyze_question
 from .request_semantics import is_entity_identity_question
-from .text_normalization import canonical_match_text
+from .text_normalization import (
+    canonical_contains_inflected,
+    canonical_match_text,
+    hungarian_token_matches,
+)
 
 
 ACTION_MEMORY_WRITE = "memory_write"
@@ -132,14 +136,22 @@ def is_factual_risk_request(text):
     # Explicit entity-type grammar is authoritative even when the user types
     # the entity in lowercase. Casing must not decide whether a concrete
     # relation question receives factual-risk verification.
-    typed_entity = bool(
-        re.search(
-            r"(?i)\b(?:a|az)\s+[A-Za-z0-9.&'’_-]{2,}"
-            r"(?:\s+[A-Za-z0-9.&'’_-]{2,}){0,3}\s+"
-            r"(?:egy[uü]ttes|zenekar)"
-            r"(?:nak|nek|n[aá]l|r[oó]l|ban|ben|b[oő]l|t[oő]l)?\b",
-            raw,
+    typed_hu_match = re.search(
+        r"(?i)\b(?:a|az)\s+[A-Za-z0-9.&'’_-]{2,}"
+        r"(?:\s+[A-Za-z0-9.&'’_-]{2,}){0,3}\s+"
+        r"(?P<kind>(?:egy[uü]ttes|zenekar)\w*)\b",
+        raw,
+    )
+    typed_hu_entity = False
+    if typed_hu_match:
+        kind = typed_hu_match.group("kind")
+        typed_hu_entity = bool(
+            hungarian_token_matches(kind, "egyuttes", profile="entity")
+            or hungarian_token_matches(kind, "zenekar", profile="entity")
         )
+
+    typed_entity = bool(
+        typed_hu_entity
         or re.search(
             r"(?i)\b[A-Za-z0-9.&'’_-]{2,}"
             r"(?:\s+[A-Za-z0-9.&'’_-]{2,}){0,3}\s+band\b",
@@ -223,7 +235,7 @@ def _legacy_looks_like_web_request(text):
     return (
         any(contains_marker(marker) for marker in markers)
         or currency_cue
-        or bool(re.search(r"\bkeress\w*\b", normalized, flags=re.IGNORECASE))
+        or canonical_contains_inflected(normalized, "keress", profile="command")
         or is_freshness_sensitive_request(text)
         or is_factual_risk_request(text)
     )
@@ -232,11 +244,18 @@ def _legacy_looks_like_web_request(text):
 def _has_explicit_web_request(text):
     normalized = _fold(text)
     explicit_markers = (
-        "keress", "keresd meg", "nezd meg online", "nezz utana",
+        "keresd meg", "nezd meg online", "nezz utana",
         "interneten", "weben", "online", "look up", "search for",
         "search the web", "find online", "browse the web",
     )
-    return any(marker in normalized for marker in explicit_markers)
+    return (
+        canonical_contains_inflected(
+            normalized,
+            "keress",
+            profile="command",
+        )
+        or any(marker in normalized for marker in explicit_markers)
+    )
 
 
 def web_request_reason(text):
@@ -427,57 +446,55 @@ def is_freshness_sensitive_request(text):
     return False
 
 
-def _looks_non_factual(text):
+def is_creative_or_transform_request(text):
+    """Return True only when the requested output itself is non-research work.
+
+    A writing verb alone is not enough: "write an essay about 1848" is factual
+    exposition and may need evidence, while a poem, fictional story, rewrite,
+    translation, message, or code-generation request can remain local unless the
+    user explicitly asks for web research.
+    """
     normalized = _fold(text)
     if not normalized:
         return False
 
-    # A noun naming a creative work is not itself a generation request.
-    # For example, "Mikor írta X ezt a verset?" is a factual relation/date
-    # question even though it contains the word "verset". Only explicit
-    # generation/transformation instructions suppress factual-risk routing.
-    phrase_markers = (
-        "írj egy",
-        "irj egy",
-        "írj nekem",
-        "irj nekem",
-        "fogalmazd át",
-        "fogalmazd at",
-        "fordítsd le",
-        "forditsd le",
-        "találj ki",
-        "talalj ki",
-        "write a",
-        "write me",
-        "rewrite",
-        "translate",
-        "brainstorm",
-        "schreib",
-        "übersetz",
-        "ubersetz",
+    transform_markers = (
+        "fogalmazd at", "ird at", "forditsd le", "rewrite", "translate",
+        "ubersetz", "paraphrase", "roviditsd le", "summarize this",
     )
-    if _contains_any(normalized, phrase_markers):
+    if _contains_any(normalized, transform_markers):
         return True
 
-    generation_verbs = (
-        "írj",
-        "irj",
-        "rewrite",
-        "translate",
-        "brainstorm",
-        "schreib",
-        "übersetz",
-        "ubersetz",
+    creative_markers = (
+        "verset", "verset irj", "koltemenyt", "meset", "novellat",
+        "fikcios", "kitalalt tortenet", "dalszoveget", "viccet",
+        "slogent", "emailt", "e mailt", "levelet", "uzenetet",
+        "posztot", "kodot", "programot", "scriptet",
+        "poem", "fiction", "short story", "song lyrics", "joke",
+        "email", "letter", "message", "social post", "write code",
+        "gedicht", "geschichte", "witz", "email", "brief", "nachricht",
     )
-    return any(
+    generation_verbs = (
+        "irj", "irnal", "keszits", "talalj ki",
+        "write", "draft", "create", "brainstorm", "schreib", "erstelle",
+    )
+    has_generation_verb = any(
         re.search(
-            rf"(?<!\w){re.escape(marker)}(?!\w)",
+            rf"(?<!\w){re.escape(_fold(marker))}(?!\w)",
             normalized,
             flags=re.IGNORECASE,
         )
         for marker in generation_verbs
     )
+    return bool(
+        has_generation_verb
+        and _contains_any(normalized, creative_markers)
+    )
 
+
+def _looks_non_factual(text):
+    """Backward-compatible name for non-research generation detection."""
+    return is_creative_or_transform_request(text)
 
 def answer_requires_web_fallback(user_text, answer):
     """
@@ -562,8 +579,15 @@ def plan_user_action(text, *, force_web=False, disable_web=False):
         web_reason = inferred_web_reason
         needs_web = False
     elif bool(force_web):
-        web_reason = "explicit_web"
-        needs_web = True
+        force_web_allowed = (
+            inferred_web_reason != "internal_project_authority"
+            and (
+                not is_creative_or_transform_request(clean)
+                or inferred_web_reason == "explicit_web"
+            )
+        )
+        web_reason = "web_on" if force_web_allowed else inferred_web_reason
+        needs_web = force_web_allowed
     else:
         web_reason = inferred_web_reason
         needs_web = web_reason in {
@@ -617,11 +641,43 @@ def split_user_action_units(text):
     # every non-empty line to be a complete question preserves ordinary wrapped
     # prose and multi-line artifact instructions as a single action.
     plain_lines = [line.strip() for line in raw.splitlines() if line.strip()]
+
+    def standalone_line_task(line):
+        candidate = str(line or "").strip()
+        if not candidate:
+            return False
+
+        # Test/paste batches often carry a trailing Markdown hard-break slash
+        # after a complete question. Treat only trailing presentation escapes
+        # as ignorable; preserve the original line text for execution.
+        semantic = re.sub(r"[\\]+\s*$", "", candidate).strip()
+        if semantic.endswith("?"):
+            return True
+
+        folded = canonical_match_text(semantic)
+        first = folded.split()[0] if folded.split() else ""
+        # Conservative command/opening verbs across the supported UI languages.
+        # This is intentionally a batch-boundary recognizer, not an intent
+        # classifier; individual units are still routed by plan_user_action().
+        command_openers = {
+            "irj", "ird", "keszits", "keszitsd", "mutasd", "magyarazd",
+            "elemezd", "hasonlitsd", "keress", "nezz", "adj", "foglald",
+            "jegyezd", "emlekeztess",
+            "write", "create", "make", "explain", "analyze", "compare",
+            "find", "search", "show", "summarize", "remember",
+            "schreib", "erstelle", "erklar", "analysiere", "vergleiche",
+            "suche", "zeige", "fass",
+        }
+        return first in command_openers
+
     if (
         len(plain_lines) >= 2
-        and all(line.endswith("?") for line in plain_lines)
+        and all(standalone_line_task(line) for line in plain_lines)
     ):
-        return plain_lines
+        return [
+            re.sub(r"[\\]+\s*$", "", line).strip()
+            for line in plain_lines
+        ]
 
     matches = list(_NUMBERED_TASK_START.finditer(raw))
     if len(matches) <= 1:
@@ -650,7 +706,11 @@ def plan_user_actions(text, *, force_web=False, disable_web=False):
             prompt=unit,
             plan=plan_user_action(
                 unit,
-                force_web=force_web,
+                force_web=(
+                    force_web(unit)
+                    if callable(force_web)
+                    else force_web
+                ),
                 disable_web=(
                     disable_web(unit)
                     if callable(disable_web)

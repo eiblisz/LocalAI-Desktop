@@ -11,8 +11,10 @@ and grounded web execution remain shared host services.
 - `WEB OFF`: local model only. No automatic web fallback.
 - `WEB AUTO`: the common planner decides. Fresh/current requests and bounded
   concrete factual-risk relations may use evidence.
-- `WEB ON`: keep shared read-only web/evidence routing enabled for external,
-  current, and explicit web requests; conversation-local state and recall stay local.
+- `WEB ON`: use shared read-only grounded web/evidence routing for external
+  factual or expository requests. Conversation-local state, internal-project
+  authority, and purely creative/transform work stay local unless the user
+  explicitly requests web research.
 
 Discord reads the same live Desktop web mode through the bridge. It does not
 maintain a second search implementation.

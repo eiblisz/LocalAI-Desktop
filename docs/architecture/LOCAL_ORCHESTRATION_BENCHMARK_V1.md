@@ -17,7 +17,8 @@ attributing a failure to an individual local model.
 
 2. **WEB AUTO / ON / OFF**
    - freshness-sensitive AUTO requests route to web;
-   - ON forces web;
+   - ON forces grounded web for external factual/expository work while preserving
+     conversation-local, internal-project and purely creative local authority;
    - OFF forces LOCAL ONLY even for an explicit web-search phrase.
 
 3. **Language/script guard**

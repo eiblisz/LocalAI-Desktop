@@ -203,7 +203,7 @@ def task_constraints_instruction(constraints, *, current_subtask=""):
         f"- Output budget: {constraints.output_budget}.",
         "- If the user requests a paragraph count or range, obey it as a hard structural constraint; headings and list items do not count as extra paragraphs unless explicitly requested.",
         "- Do not append a Sources/Források/References section unless verified source evidence is present in the task context or the user explicitly asks for source attribution.",
-        "- In normal prose, do not emit HTML space entities such as &#x20; or &#32;.",
+        "- In normal prose, do not emit HTML whitespace entities or escaped whitespace codes.",
     ])
 
     if constraints.user_explicit_constraints:

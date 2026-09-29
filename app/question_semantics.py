@@ -12,7 +12,11 @@ from .semantic_lexicon_hu import (
     RELATION_MARKERS,
     REQUESTED_FACT_MARKERS,
 )
-from .text_normalization import canonical_match_text, canonical_request_text
+from .text_normalization import (
+    canonical_contains_inflected,
+    canonical_match_text,
+    canonical_request_text,
+)
 
 
 @dataclass(frozen=True)
@@ -26,8 +30,14 @@ class QuestionSemantics:
 
 def _has_marker(text, marker):
     marker = canonical_match_text(marker)
-    return bool(marker) and bool(
-        re.search(r"(?<!\w)" + re.escape(marker) + r"(?!\w)", text)
+    if not marker:
+        return False
+    if re.search(r"(?<!\w)" + re.escape(marker) + r"(?!\w)", text):
+        return True
+    return canonical_contains_inflected(
+        text,
+        marker,
+        profile="semantic",
     )
 
 
@@ -52,6 +62,23 @@ def analyze_question(value, *, identity=False):
         REQUESTED_FACT_MARKERS,
     )
     relation = _first_match(text, RELATION_MARKERS)
+
+    # "What was the title/name of X's first album?" is a selection lookup,
+    # even though the interrogative itself is a generic "what/milyen". Keep
+    # the rule relation-based and entity-neutral.
+    if (
+        relation in {"release", "publication"}
+        and requested_fact in {"entity", "attribute", "general"}
+        and any(
+            _has_marker(text, marker)
+            for marker in (
+                "cime", "cim", "cimmel", "title", "name",
+                "titel", "hiess", "hieß",
+            )
+        )
+    ):
+        requested_fact = "selection"
+
     if identity_question:
         relation = "identity"
     elif requested_fact == "cause":
