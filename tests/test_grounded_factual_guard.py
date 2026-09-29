@@ -538,10 +538,20 @@ def test_long_form_post_repair_prunes_reintroduced_unsupported_literals():
         "AUTHORIZED EVIDENCE: Correct Author wrote Silver Story in 1912. "
         "The work was published in the same year."
     )
-    client = RepairClient(
-        "Correct Author wrote Silver Story in 1912. "
-        "Other Person later changed it in 1956."
-    )
+    class RepairThenAuditClient:
+        def __init__(self):
+            self.calls = 0
+
+        def chat_once(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return (
+                    "Correct Author wrote Silver Story in 1912. "
+                    "Other Person later changed it in 1956."
+                )
+            return "S0\tKEEP\tCorrect Author wrote Silver Story in 1912."
+
+    client = RepairThenAuditClient()
 
     result = guard_grounded_answer(
         client,
@@ -578,9 +588,14 @@ def test_malformed_sentence_audit_is_never_reused_as_user_answer():
                     "The sentences directly quote key facts from the authorized evidence. "
                     "All factual claims are supported."
                 )
+            if len(self.calls) == 2:
+                return (
+                    "Correct Author wrote Silver Story in 1912. "
+                    "The work was published in the same year."
+                )
             return (
-                "Correct Author wrote Silver Story in 1912. "
-                "The work was published in the same year."
+                "S0\tKEEP\tCorrect Author wrote Silver Story in 1912.\n"
+                "S1\tKEEP\tThe work was published in the same year."
             )
 
     client = SequenceClient()
@@ -601,9 +616,10 @@ def test_malformed_sentence_audit_is_never_reused_as_user_answer():
 
     assert result.startswith("Correct Author wrote Silver Story")
     assert "The sentences directly quote" not in result
-    assert len(client.calls) == 2
+    assert len(client.calls) == 3
     assert client.calls[0]["call_phase"] == "factual_sentence_support_audit"
     assert client.calls[1]["call_phase"] == "factual_guard_repair"
+    assert client.calls[2]["call_phase"] == "factual_sentence_support_audit"
 
 
 def test_strict_relation_audit_instruction_rejects_name_cooccurrence_as_support():
@@ -723,7 +739,9 @@ def test_sentence_support_gate_rejects_url_only_keep_evidence():
             self.calls += 1
             if self.calls == 1:
                 return "S0\tKEEP\thttps://example.com/history"
-            return "Correct Author wrote Silver Story in 1912."
+            if self.calls == 2:
+                return "Correct Author wrote Silver Story in 1912."
+            return "S0\tKEEP\tCorrect Author wrote Silver Story in 1912."
 
     client = SequenceClient()
     result = guard_grounded_answer(
@@ -742,7 +760,7 @@ def test_sentence_support_gate_rejects_url_only_keep_evidence():
     )
 
     assert result == "Correct Author wrote Silver Story in 1912."
-    assert client.calls == 2
+    assert client.calls == 3
 
 
 def test_sentence_support_gate_requires_explicit_exclusivity_relation():
@@ -760,7 +778,11 @@ def test_sentence_support_gate_requires_explicit_exclusivity_relation():
                 return (
                     "S0\tKEEP\tSample State intervened in support of Partner State in 1912."
                 )
-            return "Sample State 1912-ben beavatkozott Partner State támogatására."
+            if self.calls == 2:
+                return "Sample State 1912-ben beavatkozott Partner State támogatására."
+            return (
+                "S0\tKEEP\tSample State intervened in support of Partner State in 1912."
+            )
 
     client = SequenceClient()
     result = guard_grounded_answer(
@@ -779,7 +801,7 @@ def test_sentence_support_gate_requires_explicit_exclusivity_relation():
     )
 
     assert "egyetlen" not in result.casefold()
-    assert client.calls == 2
+    assert client.calls == 3
 
 
 def test_sentence_support_gate_rejects_wrong_month_relation():
@@ -793,7 +815,9 @@ def test_sentence_support_gate_rejects_wrong_month_relation():
             self.calls += 1
             if self.calls == 1:
                 return "S0\tKEEP\tThe event began in September 1912."
-            return "Az esemény 1912 szeptemberében kezdődött."
+            if self.calls == 2:
+                return "Az esemény 1912 szeptemberében kezdődött."
+            return "S0\tKEEP\tThe event began in September 1912."
 
     client = SequenceClient()
     result = guard_grounded_answer(
@@ -813,7 +837,53 @@ def test_sentence_support_gate_rejects_wrong_month_relation():
 
     assert "június" not in result.casefold()
     assert "szeptember" in result.casefold()
-    assert client.calls == 2
+    assert client.calls == 3
+
+
+def test_post_repair_relation_audit_drops_reintroduced_false_speech_attribution():
+    authority = (
+        "AUTHORIZED EVIDENCE: Sample Poet wrote National Song in 1912. "
+        "Sample Politician gave major political speeches in the same period."
+    )
+
+    class SequenceClient:
+        def __init__(self):
+            self.calls = 0
+
+        def chat_once(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return "This draft needs repair."
+            if self.calls == 2:
+                return (
+                    "Sample Politician híres beszédei közé tartozott a National Song. "
+                    "Sample Poet wrote National Song in 1912."
+                )
+            return (
+                "S0\tDROP\t-\n"
+                "S1\tKEEP\tSample Poet wrote National Song in 1912."
+            )
+
+    client = SequenceClient()
+    result = guard_grounded_answer(
+        client,
+        "qwen-test",
+        "Írj történelmi ismertetőt.",
+        "Sample Politician híres beszédei közé tartozott a National Song.",
+        authority,
+        force_verify=True,
+        literal_authority_text=authority,
+        repair_authority_text=authority,
+        prune_unsupported_sentences=True,
+        strict_relation_audit=True,
+        output_budget=2048,
+        temperature=0.0,
+        seed=42,
+    )
+
+    assert "Sample Politician híres beszédei" not in result
+    assert "Sample Poet wrote National Song in 1912." in result
+    assert client.calls == 3
 
 
 def test_sentence_support_gate_requires_evidence_fragment_to_exist_in_authority():
