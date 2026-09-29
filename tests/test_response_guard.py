@@ -212,6 +212,30 @@ def test_normal_output_hygiene_removes_html_space_entities_from_prose():
     assert "Második mondat." in value
 
 
+def test_output_hygiene_decodes_general_numeric_entities_in_plain_prose():
+    constraints = build_task_constraints("Írj magyar történelmi esszét.")
+    value = normalize_user_visible_output(
+        "Jela&#x10D;i&#x107; neve. Aradn&#xE1;l.&#x20;\nVil&#xE1;gosn&#xE1;l.",
+        constraints,
+    )
+
+    assert "&#" not in value
+    assert "Jelačić" in value
+    assert "Aradnál" in value
+    assert "Világosnál" in value
+
+
+def test_output_hygiene_removes_plain_prose_markdown_hard_break_backslash():
+    constraints = build_task_constraints("Írj magyar esszét.")
+    value = normalize_user_visible_output(
+        "**Cím**\\\nKövetkező mondat.",
+        constraints,
+    )
+
+    assert "\\\n" not in value
+    assert "**Cím**\nKövetkező mondat." == value
+
+
 def test_output_hygiene_preserves_entities_when_html_is_requested():
     constraints = build_task_constraints("Adj HTML példát.")
     value = normalize_user_visible_output("<p>A&#x20;B</p>", constraints)
