@@ -252,10 +252,17 @@ class ActionRuntime:
             if callable(conversation_local)
             else lambda _prompt: bool(conversation_local)
         )
+        disable_resolver = (
+            disable_web
+            if callable(disable_web)
+            else lambda _prompt: bool(disable_web)
+        )
         planned = plan_user_actions(
             user_text,
             force_web=bool(force_web),
-            disable_web=lambda prompt: bool(disable_web or local_resolver(prompt)),
+            disable_web=lambda prompt: bool(
+                disable_resolver(prompt) or local_resolver(prompt)
+            ),
         )
         suffix = str(model_context_suffix or "")
         explicit_batch = len(planned) > 1
