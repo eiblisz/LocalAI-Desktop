@@ -872,7 +872,9 @@ def test_sentence_support_gate_accepts_compact_evidence_reference():
 
     assert result == "Correct Author wrote Silver Story in 1912."
     assert "S0|KEEP|E0" not in result
-    assert "NEVER copy evidence text" in client.kwargs["messages"][0]["content"]
+    system_prompt = client.kwargs["messages"][0]["content"]
+    assert "Never copy evidence text" in system_prompt
+    assert "Return ONLY one JSON object" in system_prompt
 
 
 def test_sentence_support_gate_rejects_unknown_compact_evidence_reference():
