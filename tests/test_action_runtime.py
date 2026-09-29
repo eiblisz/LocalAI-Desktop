@@ -220,6 +220,27 @@ Mikor alakult a Sample Band?""",
     }) == 3
 
 
+def test_action_runtime_splits_mixed_manual_test_batch():
+    prompt = (
+        "mi volt az elso nagylemeze a sampleband zenekarnak?\\\n"
+        "mi volt egy masik ablakban a tesztprojekt kodneve?\\\n"
+        "mi volt a metalband elso albumanak a cime?\\\n"
+        "irj egy 10 bekezdesbol allo esszet egy tortenelmi esemenyrol"
+    )
+
+    contracts = ActionRuntime().plan_many(prompt)
+
+    assert len(contracts) == 4
+    assert [contract.prompt for contract in contracts] == [
+        "mi volt az elso nagylemeze a sampleband zenekarnak?",
+        "mi volt egy masik ablakban a tesztprojekt kodneve?",
+        "mi volt a metalband elso albumanak a cime?",
+        "irj egy 10 bekezdesbol allo esszet egy tortenelmi esemenyrol",
+    ]
+    assert all(contract.explicit_batch_child for contract in contracts)
+    assert "10 paragraphs" in contracts[3].constraints.format_constraints
+
+
 def test_action_runtime_keeps_a_wrapped_question_as_one_request():
     contracts = ActionRuntime().plan_many(
         "Mikor alakult\na Sample Band?",
