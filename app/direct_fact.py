@@ -123,6 +123,12 @@ def _release_subject_surface(prompt):
     """Extract the named entity in a first/debut-release question when structural."""
     raw = _clean(prompt)
     patterns = (
+        r"(?i)\b(?:mi|melyik)\s+volt\s+(?:a|az)\s+"
+        r"(?P<subject>.+?)\s+(?:els[őo]\w*|deb[uü]t\w*)\s+"
+        r"(?:album\w*|nagylemez\w*|lemez\w*)\s+(?:a\s+)?"
+        r"(?:c[ií]m\w*|neve)\b",
+        r"(?i)\b(?:what|which)\s+was\s+(?P<subject>.+?)(?:'s|\s+)"
+        r"(?:first|debut)\s+(?:studio\s+)?album(?:'s)?\s+(?:title|name)\b",
         r"(?i)\bmikor\s+(?:adta|adtak|kiadta|kiadtak)\s+(?:ki\s+)?"
         r"(?:a|az)\s+(?:els[őo]|deb[uü]t\w*)\s+[^?]{0,40}?\s+"
         r"(?:a|az)\s+(?P<subject>.+?)\s+(?:egy[uü]ttes|zenekar)\b",
@@ -200,6 +206,30 @@ def _is_debut_release_request(prompt):
     return _debut_release_surface_supported(prompt)
 
 
+def _single_edit_or_exact(left, right):
+    left = re.sub(r"[^a-z0-9]", "", _fold(left))
+    right = re.sub(r"[^a-z0-9]", "", _fold(right))
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    if min(len(left), len(right)) < 6 or abs(len(left) - len(right)) > 1:
+        return False
+    if len(left) == len(right):
+        return sum(a != b for a, b in zip(left, right)) == 1
+    short, long = (left, right) if len(left) < len(right) else (right, left)
+    short_index = 0
+    edits = 0
+    for char in long:
+        if short_index < len(short) and char == short[short_index]:
+            short_index += 1
+        else:
+            edits += 1
+            if edits > 1:
+                return False
+    return True
+
+
 def _subject_supported_in_text(text, subject):
     folded_text = _fold(text)
     folded_subject = _fold(subject)
@@ -207,6 +237,12 @@ def _subject_supported_in_text(text, subject):
         return False
     if re.search(r"(?<!\w)" + re.escape(folded_subject) + r"(?!\w)", folded_text):
         return True
+
+    subject_tokens = folded_subject.split()
+    if len(subject_tokens) == 1 and len(subject_tokens[0]) >= 6:
+        for token in re.findall(r"[A-Za-zÁÉÍÓÖŐÚÜŰáéíóöőúüű0-9]+", str(text or "")):
+            if _single_edit_or_exact(subject_tokens[0], token):
+                return True
 
     # Entity names may be written with or without punctuation/spaces
     # (for example WASP/W.A.S.P.). Match the same alphanumeric surface
@@ -893,6 +929,15 @@ def _subject_display_surface(text, subject):
         match = re.search(token_pattern, raw)
         if match:
             return _clean(match.group(0)).strip(" ,;:")
+
+    subject_tokens = folded_subject.split()
+    if len(subject_tokens) == 1 and len(subject_tokens[0]) >= 6:
+        for match in re.finditer(
+            r"[A-Za-zÁÉÍÓÖŐÚÜŰáéíóöőúüű0-9]{6,}",
+            raw,
+        ):
+            if _single_edit_or_exact(subject_tokens[0], match.group(0)):
+                return match.group(0)
 
     # Punctuated compact forms such as WASP / W.A.S.P.
     raw_subject = re.sub(r"[^A-Za-z0-9]", "", str(subject or ""))
