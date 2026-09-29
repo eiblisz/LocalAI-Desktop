@@ -2223,7 +2223,7 @@ class ChatWebWorker(QObject):
                     ),
                     literal_authority_text=literal_guard_authority_text,
                     repair_authority_text=(
-                        literal_guard_authority_text
+                        context_text
                         if long_web_semantic_audit
                         else None
                     ),
