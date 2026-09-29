@@ -105,6 +105,34 @@ def test_current_window_fast_path_keeps_language_script_validation():
     ) is False
 
 
+def test_desktop_other_window_direct_recall_returns_exact_value_without_model(tmp_path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    store.upsert_window_memory(
+        "chat-a",
+        "- User: A tesztprojekt kódneve Kék Sárkány 7319.",
+        compacted_message_count=1,
+        source_message_count=1,
+    )
+    host = SimpleNamespace(
+        generation_chat_id="chat-b",
+        memory_store=store,
+    )
+    trace = RequestTrace("desktop")
+
+    result = MainWindow._direct_other_window_memory_recall(
+        host,
+        "Mi volt egy másik ablakban a tesztprojekt kódneve?",
+        trace=trace,
+    )
+
+    snapshot = trace.snapshot()
+    assert result.is_direct_hit is True
+    assert result.answer == "Kék Sárkány 7319."
+    assert snapshot["metadata"]["memory_scope"] == "other_window"
+    assert snapshot["metadata"]["cross_window_hit"] is True
+    assert snapshot["metadata"]["current_window_hit"] is False
+
+
 def test_desktop_current_window_recall_records_bounded_stages(tmp_path):
     store = MemoryStore(tmp_path / "memory.sqlite3")
     host = SimpleNamespace(
