@@ -416,8 +416,8 @@ def _sentence_support_audit(
         authority_text,
     )
     if judgments is None:
-        return None
-    return _apply_sentence_support_gate(draft, judgments)
+        return None, raw
+    return _apply_sentence_support_gate(draft, judgments), raw
 
 def guard_grounded_answer(
     client,
@@ -492,10 +492,11 @@ def guard_grounded_answer(
             if not force_verify:
                 return draft
 
+    prefetched_repair = None
     if strict_relation_audit:
         if trace is not None:
             trace.begin("factual_sentence_support_audit")
-        gated = _sentence_support_audit(
+        gated, prefetched_repair = _sentence_support_audit(
             client,
             model,
             user_prompt,
@@ -600,22 +601,25 @@ def guard_grounded_answer(
         repair_kwargs["temperature"] = float(temperature)
     if seed is not None:
         repair_kwargs["seed"] = int(seed)
-    while True:
-        try:
-            repair = client.chat_once(**repair_kwargs).strip()
-            break
-        except TypeError as exc:
-            unsupported = next(
-                (
-                    name
-                    for name in ("num_predict", "temperature", "seed")
-                    if name in str(exc) and name in repair_kwargs
-                ),
-                "",
-            )
-            if not unsupported:
-                raise
-            repair_kwargs.pop(unsupported)
+    if prefetched_repair is not None:
+        repair = str(prefetched_repair or "").strip()
+    else:
+        while True:
+            try:
+                repair = client.chat_once(**repair_kwargs).strip()
+                break
+            except TypeError as exc:
+                unsupported = next(
+                    (
+                        name
+                        for name in ("num_predict", "temperature", "seed")
+                        if name in str(exc) and name in repair_kwargs
+                    ),
+                    "",
+                )
+                if not unsupported:
+                    raise
+                repair_kwargs.pop(unsupported)
 
     if trace is not None:
         trace.end("factual_guard_repair")
