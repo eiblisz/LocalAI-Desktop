@@ -291,7 +291,64 @@ def _grounded_sentence_units(text):
     return blocks, headings, units
 
 
-def _parse_sentence_support_gate(raw, units, authority_text):
+def _evidence_reference_catalog(authority_text):
+    """Build bounded source-bound evidence units for compact verifier references."""
+    raw = str(authority_text or "").replace("\r\n", "\n").replace("\r", "\n")
+    candidates = []
+    for line in raw.splitlines():
+        clean = " ".join(line.strip().split())
+        if not clean:
+            continue
+        parts = re.split(
+            r"(?<=[.!?])\s+(?=[A-ZÁÉÍÓÖŐÚÜŰ0-9„“\"(])",
+            clean,
+        )
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+            # Keep evidence units focused enough for relation binding. Very long
+            # unpunctuated payloads are split at word boundaries.
+            while len(part) > 600:
+                cut = part.rfind(" ", 0, 600)
+                if cut < 120:
+                    cut = 600
+                candidates.append(part[:cut].strip())
+                part = part[cut:].strip()
+            if part:
+                candidates.append(part)
+
+    catalog = {}
+    seen = set()
+    for candidate in candidates:
+        normalized = canonical_match_text(candidate)
+        if not normalized or normalized in seen:
+            continue
+        prose_without_urls = re.sub(
+            r"https?://\S+",
+            " ",
+            candidate,
+            flags=re.IGNORECASE,
+        )
+        prose_without_urls = re.sub(
+            r"\[[^\]]+\]\([^\)]+\)",
+            " ",
+            prose_without_urls,
+        )
+        if len(re.findall(r"[A-Za-zÁÉÍÓÖŐÚÜŰáéíóöőúüű]{2,}", prose_without_urls)) < 4:
+            continue
+        seen.add(normalized)
+        catalog[f"E{len(catalog)}"] = candidate
+    return catalog
+
+
+def _parse_sentence_support_gate(
+    raw,
+    units,
+    authority_text,
+    *,
+    evidence_catalog=None,
+):
     """Parse bounded KEEP/DROP judgments and verify KEEP evidence is source-bound."""
     judgments = {}
     unit_count = len(units)
@@ -322,9 +379,21 @@ def _parse_sentence_support_gate(raw, units, authority_text):
         status = match.group(2).upper()
         evidence = str(match.group(3) or "").strip().strip('"“”„')
         if status == "KEEP":
+            evidence_text = evidence
+            catalog = dict(evidence_catalog or {})
+            if catalog:
+                reference_match = re.fullmatch(r"(?i)E(\d+)", evidence)
+                if reference_match:
+                    reference_id = f"E{int(reference_match.group(1))}"
+                    evidence_text = str(catalog.get(reference_id) or "")
+                elif re.search(r"(?i)\bE\d+\b", evidence):
+                    # Production protocol permits exactly one evidence id. Do
+                    # not combine unrelated evidence units to manufacture a
+                    # relation from co-occurring facts.
+                    evidence_text = ""
             if not _evidence_fragment_supports_sentence(
                 units[identifier]["text"],
-                evidence,
+                evidence_text,
                 authority_text,
             ):
                 status = "DROP"
@@ -519,26 +588,30 @@ def _sentence_support_audit(
         f"S{unit['id']}: {unit['text']}"
         for unit in units
     )
+    evidence_catalog = _evidence_reference_catalog(authority_text)
+    if not evidence_catalog:
+        return None, None
+    evidence_payload = "\n".join(
+        f"{reference_id}: {fragment}"
+        for reference_id, fragment in evidence_catalog.items()
+    )
     messages = [
         {
             "role": "system",
             "content": (
-                "Audit each sentence independently against ONLY the authorized evidence. "
-                "For every sentence id return exactly one line using literal pipe "
-                "characters in this form: S0|KEEP|exact evidence fragment, or S0|DROP|-. "
-                "Do not write the word TAB or a <TAB> placeholder. "
-                "KEEP only when the evidence directly supports every factual relation in "
-                "the sentence. Mere co-occurrence of the same names is not support. Matching "
-                "names or dates alone is not enough. DROP claims "
-                "whose chronology, kinship, leadership, authorship, causation, institutional "
-                "role, quantity, first/last status, or other relation is not directly supported. "
-                "If support is missing, delete that sentence rather than guessing. "
-                "The KEEP evidence fragment must be copied from AUTHORIZED EVIDENCE, not from "
-                "the user request or draft. Copy a focused factual fragment, never a URL list, "
-                "source list, bibliography row, or an entire source dump. For claims involving "
-                "only/first/last/final status, family roles, leadership or command, alliance or "
-                "support, intervention, victory/defeat/surrender, causation, institutional role, "
-                "or an asserted ending, the copied fragment must explicitly state that same "
+                "Audit each sentence independently against ONLY the numbered evidence "
+                "references supplied below. For every sentence id return exactly one line "
+                "using literal pipe characters in this form: S0|KEEP|E12, or S0|DROP|-. "
+                "For KEEP, return exactly one evidence id and NEVER copy evidence text. "
+                "Do not write the word TAB or a <TAB> placeholder. KEEP only when that single "
+                "evidence unit directly supports every factual relation in the sentence. "
+                "Mere co-occurrence of the same names is not support. Matching names or dates "
+                "alone is not enough. DROP claims whose chronology, kinship, leadership, "
+                "authorship, causation, institutional role, quantity, first/last status, or "
+                "other relation is not directly supported. For claims involving only/first/"
+                "last/final status, family roles, leadership or command, alliance or support, "
+                "intervention, victory/defeat/surrender, causation, institutional role, or an "
+                "asserted ending, the referenced evidence unit must explicitly state that same "
                 "relation. Do not rewrite sentences and return no commentary."
             ),
         },
@@ -546,17 +619,18 @@ def _sentence_support_audit(
             "role": "user",
             "content": (
                 f"USER REQUEST (NOT EVIDENCE):\n{user_prompt}\n\n"
-                f"AUTHORIZED EVIDENCE:\n{authority_text}\n\n"
+                f"NUMBERED AUTHORIZED EVIDENCE:\n{evidence_payload}\n\n"
                 f"SENTENCES TO AUDIT:\n{sentence_payload}"
             ),
         },
     ]
-    # The audit emits one verdict plus a source fragment per generated sentence.
-    # A long-form answer can legitimately require more than the old fixed
-    # 768-token ceiling even though the primary response budget is 2048.
-    # Preserve the caller's smaller budget for short callers, but allow the
-    # long-form contract to fund this bounded verification pass.
-    audit_output_budget = min(2048, int(output_budget or 768))
+    # The host owns the evidence text; the model emits only compact E<n>
+    # references. This keeps long-form verification bounded without weakening
+    # source binding or raising the output-token ceiling.
+    audit_output_budget = min(
+        2048,
+        max(384, min(int(output_budget or 768), 128 + (len(units) * 32))),
+    )
     kwargs = {
         "model": model,
         "messages": messages,
@@ -587,6 +661,7 @@ def _sentence_support_audit(
         raw,
         units,
         authority_text,
+        evidence_catalog=evidence_catalog,
     )
     if judgments is None:
         return None, raw
