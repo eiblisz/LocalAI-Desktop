@@ -255,6 +255,170 @@ def _remove_sentences_with_unsupported_literals(text, unsupported_literals):
             output_blocks.append(" ".join(kept).strip())
     return "\n\n".join(output_blocks).strip()
 
+def _grounded_sentence_units(text):
+    """Return prose sentences with paragraph indexes; preserve heading-only blocks."""
+    blocks = [
+        block.strip()
+        for block in re.split(r"\n\s*\n+|(?<=[.!?])\n(?=[A-ZÁÉÍÓÖŐÚÜŰ])", str(text or "").strip())
+        if block.strip()
+    ]
+    headings = []
+    units = []
+    for block_index, block in enumerate(blocks):
+        if (
+            re.fullmatch(r"(?:#{1,6}\s+.+|\*\*.+\*\*|__.+__)", block)
+            and not re.search(r"[.!?]\s*$", block)
+        ):
+            headings.append((block_index, block))
+            continue
+        parts = [
+            item.strip()
+            for item in re.split(
+                r"(?<=[.!?])\s+(?=[A-ZÁÉÍÓÖŐÚÜŰ0-9„“\"(])",
+                block,
+            )
+            if item.strip()
+        ]
+        if not parts:
+            parts = [block]
+        for sentence in parts:
+            units.append({
+                "id": len(units),
+                "block": block_index,
+                "text": sentence,
+            })
+    return blocks, headings, units
+
+
+def _parse_sentence_support_gate(raw, unit_count, authority_text):
+    """Parse bounded KEEP/DROP judgments and verify KEEP evidence is source-bound."""
+    judgments = {}
+    authority = canonical_match_text(authority_text)
+    for raw_line in str(raw or "").replace("```", "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        match = re.match(
+            r"^S?(\d+)\s*(?:\t|\||:|-)+\s*(KEEP|DROP)"
+            r"(?:\s*(?:\t|\||:|-)+\s*(.*))?$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            continue
+        identifier = int(match.group(1))
+        if identifier < 0 or identifier >= unit_count or identifier in judgments:
+            return None
+        status = match.group(2).upper()
+        evidence = str(match.group(3) or "").strip().strip('"“”„')
+        if status == "KEEP":
+            normalized_evidence = canonical_match_text(evidence)
+            # KEEP must carry a nontrivial verbatim/canonical evidence fragment.
+            if len(normalized_evidence) < 16 or normalized_evidence not in authority:
+                status = "DROP"
+        judgments[identifier] = status
+    if set(judgments) != set(range(unit_count)):
+        return None
+    return judgments
+
+
+def _apply_sentence_support_gate(text, judgments):
+    blocks, headings, units = _grounded_sentence_units(text)
+    if not units:
+        return str(text or "").strip()
+    kept_by_block = {}
+    for unit in units:
+        if judgments.get(unit["id"]) == "KEEP":
+            kept_by_block.setdefault(unit["block"], []).append(unit["text"])
+    heading_map = {index: value for index, value in headings}
+    rebuilt = []
+    for index, _block in enumerate(blocks):
+        if index in heading_map:
+            rebuilt.append(heading_map[index])
+            continue
+        sentences = kept_by_block.get(index) or []
+        if sentences:
+            rebuilt.append(" ".join(sentences).strip())
+    return "\n\n".join(rebuilt).strip()
+
+
+def _sentence_support_audit(
+    client,
+    model,
+    user_prompt,
+    draft,
+    authority_text,
+    *,
+    output_budget=None,
+    temperature=None,
+    seed=None,
+):
+    """Gate long-form sentences against exact evidence fragments without rewriting."""
+    _blocks, _headings, units = _grounded_sentence_units(draft)
+    if not units:
+        return None
+    sentence_payload = "\n".join(
+        f"S{unit[\'id\']}: {unit[\'text\']}"
+        for unit in units
+    )
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Audit each sentence independently against ONLY the authorized evidence. "
+                "For every sentence id return exactly one line in this form: "
+                "S0<TAB>KEEP<TAB>exact evidence fragment, or S0<TAB>DROP<TAB>-. "
+                "KEEP only when the evidence directly supports every factual relation in "
+                "the sentence. Matching names or dates alone is not enough. DROP claims "
+                "whose chronology, kinship, leadership, authorship, causation, institutional "
+                "role, quantity, first/last status, or other relation is not directly supported. "
+                "The KEEP evidence fragment must be copied from AUTHORIZED EVIDENCE, not from "
+                "the user request or draft. Do not rewrite sentences and return no commentary."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"USER REQUEST (NOT EVIDENCE):\n{user_prompt}\n\n"
+                f"AUTHORIZED EVIDENCE:\n{authority_text}\n\n"
+                f"SENTENCES TO AUDIT:\n{sentence_payload}"
+            ),
+        },
+    ]
+    kwargs = {
+        "model": model,
+        "messages": messages,
+        "num_predict": min(768, int(output_budget or 768)),
+    }
+    if temperature is not None:
+        kwargs["temperature"] = float(temperature)
+    if seed is not None:
+        kwargs["seed"] = int(seed)
+    while True:
+        try:
+            raw = client.chat_once(**kwargs).strip()
+            break
+        except TypeError as exc:
+            unsupported = next(
+                (
+                    name
+                    for name in ("num_predict", "temperature", "seed")
+                    if name in str(exc) and name in kwargs
+                ),
+                "",
+            )
+            if not unsupported:
+                raise
+            kwargs.pop(unsupported)
+    judgments = _parse_sentence_support_gate(
+        raw,
+        len(units),
+        authority_text,
+    )
+    if judgments is None:
+        return None
+    return _apply_sentence_support_gate(draft, judgments)
+
 def guard_grounded_answer(
     client,
     model,
@@ -327,6 +491,49 @@ def guard_grounded_answer(
                 )
             if not force_verify:
                 return draft
+
+    if strict_relation_audit:
+        if trace is not None:
+            trace.begin("factual_sentence_support_audit")
+        gated = _sentence_support_audit(
+            client,
+            model,
+            user_prompt,
+            draft,
+            repair_authority,
+            output_budget=output_budget,
+            temperature=temperature,
+            seed=seed,
+        )
+        if trace is not None:
+            trace.end(
+                "factual_sentence_support_audit",
+                factual_sentence_support_audit=(
+                    "pass" if gated else "fallback_to_repair"
+                ),
+            )
+        if gated:
+            gated_remaining = unsupported_grounded_literals(
+                gated,
+                literal_authority,
+            )
+            if gated_remaining and prune_unsupported_sentences:
+                gated = _remove_sentences_with_unsupported_literals(
+                    gated,
+                    gated_remaining,
+                )
+                gated_remaining = unsupported_grounded_literals(
+                    gated,
+                    literal_authority,
+                )
+            if gated and not gated_remaining:
+                if trace is not None:
+                    trace.add_metadata(
+                        factual_guard_repair_status="pass_sentence_support_gate",
+                        factual_guard_remaining_unsupported_literals="",
+                        factual_guard_remaining_literals="",
+                    )
+                return gated
 
     if trace is not None:
         trace.begin("factual_guard_repair")
