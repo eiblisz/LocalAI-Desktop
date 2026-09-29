@@ -382,7 +382,11 @@ def _grounded_gate_result_is_sufficient(original, gated, user_prompt):
     paragraph_range = requested_paragraph_range(user_prompt)
     if paragraph_range:
         low, _high = paragraph_range
-        if gated_shape["prose_blocks"] < int(low):
+        # Response normalization may split already-supported multi-sentence
+        # prose into the requested paragraph count without inventing facts.
+        # Require enough surviving factual sentence units to make that
+        # deterministic normalization possible; headings alone never qualify.
+        if gated_shape["sentence_count"] < int(low):
             return False
 
     # For ordinary long-form prose without an explicit paragraph contract, do
@@ -720,6 +724,23 @@ def guard_grounded_answer(
     if trace is not None:
         trace.begin("factual_guard_repair")
 
+    paragraph_contract = ""
+    requested_paragraphs = requested_paragraph_range(user_prompt)
+    if requested_paragraphs:
+        low, high = requested_paragraphs
+        if low == high:
+            paragraph_contract = (
+                f" Preserve exactly {low} substantive prose paragraphs. "
+                "Headings are optional and do not count as paragraphs; never replace "
+                "requested prose with a heading-only outline."
+            )
+        else:
+            paragraph_contract = (
+                f" Preserve between {low} and {high} substantive prose paragraphs. "
+                "Headings are optional and do not count as paragraphs; never replace "
+                "requested prose with a heading-only outline."
+            )
+
     repair_kwargs = {
         "model": model,
         "messages": [
@@ -764,6 +785,7 @@ def guard_grounded_answer(
                         "is not supported, delete that sentence rather than guessing or softening it."
                         if strict_relation_audit else ""
                     )
+                    + paragraph_contract
                     + (" " + str(language_instruction).strip()
                        if str(language_instruction or "").strip() else "")
                     + " Return only the repaired answer."
