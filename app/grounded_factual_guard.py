@@ -298,6 +298,15 @@ def _parse_sentence_support_gate(raw, units, authority_text):
         line = raw_line.strip()
         if not line:
             continue
+        # Small/local models sometimes render the requested tab separator
+        # literally as <TAB>, \<TAB>, or \t. Normalize those protocol-only
+        # spellings before parsing; this never touches the user-facing draft.
+        line = re.sub(
+            r"(?i)\\?<TAB>|\\t|<TAB>",
+            "|",
+            line,
+        )
+        line = re.sub(r"^[-*•]+\s*", "", line)
         match = re.match(
             r"^S?(\d+)\s*(?:\t|\||:|-)+\s*(KEEP|DROP)"
             r"(?:\s*(?:\t|\||:|-)+\s*(.*))?$",
@@ -468,8 +477,9 @@ def _sentence_support_audit(
             "role": "system",
             "content": (
                 "Audit each sentence independently against ONLY the authorized evidence. "
-                "For every sentence id return exactly one line in this form: "
-                "S0<TAB>KEEP<TAB>exact evidence fragment, or S0<TAB>DROP<TAB>-. "
+                "For every sentence id return exactly one line using literal pipe "
+                "characters in this form: S0|KEEP|exact evidence fragment, or S0|DROP|-. "
+                "Do not write the word TAB or a <TAB> placeholder. "
                 "KEEP only when the evidence directly supports every factual relation in "
                 "the sentence. Mere co-occurrence of the same names is not support. Matching "
                 "names or dates alone is not enough. DROP claims "
