@@ -1,3 +1,4 @@
+import html
 import json
 import re
 from dataclasses import dataclass
@@ -1171,6 +1172,21 @@ def normalize_user_visible_output(text, constraints=None):
             value,
             flags=re.IGNORECASE,
         )
+
+        # Models can emit arbitrary numeric HTML entities in ordinary prose
+        # (for example &#x4A; inside a person's name), sometimes nested behind
+        # one or more &amp; escapes. Decode them only for non-HTML output and
+        # keep the pass bounded so malformed input cannot loop indefinitely.
+        for _ in range(3):
+            decoded = html.unescape(value)
+            if decoded == value:
+                break
+            value = decoded
+
+        # A model may use a Markdown hard-break backslash even when the user
+        # requested plain prose. It is presentation syntax, not content.
+        if "markdown" not in formats:
+            value = re.sub(r"\\[ \t]*(?=\r?\n)", "", value)
 
     paragraph_bounds = _requested_paragraph_bounds(format_items)
 
