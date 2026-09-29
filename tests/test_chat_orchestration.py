@@ -83,6 +83,35 @@ def test_current_window_recall_stays_local_with_web_on():
     assert contracts[0].conversation_local is True
 
 
+def test_other_window_recall_stays_local_with_web_on():
+    prompt = "Mi volt a másik ablakban a tesztprojekt kódneve?"
+
+    contracts = plan_chat_actions(
+        ActionRuntime(),
+        prompt,
+        web_mode="ON",
+    )
+
+    assert contracts[0].route == ROUTE_CHAT
+    assert contracts[0].use_web is False
+    # Keep this False so the memory layer can request cross-window context.
+    assert contracts[0].conversation_local is False
+
+
+def test_explicit_global_memory_recall_stays_local_with_web_on():
+    prompt = "Mi van a globális memóriában a projektemről?"
+
+    contracts = plan_chat_actions(
+        ActionRuntime(),
+        prompt,
+        web_mode="ON",
+    )
+
+    assert contracts[0].route == ROUTE_CHAT
+    assert contracts[0].use_web is False
+    assert contracts[0].conversation_local is False
+
+
 def test_memory_architecture_feature_explanation_is_not_conversation_recall():
     prompt = (
         "Írj részletes összefoglalót a LocalAI Desktop jelenlegi memóriaarchitektúrájáról; "
