@@ -1009,6 +1009,31 @@ def _debut_title_candidates_from_item(item, request_text):
         for match in title_pattern.finditer(field):
             add(match.group("title"))
 
+    # Hungarian evidence commonly uses either
+    # "A Title a Band első nagylemeze" or "első nagylemeze, a Title".
+    hungarian_title_patterns = (
+        re.compile(
+            r"(?i)(?:^|[.!?]\s+)(?:a|az)?\s*"
+            r"(?P<title>[^\n.!?]{2,100}?)\s+(?:a|az)\s+"
+            r"[^\n.!?]{0,80}?\s+(?:els[őo]\w*|deb[uü]t\w*)\s+"
+            r"(?:album\w*|nagylemez\w*|lemez\w*)\b"
+        ),
+        re.compile(
+            r"(?i)\b(?:els[őo]\w*|deb[uü]t\w*)\s+"
+            r"(?:album\w*|nagylemez\w*|lemez\w*)\s*[,;:-]?\s*"
+            r"(?:a|az)?\s*(?P<title>[^\n.!?;,]{2,100})"
+        ),
+    )
+    for field in fields[:3]:
+        for pattern in hungarian_title_patterns:
+            for match in pattern.finditer(field):
+                candidate = re.sub(
+                    r"(?i)^(?:a|az)\s+",
+                    "",
+                    match.group("title").strip(),
+                )
+                add(candidate)
+
     # Band/artist overview pages often summarize the first releases as
     # "first two studio albums, Title A (1984) and Title B (1985)". The first
     # listed title is structurally bound to the requested ordinal relation.
