@@ -365,6 +365,18 @@ _RELATION_MARKER_GROUPS = {
     "ended": ("ended", "marked the end", "veget jelent", "vege lett", "endete", "beendete"),
     "caused": ("caused", "resulted in", "led to", "okoz", "eredmenyez", "vezetett", "fuhrte zu"),
     "basis": ("basis for", "foundation for", "alapja", "alapjava", "grundlage"),
+    "month_january": ("january", "januar", "januar", "januar"),
+    "month_february": ("february", "februar", "februar"),
+    "month_march": ("march", "marcius", "marz", "maerz"),
+    "month_april": ("april", "aprilis"),
+    "month_may": ("may", "majus", "mai"),
+    "month_june": ("june", "junius", "juni"),
+    "month_july": ("july", "julius", "juli"),
+    "month_august": ("august", "augusztus"),
+    "month_september": ("september", "szeptember"),
+    "month_october": ("october", "oktober"),
+    "month_november": ("november",),
+    "month_december": ("december",),
 }
 
 
