@@ -709,6 +709,113 @@ def test_sentence_support_gate_uses_long_form_budget_and_named_call_phase():
     assert client.kwargs["call_phase"] == "factual_sentence_support_audit"
 
 
+def test_sentence_support_gate_rejects_url_only_keep_evidence():
+    authority = (
+        "AUTHORIZED EVIDENCE: Correct Author wrote Silver Story in 1912. "
+        "Source: https://example.com/history"
+    )
+
+    class SequenceClient:
+        def __init__(self):
+            self.calls = 0
+
+        def chat_once(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return "S0\tKEEP\thttps://example.com/history"
+            return "Correct Author wrote Silver Story in 1912."
+
+    client = SequenceClient()
+    result = guard_grounded_answer(
+        client,
+        "qwen-test",
+        "Írj ismertetőt.",
+        "Correct Author wrote Silver Story in 1912.",
+        authority,
+        force_verify=True,
+        literal_authority_text=authority,
+        repair_authority_text=authority,
+        strict_relation_audit=True,
+        output_budget=2048,
+        temperature=0.0,
+        seed=42,
+    )
+
+    assert result == "Correct Author wrote Silver Story in 1912."
+    assert client.calls == 2
+
+
+def test_sentence_support_gate_requires_explicit_exclusivity_relation():
+    authority = (
+        "AUTHORIZED EVIDENCE: Sample State intervened in support of Partner State in 1912."
+    )
+
+    class SequenceClient:
+        def __init__(self):
+            self.calls = 0
+
+        def chat_once(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return (
+                    "S0\tKEEP\tSample State intervened in support of Partner State in 1912."
+                )
+            return "Sample State 1912-ben beavatkozott Partner State támogatására."
+
+    client = SequenceClient()
+    result = guard_grounded_answer(
+        client,
+        "qwen-test",
+        "Írj történelmi ismertetőt.",
+        "Sample State volt az egyetlen komoly szövetséges, és 1912-ben beavatkozott.",
+        authority,
+        force_verify=True,
+        literal_authority_text=authority,
+        repair_authority_text=authority,
+        strict_relation_audit=True,
+        output_budget=2048,
+        temperature=0.0,
+        seed=42,
+    )
+
+    assert "egyetlen" not in result.casefold()
+    assert client.calls == 2
+
+
+def test_sentence_support_gate_rejects_wrong_month_relation():
+    authority = "AUTHORIZED EVIDENCE: The event began in September 1912."
+
+    class SequenceClient:
+        def __init__(self):
+            self.calls = 0
+
+        def chat_once(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return "S0\tKEEP\tThe event began in September 1912."
+            return "Az esemény 1912 szeptemberében kezdődött."
+
+    client = SequenceClient()
+    result = guard_grounded_answer(
+        client,
+        "qwen-test",
+        "Írj történelmi ismertetőt.",
+        "Az esemény 1912 júniusában kezdődött.",
+        authority,
+        force_verify=True,
+        literal_authority_text=authority,
+        repair_authority_text=authority,
+        strict_relation_audit=True,
+        output_budget=2048,
+        temperature=0.0,
+        seed=42,
+    )
+
+    assert "június" not in result.casefold()
+    assert "szeptember" in result.casefold()
+    assert client.calls == 2
+
+
 def test_sentence_support_gate_requires_evidence_fragment_to_exist_in_authority():
     authority = (
         "AUTHORIZED EVIDENCE: Correct Author wrote Silver Story in 1912. "
