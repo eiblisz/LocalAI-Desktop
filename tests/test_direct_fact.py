@@ -365,6 +365,33 @@ def test_first_album_title_question_without_entity_type_builds_bound_query():
     assert strategy == "premise_neutral_entity_release_relation"
 
 
+def test_debut_fact_subject_binding_tolerates_high_similarity_spelling_error():
+    prompt = "melyik nagylemez volt az elso a samplband zenekarnak?"
+    evidence = {
+        "results": [{
+            "title": "Sampleband discography",
+            "snippet": "Sampleband released its self-titled debut album in 1984.",
+        }],
+    }
+
+    fact = resolve_debut_release_fact(evidence, prompt)
+
+    assert fact["subject"] == "Sampleband"
+    assert fact["title"] == "Sampleband"
+
+
+def test_debut_fact_subject_binding_rejects_low_similarity_short_neighbor():
+    prompt = "melyik nagylemez volt az elso a samplband zenekarnak?"
+    evidence = {
+        "results": [{
+            "title": "Samp discography",
+            "snippet": "Samp released its self-titled debut album in 1984.",
+        }],
+    }
+
+    assert resolve_debut_release_fact(evidence, prompt) == {}
+
+
 def test_first_album_selection_builds_premise_neutral_entity_query():
     prompt = "Melyik nagylemez volt az első a sampleband zenekarnak?"
     query, strategy = derive_premise_neutral_query(prompt, "selection")
