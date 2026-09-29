@@ -617,11 +617,29 @@ def split_user_action_units(text):
     # every non-empty line to be a complete question preserves ordinary wrapped
     # prose and multi-line artifact instructions as a single action.
     plain_lines = [line.strip() for line in raw.splitlines() if line.strip()]
-    if (
-        len(plain_lines) >= 2
-        and all(line.endswith("?") for line in plain_lines)
+
+    def standalone_line_task(line):
+        semantic = re.sub(r"[\\]+\s*$", "", str(line or "").strip()).strip()
+        if semantic.endswith("?"):
+            return True
+        folded = canonical_match_text(semantic)
+        first = folded.split()[0] if folded.split() else ""
+        return first in {
+            "irj", "ird", "keszits", "mutasd", "magyarazd", "elemezd",
+            "hasonlitsd", "keress", "nezz", "adj", "foglald", "jegyezd",
+            "write", "create", "make", "explain", "analyze", "compare",
+            "find", "search", "show", "summarize", "remember",
+            "schreib", "erstelle", "erklar", "analysiere", "vergleiche",
+            "suche", "zeige",
+        }
+
+    if len(plain_lines) >= 2 and all(
+        standalone_line_task(line) for line in plain_lines
     ):
-        return plain_lines
+        return [
+            re.sub(r"[\\]+\s*$", "", line).strip()
+            for line in plain_lines
+        ]
 
     matches = list(_NUMBERED_TASK_START.finditer(raw))
     if len(matches) <= 1:
