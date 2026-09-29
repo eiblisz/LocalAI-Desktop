@@ -654,6 +654,60 @@ def test_strict_relation_audit_instruction_rejects_name_cooccurrence_as_support(
     assert "delete that sentence rather than guessing" in system
 
 
+def test_sentence_support_gate_does_not_return_heading_only_shell_for_exact_paragraph_request():
+    authority = (
+        "AUTHORIZED EVIDENCE: Sample event began in 1912. "
+        "It continued through the following year."
+    )
+
+    class SequenceClient:
+        def __init__(self):
+            self.calls = 0
+
+        def chat_once(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return (
+                    "S0|DROP|-\\n"
+                    "S1|DROP|-"
+                )
+            if self.calls == 2:
+                return "\\n\\n".join(
+                    f"{index}. bekezdés. Sample event began in 1912."
+                    for index in range(1, 11)
+                )
+            return "\\n".join(
+                f"S{index}|KEEP|Sample event began in 1912."
+                for index in range(10)
+            )
+
+    draft = (
+        "### Történelmi esszé\\n\\n"
+        "#### 1. Első rész\\n\\nSample event began in 1912.\\n\\n"
+        "#### 2. Második rész\\n\\nIt continued through the following year."
+    )
+    client = SequenceClient()
+    result = guard_grounded_answer(
+        client,
+        "qwen-test",
+        "Írj egy 10 bekezdésből álló történelmi esszét.",
+        draft,
+        authority,
+        force_verify=True,
+        literal_authority_text=authority,
+        repair_authority_text=authority,
+        prune_unsupported_sentences=True,
+        strict_relation_audit=True,
+        output_budget=2048,
+        temperature=0.0,
+        seed=42,
+    )
+
+    assert "### Történelmi esszé" not in result
+    assert len([block for block in result.split("\\n\\n") if block.strip()]) == 10
+    assert client.calls == 3
+
+
 def test_sentence_support_gate_accepts_literal_tab_placeholder_protocol():
     authority = "AUTHORIZED EVIDENCE: Correct Author wrote Silver Story in 1912."
 
