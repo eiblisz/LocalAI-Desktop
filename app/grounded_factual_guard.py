@@ -1,3 +1,4 @@
+import json
 import re
 
 from .generation_policy import requested_paragraph_range
@@ -352,6 +353,41 @@ def _parse_sentence_support_gate(
     """Parse bounded KEEP/DROP judgments and verify KEEP evidence is source-bound."""
     judgments = {}
     unit_count = len(units)
+
+    # Preferred production protocol: JSON mode prevents verifier prose drift.
+    try:
+        parsed = json.loads(str(raw or "").strip())
+    except (TypeError, ValueError, json.JSONDecodeError):
+        parsed = None
+    if isinstance(parsed, dict) and isinstance(parsed.get("verdicts"), list):
+        for item in parsed["verdicts"]:
+            if not isinstance(item, dict):
+                return None
+            try:
+                identifier = int(item.get("s"))
+            except (TypeError, ValueError):
+                return None
+            if identifier < 0 or identifier >= unit_count or identifier in judgments:
+                return None
+            status = str(item.get("v") or "").strip().upper()
+            if status not in {"KEEP", "DROP"}:
+                return None
+            evidence = str(item.get("e") or "").strip()
+            if status == "KEEP":
+                catalog = dict(evidence_catalog or {})
+                reference_match = re.fullmatch(r"(?i)E(\d+)", evidence)
+                reference_id = f"E{int(reference_match.group(1))}" if reference_match else ""
+                evidence_text = str(catalog.get(reference_id) or "")
+                if not _evidence_fragment_supports_sentence(
+                    units[identifier]["text"],
+                    evidence_text,
+                    authority_text,
+                ):
+                    status = "DROP"
+            judgments[identifier] = status
+        if set(judgments) == set(range(unit_count)):
+            return judgments
+        return None
     for raw_line in str(raw or "").replace("```", "").splitlines():
         line = raw_line.strip()
         if not line:
@@ -600,11 +636,11 @@ def _sentence_support_audit(
             "role": "system",
             "content": (
                 "Audit each sentence independently against ONLY the numbered evidence "
-                "references supplied below. For every sentence id return exactly one line "
-                "using literal pipe characters in this form: S0|KEEP|E12, or S0|DROP|-. "
-                "For KEEP, return exactly one evidence id and NEVER copy evidence text. "
-                "Do not write the word TAB or a <TAB> placeholder. KEEP only when that single "
-                "evidence unit directly supports every factual relation in the sentence. "
+                "references supplied below. Return ONLY one JSON object with key verdicts. "
+                "Each verdict must contain integer s, string v (KEEP or DROP), and string e "
+                "(one E-number for KEEP, or - for DROP). Include exactly one verdict for "
+                "every supplied sentence id. Never copy evidence text. KEEP only when that "
+                "single evidence unit directly supports every factual relation in the sentence. "
                 "Mere co-occurrence of the same names is not support. Matching names or dates "
                 "alone is not enough. DROP claims whose chronology, kinship, leadership, "
                 "authorship, causation, institutional role, quantity, first/last status, or "
@@ -629,13 +665,14 @@ def _sentence_support_audit(
     # references. This keeps long-form verification bounded without weakening
     # source binding or raising the output-token ceiling.
     audit_output_budget = min(
-        2048,
-        max(384, min(int(output_budget or 768), 128 + (len(units) * 32))),
+        1024,
+        max(384, min(int(output_budget or 768), 96 + (len(units) * 24))),
     )
     kwargs = {
         "model": model,
         "messages": messages,
         "num_predict": audit_output_budget,
+        "response_format": "json",
         "call_phase": "factual_sentence_support_audit",
     }
     if temperature is not None:
@@ -650,7 +687,10 @@ def _sentence_support_audit(
             unsupported = next(
                 (
                     name
-                    for name in ("num_predict", "temperature", "seed", "call_phase")
+                    for name in (
+                        "num_predict", "temperature", "seed",
+                        "response_format", "call_phase",
+                    )
                     if name in str(exc) and name in kwargs
                 ),
                 "",
