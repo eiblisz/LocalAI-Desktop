@@ -52,6 +52,20 @@ def analyze_question(value, *, identity=False):
         REQUESTED_FACT_MARKERS,
     )
     relation = _first_match(text, RELATION_MARKERS)
+    if (
+        relation in {"release", "publication"}
+        and requested_fact in {"entity", "attribute", "general"}
+        and any(
+            _has_marker(text, marker)
+            for marker in (
+                "elso album", "elso nagylemez", "elso lemez",
+                "debut album", "debutalbum", "first album",
+                "first studio album", "cime", "cim", "cimmel",
+                "title", "name",
+            )
+        )
+    ):
+        requested_fact = "selection"
     if identity_question:
         relation = "identity"
     elif requested_fact == "cause":
