@@ -1695,6 +1695,13 @@ class MainWindow(QMainWindow):
                     "post_processing",
                     guard_path="language_validation_only",
                 )
+                # Mark the fast path complete before snapshotting diagnostics
+                # into the persisted assistant message.
+                trace.add_metadata(
+                    direct_memory_fast_path=bool(conversation_recall),
+                    ollama_skipped=bool(conversation_recall),
+                    child_status="passed",
+                )
             target_chat = self._generation_target_chat()
             if target_chat is not None:
                 assistant_message = {"role": "assistant", "content": direct_memory_answer}
@@ -1734,11 +1741,6 @@ class MainWindow(QMainWindow):
             self._load_chat_list()
             if trace is not None:
                 trace.end("ui_delivery")
-                trace.add_metadata(
-                    direct_memory_fast_path=bool(conversation_recall),
-                    ollama_skipped=bool(conversation_recall),
-                    child_status="passed",
-                )
                 trace.emit_if_enabled()
             self.active_action_contract = None
             QTimer.singleShot(0, self._run_next_action_contract_safely)
