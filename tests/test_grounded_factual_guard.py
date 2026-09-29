@@ -633,7 +633,10 @@ def test_sentence_support_gate_drops_relation_not_directly_supported():
 
 
 def test_sentence_support_gate_requires_evidence_fragment_to_exist_in_authority():
-    authority = "AUTHORIZED EVIDENCE: Correct Author wrote Silver Story in 1912."
+    authority = (
+        "AUTHORIZED EVIDENCE: Correct Author wrote Silver Story in 1912. "
+        "Other Person was born in 1956."
+    )
 
     class GateClient:
         def chat_once(self, model, messages, timeout=600.0, **kwargs):
