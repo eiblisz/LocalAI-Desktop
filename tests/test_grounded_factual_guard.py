@@ -811,6 +811,38 @@ def test_sentence_support_gate_uses_compact_reference_budget_and_named_call_phas
     assert "E0:" in audit_prompt
 
 
+def test_sentence_support_gate_accepts_compact_json_verdicts():
+    authority = "AUTHORIZED EVIDENCE: Correct Author wrote Silver Story in 1912."
+
+    class JsonClient:
+        def __init__(self):
+            self.kwargs = None
+
+        def chat_once(self, **kwargs):
+            self.kwargs = dict(kwargs)
+            return '{"verdicts":[{"s":0,"v":"KEEP","e":"E0"}]}'
+
+    client = JsonClient()
+    result = guard_grounded_answer(
+        client,
+        "qwen-test",
+        "Írj ismertetőt.",
+        "Correct Author wrote Silver Story in 1912.",
+        authority,
+        force_verify=True,
+        literal_authority_text=authority,
+        repair_authority_text=authority,
+        strict_relation_audit=True,
+        output_budget=2048,
+        temperature=0.0,
+        seed=42,
+    )
+
+    assert result == "Correct Author wrote Silver Story in 1912."
+    assert client.kwargs["response_format"] == "json"
+    assert client.kwargs["num_predict"] == 384
+
+
 def test_sentence_support_gate_accepts_compact_evidence_reference():
     authority = "AUTHORIZED EVIDENCE: Correct Author wrote Silver Story in 1912."
 
