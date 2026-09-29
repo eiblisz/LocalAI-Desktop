@@ -222,6 +222,9 @@ def test_desktop_fast_path_skips_worker_for_unambiguous_current_recall(
     assert harness.worker is None
     assert assistant["content"] == "Kék Sárkány 7319."
     assert assistant["diagnostic"]["direct_memory_fast_path"] is True
+    assert assistant["timing"]["metadata"]["child_status"] == "passed"
+    assert assistant["timing"]["metadata"]["ollama_skipped"] is True
     snapshot = harness.pending_request_trace.snapshot()
     assert snapshot["metadata"]["ollama_skipped"] is True
+    assert snapshot["metadata"]["child_status"] == "passed"
     assert snapshot["metadata"]["estimated_prompt_units"] == 0
