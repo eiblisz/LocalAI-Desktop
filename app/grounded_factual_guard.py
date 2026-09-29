@@ -365,6 +365,11 @@ _RELATION_MARKER_GROUPS = {
     "ended": ("ended", "marked the end", "veget jelent", "vege lett", "endete", "beendete"),
     "caused": ("caused", "resulted in", "led to", "okoz", "eredmenyez", "vezetett", "fuhrte zu"),
     "basis": ("basis for", "foundation for", "alapja", "alapjava", "grundlage"),
+    "speech": ("speech", "speeches", "beszed", "beszedei", "szonoklat", "rede"),
+    "authorship": ("wrote", "written by", "author", "irta", "szerzo", "verfasste", "autor"),
+    "majority": ("majority", "most of", "tobbseg", "mehrheit"),
+    "representation": ("represent", "represented", "kepvisel", "vertrat", "vertreten"),
+    "power_transfer": ("took power", "seized power", "atvette a hatalmat", "machtubernahme", "macht ubernahm"),
     "month_january": ("january", "januar", "januar", "januar"),
     "month_february": ("february", "februar", "februar"),
     "month_march": ("march", "marcius", "marz", "maerz"),
@@ -767,15 +772,17 @@ def guard_grounded_answer(
             literal_authority,
         )
         if sanitized and not sanitized_remaining:
+            repair = sanitized
+            remaining = ()
             if trace is not None:
                 trace.add_metadata(
-                    factual_guard_repair_status="pass_after_source_cleanup",
+                    factual_guard_repair_status="source_cleanup_pending_semantic_audit",
                     factual_guard_remaining_unsupported_literals="",
                     factual_guard_remaining_literals="",
                 )
-            return sanitized
-        remaining = sanitized_remaining or remaining
-        repair = sanitized if sanitized else repair
+        else:
+            remaining = sanitized_remaining or remaining
+            repair = sanitized if sanitized else repair
 
     if remaining and prune_unsupported_sentences:
         post_pruned = _remove_sentences_with_unsupported_literals(
@@ -787,16 +794,18 @@ def guard_grounded_answer(
             literal_authority,
         )
         if post_pruned and not post_pruned_remaining:
+            post_repair_pruned_literals = remaining
+            repair = post_pruned
+            remaining = ()
             if trace is not None:
                 trace.add_metadata(
-                    factual_guard_repair_status="pass_after_post_repair_prune",
+                    factual_guard_repair_status="post_repair_prune_pending_semantic_audit",
                     factual_guard_post_repair_pruned_literals=", ".join(
-                        remaining[:6]
+                        post_repair_pruned_literals[:6]
                     ),
                     factual_guard_remaining_unsupported_literals="",
                     factual_guard_remaining_literals="",
                 )
-            return post_pruned
 
     if remaining:
         if trace is not None:
@@ -809,6 +818,67 @@ def guard_grounded_answer(
             "Grounded answer still contains unsupported factual literals: "
             + ", ".join(remaining[:6])
         )
+
+    # A repair is a new factual draft. For strict long-form grounding it may
+    # not bypass the relation gate merely because its names/dates are literal-
+    # safe. Re-audit the repaired prose once and expose only the source-bound
+    # sentences. If the protocol is malformed again, fail closed instead of
+    # returning semantically unchecked repair text.
+    if strict_relation_audit:
+        if trace is not None:
+            trace.begin("factual_post_repair_sentence_support_audit")
+        post_gated, post_audit_raw = _sentence_support_audit(
+            client,
+            model,
+            user_prompt,
+            repair,
+            repair_authority,
+            output_budget=output_budget,
+            temperature=temperature,
+            seed=seed,
+        )
+        if trace is not None:
+            trace.end(
+                "factual_post_repair_sentence_support_audit",
+                factual_post_repair_sentence_support_audit=(
+                    "pass" if post_gated else "fail_closed"
+                ),
+            )
+        if not post_gated:
+            if trace is not None:
+                trace.add_metadata(
+                    factual_guard_repair_status="post_repair_semantic_audit_failed",
+                    factual_post_repair_audit_raw_present=bool(post_audit_raw),
+                )
+            raise GroundedFactualGuardError(
+                "Grounded factual repair could not be semantically verified."
+            )
+        post_remaining = unsupported_grounded_literals(
+            post_gated,
+            literal_authority,
+        )
+        if post_remaining and prune_unsupported_sentences:
+            post_gated = _remove_sentences_with_unsupported_literals(
+                post_gated,
+                post_remaining,
+            )
+            post_remaining = unsupported_grounded_literals(
+                post_gated,
+                literal_authority,
+            )
+        if not post_gated or post_remaining:
+            raise GroundedFactualGuardError(
+                "Grounded factual repair failed post-repair verification."
+            )
+        repair = post_gated
+        if trace is not None:
+            trace.add_metadata(
+                factual_guard_repair_status="pass_after_post_repair_semantic_audit",
+                factual_guard_remaining_unsupported_literals="",
+                factual_guard_remaining_literals="",
+            )
+        return repair
+
     if trace is not None:
         trace.add_metadata(
             factual_guard_repair_status="pass",
