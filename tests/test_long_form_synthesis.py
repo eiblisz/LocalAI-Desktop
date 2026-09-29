@@ -31,11 +31,11 @@ def _contract(prompt, web_mode="ON"):
     return plan_chat_actions(ActionRuntime(), prompt, web_mode=web_mode)[0]
 
 
-def test_case_01_stable_general_knowledge_with_web_on_stays_local():
+def test_case_01_long_external_exposition_with_web_on_uses_grounded_web():
     contract = _contract(LONG_FORM_STABLE_GENERAL_PROMPT)
-    assert contract.route == ROUTE_CHAT
-    assert contract.synthesis_policy.synthesis_route == SYNTHESIS_LOCAL
-    assert contract.use_web is False
+    assert contract.route == ROUTE_WEB
+    assert contract.synthesis_policy.synthesis_route == SYNTHESIS_WEB
+    assert contract.use_web is True
 
 
 def test_case_02_explicit_long_form_receives_bounded_larger_budget():
@@ -63,7 +63,8 @@ def test_case_02c_hungarian_inflected_exact_paragraph_count_is_long_form():
     )
     contract = _contract(prompt)
 
-    assert contract.route == ROUTE_CHAT
+    assert contract.route == ROUTE_WEB
+    assert contract.synthesis_policy.synthesis_route == SYNTHESIS_WEB
     assert contract.constraints.response_length == LENGTH_LONG
     assert contract.constraints.output_budget == 2048
     assert contract.runtime_output_budget == 2048
@@ -169,10 +170,10 @@ def test_host_policy_acceptance_report_is_bounded_and_machine_readable():
     report = run_long_form_synthesis_acceptance().to_dict()
     assert report == {
         "query_class": "long_form_stable_general",
-        "route": "LOCAL",
+        "route": "WEB",
         "requested_detail": "long",
         "num_predict": 2048,
-        "web_required": False,
+        "web_required": True,
         "done_reason": "not_run",
         "generated_count": None,
         "repair_attempts": 0,
