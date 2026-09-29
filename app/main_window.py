@@ -1153,6 +1153,62 @@ class MainWindow(QMainWindow):
             )
         return recall
 
+    def _direct_other_window_memory_recall(self, query, *, trace=None):
+        """Return one unambiguous value from bounded cross-window user state."""
+        chat_id = str(self.generation_chat_id or "")
+        if trace is not None:
+            trace.begin("memory_scope_resolution")
+            trace.end(
+                "memory_scope_resolution",
+                memory_scope="other_window",
+                memory_reason="explicit_other_conversation",
+                cross_window_requested=True,
+                global_memory_requested=False,
+                current_window_allowed=False,
+                cross_window_allowed=True,
+                global_memory_allowed=False,
+            )
+            trace.mark_duration("current_raw_context_retrieval", 0)
+            trace.mark_duration("window_memory_retrieval", 0)
+            trace.mark_duration("global_memory_retrieval", 0)
+            trace.begin("cross_window_retrieval")
+
+        related = self.memory_store.search_window_memories(
+            query,
+            exclude_chat_id=chat_id,
+            limit=2,
+        )
+        matched_state = "\n".join(
+            str(item.get("matched_state") or "").strip()
+            for item in related
+            if str(item.get("matched_state") or "").strip()
+        )
+
+        if trace is not None:
+            trace.end(
+                "cross_window_retrieval",
+                cross_window_hit=bool(related),
+                cross_window_retrieved_count=len(related),
+            )
+            trace.begin("direct_memory_recall")
+
+        recall = resolve_current_conversation_recall(
+            query,
+            indexed_state=matched_state,
+        )
+
+        if trace is not None:
+            trace.end(
+                "direct_memory_recall",
+                current_window_hit=False,
+                cross_window_hit=recall.is_direct_hit,
+                global_memory_hit=False,
+                retrieved_item_count=recall.retrieved_item_count,
+                recall_candidate_count=recall.candidate_count,
+                recall_source=recall.source_kind or "none",
+            )
+        return recall
+
     def _build_memory_context(self, query, *, limit=8):
         """Build bounded runtime-only long-term memory context for the model."""
         if not is_durable_memory_query(query):
@@ -1579,16 +1635,21 @@ class MainWindow(QMainWindow):
         model = self.pending_action_model
 
         conversation_recall = None
-        if (
-            contract.route == ROUTE_CHAT
-            and bool(getattr(contract, "conversation_local", False))
-            and not is_other_window_request(prompt)
-            and not is_global_memory_request(prompt)
-        ):
-            conversation_recall = self._direct_conversation_memory_recall(
-                prompt,
-                trace=self.pending_request_trace,
-            )
+        if contract.route == ROUTE_CHAT:
+            if (
+                bool(getattr(contract, "conversation_local", False))
+                and not is_other_window_request(prompt)
+                and not is_global_memory_request(prompt)
+            ):
+                conversation_recall = self._direct_conversation_memory_recall(
+                    prompt,
+                    trace=self.pending_request_trace,
+                )
+            elif is_other_window_request(prompt):
+                conversation_recall = self._direct_other_window_memory_recall(
+                    prompt,
+                    trace=self.pending_request_trace,
+                )
 
         direct_conversation_answer = False
         if conversation_recall is not None and conversation_recall.is_direct_hit:
@@ -1641,10 +1702,15 @@ class MainWindow(QMainWindow):
                 if trace is not None:
                     assistant_message["timing"] = trace.snapshot()
                 if conversation_recall is not None:
+                    other_window_fast_path = is_other_window_request(prompt)
                     assistant_message["diagnostic"] = {
-                        "memory_scope": "current_window",
-                        "current_window_hit": True,
-                        "cross_window_hit": False,
+                        "memory_scope": (
+                            "other_window"
+                            if other_window_fast_path
+                            else "current_window"
+                        ),
+                        "current_window_hit": not other_window_fast_path,
+                        "cross_window_hit": other_window_fast_path,
                         "global_memory_hit": False,
                         "retrieved_item_count": conversation_recall.retrieved_item_count,
                         "recent_raw_message_count": conversation_recall.recent_raw_message_count,
