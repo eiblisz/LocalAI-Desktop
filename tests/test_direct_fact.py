@@ -481,6 +481,25 @@ def test_host_resolves_self_titled_debut_selection_from_bound_evidence():
     assert "1984" in answer
 
 
+def test_later_self_titled_album_does_not_override_named_debut():
+    prompt = "mi volt a metalband elso albumanak a cime?"
+    evidence = {
+        "results": [{
+            "title": "Metalband discography",
+            "snippet": (
+                "Kill One is the debut studio album by Metalband, released in 1983. "
+                "Years later the band released the self-titled album Metalband."
+            ),
+        }],
+    }
+
+    fact = resolve_debut_release_fact(evidence, prompt)
+
+    assert fact["subject"] == "Metalband"
+    assert fact["title"] == "Kill One"
+    assert fact["year"] == "1983"
+
+
 def test_host_direct_fact_fallback_fails_closed_on_conflicting_debut_titles():
     prompt = "Melyik nagylemez volt az első a sampleband zenekarnak?"
     evidence = {
