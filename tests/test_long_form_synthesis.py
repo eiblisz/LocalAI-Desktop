@@ -181,6 +181,124 @@ def test_host_policy_acceptance_report_is_bounded_and_machine_readable():
     }
 
 
+def test_long_web_worker_verifies_once_and_enforces_exact_paragraph_output(
+    monkeypatch,
+):
+    prompt = (
+        "irj egy 10 bekezdesbol allo esszet egy tortenelmi esemenyrol"
+    )
+    captured = {}
+
+    class LongClient:
+        supports_hungarian_fluency_audit = False
+
+        def chat_once(self, model, messages, timeout=600.0, **kwargs):
+            return "tortenelmi esemeny attekintes"
+
+        def chat_stream(
+            self,
+            model,
+            messages,
+            on_token,
+            should_stop,
+            timeout=600.0,
+            **kwargs,
+        ):
+            draft = "\n".join(
+                [
+                    (
+                        f"{index}. bekezdes elso ellenorzott mondata. "
+                        f"{index}. bekezdes masodik ellenorzott mondata.&#x20;"
+                    )
+                    for index in range(1, 6)
+                ]
+            )
+            if not should_stop():
+                on_token(draft)
+            return {"done_reason": "stop", "eval_count": 180}
+
+    monkeypatch.setattr(
+        workers,
+        "search_web",
+        lambda query, max_results=8, fetch_pages=True: {
+            "provider": "test",
+            "query": query,
+            "results": [{
+                "title": "Tortenelmi forras",
+                "url": "https://example.test/history",
+                "snippet": (
+                    "A tortenelmi esemenyrol ellenorzott osszefoglalo forras."
+                ),
+            }],
+        },
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_urls",
+        lambda payload: ["https://example.test/history"],
+    )
+    monkeypatch.setattr(
+        workers,
+        "source_entries",
+        lambda payload, limit=6: [{
+            "title": "Tortenelmi forras",
+            "url": "https://example.test/history",
+        }],
+    )
+    monkeypatch.setattr(
+        workers,
+        "web_search_context_text",
+        lambda payload: (
+            "A tortenelmi esemenyrol ellenorzott osszefoglalo forras."
+        ),
+    )
+
+    def capture_grounding(
+        client,
+        model,
+        user_prompt,
+        answer,
+        authority,
+        **kwargs,
+    ):
+        captured["force_verify"] = kwargs.get("force_verify")
+        captured["temperature"] = kwargs.get("temperature")
+        captured["seed"] = kwargs.get("seed")
+        captured["authority"] = authority
+        return answer
+
+    monkeypatch.setattr(workers, "guard_grounded_answer", capture_grounding)
+
+    tokens = []
+    failures = []
+    worker = workers.ChatWebWorker(
+        LongClient(),
+        "local-test",
+        [{"role": "system", "content": "Base system"}],
+        prompt,
+        synthesis_route=SYNTHESIS_WEB,
+        output_budget=2048,
+    )
+    worker.token.connect(tokens.append)
+    worker.failed.connect(failures.append)
+    worker.run()
+
+    assert failures == []
+    assert captured["force_verify"] is True
+    assert captured["temperature"] == 0.0
+    assert captured["seed"] == 42
+    assert "ellenorzott osszefoglalo forras" in captured["authority"]
+
+    output = "".join(tokens)
+    assert "&#x20;" not in output
+    paragraphs = [
+        block.strip()
+        for block in output.split("\n\n")
+        if block.strip()
+    ]
+    assert len(paragraphs) == 10
+
+
 def test_hybrid_worker_keeps_stable_explanation_when_web_coverage_is_partial(
     monkeypatch,
 ):
