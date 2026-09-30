@@ -886,24 +886,10 @@ def anchor_resolved_direct_fact_answer(
     if not core:
         return str(draft or "").strip()
 
-    sentences = list(_split_answer_sentences(draft))
-    if len(sentences) <= 1:
-        return core
-
-    supporting_sentences = []
-    for sentence in sentences[1:]:
-        # Do not preserve a second model sentence that merely restates the same
-        # resolved debut/release relation. Keep genuinely additional context.
-        if (
-            str(fact.get("relation") or "") == "release"
-            and _is_debut_release_request(sentence)
-            and requested_fact_relation(sentence) == "release"
-        ):
-            continue
-        supporting_sentences.append(sentence)
-
-    supporting = " ".join(supporting_sentences).strip()
-    return (core + (" " + supporting if supporting else "")).strip()
+    # Once the host has deterministically resolved the exact requested core
+    # relation, return that fact only. Extra model prose is not needed for a
+    # concise direct-fact lookup and would reopen a hallucination surface.
+    return core
 
 
 def _subject_display_surface(text, subject):
