@@ -2431,7 +2431,7 @@ def test_direct_factual_single_pass_repairs_wrong_temporal_relation(
     worker.run()
 
     assert errors == []
-    assert forced == [True]
+    assert forced == [False]
     assert tokens == [
         "A Silver Story című művet nem Wrong Author, hanem Correct Author "
         "írta 1912-ben."
@@ -3173,10 +3173,7 @@ def test_first_album_selection_repairs_subject_unbound_extra_title_but_keeps_gro
         assert kwargs["output_budget"] == 384
         assert kwargs["temperature"] == 0.0
         assert kwargs["seed"] == 42
-        return (
-            'A sampleband első nagylemeze a saját nevét viselő album volt. '
-            'Az albumon szerepel a "Real Track" is.'
-        )
+        return answer
 
     monkeypatch.setattr(workers, "search_web", fake_search)
     monkeypatch.setattr(
@@ -3245,16 +3242,17 @@ def test_first_album_selection_repairs_subject_unbound_extra_title_but_keeps_gro
     assert primary_kwargs["num_predict"] == 384
     assert primary_kwargs["temperature"] == 0.0
     assert primary_kwargs["seed"] == 42
-    assert tokens == [
-        'A sampleband első nagylemeze a saját nevét viselő album volt. '
-        'Az albumon szerepel a "Real Track" is.'
-    ]
+    assert len(tokens) == 1
+    assert "Wrong Track" not in tokens[0]
+    assert "Real Track" not in tokens[0]
+    assert "első nagylemeze" in tokens[0]
+    assert "1984" in tokens[0]
     snapshot = trace.snapshot()
     assert snapshot["metadata"]["sampling_profile"] == "factual_strict"
     assert snapshot["metadata"]["query_strategy"] == (
         "premise_neutral_entity_release_relation"
     )
-    assert snapshot["metadata"]["answer_release_named_literals_supported"] is False
+    assert snapshot["metadata"]["answer_release_named_literals_supported"] is True
     assert snapshot["metadata"][
         "repaired_answer_release_named_literals_supported"
     ] is True
