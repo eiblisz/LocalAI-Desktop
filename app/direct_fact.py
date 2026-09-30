@@ -1015,7 +1015,7 @@ def _debut_title_candidates_from_item(item, request_text):
         result_title
         and _debut_release_item_supported(body, request_text)
         and re.search(
-            r"(?i)\((?:album|studio album|debut album)\)",
+            r"(?i)\((?:debut(?: studio)? album|first(?: studio)? album)\)",
             result_title,
         )
     ):
@@ -1026,7 +1026,7 @@ def _debut_title_candidates_from_item(item, request_text):
             flags=re.IGNORECASE,
         )
         cleaned_title = re.sub(
-            r"\s*\((?:album|studio album|debut album)\)\s*$",
+            r"\s*\((?:debut(?: studio)? album|first(?: studio)? album)\)\s*$",
             "",
             cleaned_title,
             flags=re.IGNORECASE,
