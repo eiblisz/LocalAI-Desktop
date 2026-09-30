@@ -563,11 +563,10 @@ def test_host_anchor_returns_only_resolved_core_fact():
         language="hu",
     )
 
-    assert anchored.startswith(
-        "A W.A.S.P. első nagylemeze a W.A.S.P. című album volt."
+    assert anchored == (
+        "A W.A.S.P. első nagylemeze a W.A.S.P. című album volt. "
+        "Az album 1984-ben jelent meg."
     )
-    assert "1984" in anchored
     assert "The Last Command" not in anchored
     assert "A zenekar az 1980-as években vált ismertté." not in anchored
-    assert anchored.count(".") <= 3
     assert "\\." not in anchored
