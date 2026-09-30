@@ -2159,12 +2159,17 @@ class ChatWebWorker(QObject):
             if self.trace is not None:
                 self.trace.begin("factual_validation")
             try:
+                verification_authority_text = (
+                    factual_authority_text
+                    if direct_factual_candidate
+                    else context_text
+                )
                 answer = guard_grounded_answer(
                     self.client,
                     self.model,
                     self.user_prompt,
                     answer,
-                    self.user_prompt + "\n\n" + factual_authority_text,
+                    self.user_prompt + "\n\n" + verification_authority_text,
                     trace=self.trace,
                     force_verify=(
                         factual_risk_request
