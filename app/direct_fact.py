@@ -976,13 +976,25 @@ def _debut_title_candidates_from_item(item, request_text):
         if all(_fold(existing) != folded for existing in candidates):
             candidates.append(title)
 
-    folded_item = _fold(item_text)
-    self_titled_markers = (
-        "self titled", "selftitled", "eponymous",
-        "sajat nevet viselo", "sajat cimu", "sajat nevu",
-        "selbstbetitelt", "selbstbenannt",
+    # A self-titled marker is only relevant when it is structurally bound
+    # to the debut/first-album relation. A biography may mention a later
+    # eponymous album in the same result; that must not redefine the debut.
+    self_titled_debut_patterns = (
+        r"\b(?:self titled|selftitled|eponymous)\b(?:\s+\w+){0,4}\s+"
+        r"(?:debut|first)\s+(?:studio\s+)?album\b",
+        r"\b(?:debut|first)\b(?:\s+\w+){0,4}\s+"
+        r"(?:self titled|selftitled|eponymous)\b(?:\s+\w+){0,3}\s+album\b",
+        r"\b(?:elso|deb[uü]t\w*)\b(?:\s+\w+){0,4}\s+"
+        r"(?:sajat nevet viselo|sajat cimu|sajat nevu)\b"
+        r"(?:\s+\w+){0,3}\s+(?:album\w*|nagylemez\w*|lemez\w*)\b",
+        r"\b(?:sajat nevet viselo|sajat cimu|sajat nevu)\b"
+        r"(?:\s+\w+){0,4}\s+(?:elso|deb[uü]t\w*)\b"
+        r"(?:\s+\w+){0,3}\s+(?:album\w*|nagylemez\w*|lemez\w*)\b",
+        r"\b(?:erstes|debut\w*)\b(?:\s+\w+){0,4}\s+"
+        r"(?:selbstbetitelt|selbstbenannt)\w*\b(?:\s+\w+){0,3}\s+album\w*\b",
     )
-    if any(marker in folded_item for marker in self_titled_markers):
+    folded_item = _fold(item_text)
+    if any(re.search(pattern, folded_item) for pattern in self_titled_debut_patterns):
         add(subject_surface)
 
     # Encyclopedic result shape:
