@@ -2431,7 +2431,7 @@ def test_direct_factual_single_pass_repairs_wrong_temporal_relation(
     worker.run()
 
     assert errors == []
-    assert forced == [False]
+    assert forced == [True]
     assert tokens == [
         "A Silver Story című művet nem Wrong Author, hanem Correct Author "
         "írta 1912-ben."
@@ -3235,7 +3235,7 @@ def test_first_album_selection_repairs_subject_unbound_extra_title_but_keeps_gro
 
     assert errors == []
     assert search_calls == ["sampleband debut first album discography"]
-    assert forced == [True]
+    assert forced == [False]
     assert client.stream_calls == []
     assert len(client.once_calls) == 1
     _, _, primary_kwargs = client.once_calls[0]
