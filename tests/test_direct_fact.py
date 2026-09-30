@@ -544,7 +544,7 @@ def test_host_resolves_first_album_from_artist_overview_without_using_band_page_
     assert fact["year"] == "1984"
 
 
-def test_host_anchor_replaces_wrong_core_sentence_and_preserves_supporting_context():
+def test_host_anchor_returns_only_resolved_core_fact():
     fact = {
         "subject": "W\\.A.S.P.",
         "title": "W\\.A.S.P.",
@@ -568,5 +568,6 @@ def test_host_anchor_replaces_wrong_core_sentence_and_preserves_supporting_conte
     )
     assert "1984" in anchored
     assert "The Last Command" not in anchored
-    assert "A zenekar az 1980-as években vált ismertté." in anchored
+    assert "A zenekar az 1980-as években vált ismertté." not in anchored
+    assert anchored.count(".") <= 3
     assert "\\." not in anchored
