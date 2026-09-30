@@ -48,6 +48,7 @@ from .grounded_factual_guard import (
     guard_grounded_answer,
 )
 from .generation_policy import (
+    LENGTH_LONG,
     SAMPLING_FACTUAL_STRICT,
     SYNTHESIS_HYBRID,
     SYNTHESIS_LOCAL,
@@ -69,7 +70,11 @@ from .language_policy import (
     response_language_matches,
 )
 from .ollama_client import OllamaClient, ollama_failure_metadata
-from .response_guard import ResponseValidationError, guard_response
+from .response_guard import (
+    ResponseValidationError,
+    guard_response,
+    normalize_user_visible_output,
+)
 from .request_semantics import (
     TASK_DIRECT_FACT,
     TASK_ENTITY_OVERVIEW,
@@ -78,6 +83,7 @@ from .request_semantics import (
 )
 from .search_query_validation import validate_search_queries, validate_search_query
 from .runtime_control import ExecutionBudget, ExecutionControl
+from .task_constraints import build_task_constraints
 from .scheduled_task_executor import ScheduledTaskExecutor
 from .weather_tool import get_weather, weather_context_text
 from .web_intent import answer_requires_web_fallback, is_factual_risk_request
@@ -391,6 +397,7 @@ class ChatWebWorker(QObject):
         explicit_batch_child=False,
         output_budget=None,
         synthesis_route=None,
+        constraints=None,
     ):
         super().__init__()
         self.client = client
@@ -406,6 +413,7 @@ class ChatWebWorker(QObject):
             self.followup_resolution.resolved_intent
             or self.original_user_prompt
         )
+        self.constraints = constraints or build_task_constraints(self.user_prompt)
         classification_started = perf_counter()
         self.request_profile = classify_request(self.user_prompt)
         default_generation_policy = build_generation_policy(
@@ -827,6 +835,7 @@ class ChatWebWorker(QObject):
                 self.model,
                 language_source,
                 answer,
+                constraints=self.constraints,
                 control=self.execution_control,
                 output_budget=self.output_budget,
                 trace=self.trace,
@@ -2106,6 +2115,10 @@ class ChatWebWorker(QObject):
             temporal_literal_mismatch_requires_verify = False
             release_named_literal_mismatches = ()
             factual_risk_request = is_factual_risk_request(self.user_prompt)
+            long_grounded_verify = bool(
+                self.synthesis_route == SYNTHESIS_WEB
+                and self.response_length == LENGTH_LONG
+            )
             if factual_risk_request:
                 release_named_literal_mismatches = unsupported_release_named_literals(
                     answer,
@@ -2172,20 +2185,23 @@ class ChatWebWorker(QObject):
                     self.user_prompt + "\n\n" + verification_authority_text,
                     trace=self.trace,
                     force_verify=(
-                        factual_risk_request
-                        and not has_authoritative_current_fact
-                        and (
-                            not single_pass_factual
-                            or relation_mismatch_requires_verify
-                            or creator_mismatch_requires_verify
-                            or temporal_literal_mismatch_requires_verify
-                            or bool(release_named_literal_mismatches)
+                        long_grounded_verify
+                        or (
+                            factual_risk_request
+                            and not has_authoritative_current_fact
+                            and (
+                                not single_pass_factual
+                                or relation_mismatch_requires_verify
+                                or creator_mismatch_requires_verify
+                                or temporal_literal_mismatch_requires_verify
+                                or bool(release_named_literal_mismatches)
+                            )
                         )
                     ),
                     language_instruction=self._conversation_language_instruction(),
                     output_budget=self.output_budget,
-                    temperature=self.temperature,
-                    seed=self.seed,
+                    temperature=(0.0 if long_grounded_verify else self.temperature),
+                    seed=(42 if long_grounded_verify else self.seed),
                 )
             except GroundedFactualGuardError:
                 deterministic_fallback = ""
@@ -2413,6 +2429,7 @@ class ChatWebWorker(QObject):
                     page_fetch_count=self.execution_control.budget.page_fetches,
                     repair_count=self.execution_control.budget.repairs,
                 )
+            answer = normalize_user_visible_output(answer, self.constraints)
             self.token.emit(answer)
             self.finished.emit()
         except Exception as exc:
