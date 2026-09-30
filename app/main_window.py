@@ -1792,6 +1792,7 @@ class MainWindow(QMainWindow):
                     "synthesis_route",
                     None,
                 ),
+                constraints=contract.constraints,
             )
         elif contract.route == ROUTE_CHAT:
             self.worker = AdaptiveChatWorker(

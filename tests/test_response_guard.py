@@ -212,6 +212,54 @@ def test_normal_output_hygiene_removes_html_space_entities_from_prose():
     assert "Második mondat." in value
 
 
+def test_exact_paragraph_contract_splits_existing_prose_without_new_facts():
+    constraints = build_task_constraints(
+        "irj egy 10 bekezdesbol allo esszet egy tortenelmi esemenyrol"
+    )
+    draft = " ".join(
+        f"{index}. mondat egy ellenorzott tenyrol."
+        for index in range(1, 11)
+    )
+
+    value = normalize_user_visible_output(draft, constraints)
+    paragraphs = [
+        block.strip()
+        for block in value.split("\n\n")
+        if block.strip()
+    ]
+
+    assert len(paragraphs) == 10
+    assert "1. mondat" in value
+    assert "10. mondat" in value
+
+
+def test_exact_paragraph_contract_keeps_heading_outside_prose_count():
+    constraints = build_task_constraints(
+        "irj egy 3 bekezdesbol allo esszet egy tortenelmi esemenyrol"
+    )
+    draft = (
+        "### Cím\n\n"
+        "Elso mondat. Masodik mondat. Harmadik mondat."
+    )
+
+    value = normalize_user_visible_output(draft, constraints)
+    blocks = [block.strip() for block in value.split("\n\n") if block.strip()]
+
+    assert blocks[0] == "### Cím"
+    assert len(blocks[1:]) == 3
+
+
+def test_output_hygiene_decodes_numeric_entities_in_plain_prose():
+    constraints = build_task_constraints("Írj magyar magyarázatot.")
+    value = normalize_user_visible_output(
+        "A &#x4A;elölt név normál szövegben jelenjen meg.",
+        constraints,
+    )
+
+    assert "&#x4A;" not in value
+    assert "Jelölt" in value
+
+
 def test_output_hygiene_preserves_entities_when_html_is_requested():
     constraints = build_task_constraints("Adj HTML példát.")
     value = normalize_user_visible_output("<p>A&#x20;B</p>", constraints)

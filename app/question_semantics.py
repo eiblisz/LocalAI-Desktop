@@ -52,6 +52,26 @@ def analyze_question(value, *, identity=False):
         REQUESTED_FACT_MARKERS,
     )
     relation = _first_match(text, RELATION_MARKERS)
+    first_release_surface = bool(
+        re.search(
+            r"\b(?:elso|deb[uü]t\w*)\s+"
+            r"(?:studio\s+)?(?:album|nagylemez|lemez)\w*\b",
+            text,
+        )
+        or re.search(
+            r"\b(?:album|nagylemez|lemez)\w*\s+"
+            r"(?:volt\s+)?(?:az\s+)?elso\b",
+            text,
+        )
+        or re.search(
+            r"\b(?:first|debut)\s+(?:studio\s+)?album\b",
+            text,
+        )
+    )
+    if first_release_surface:
+        relation = "release"
+        if requested_fact in {"entity", "attribute", "general"}:
+            requested_fact = "selection"
     if identity_question:
         relation = "identity"
     elif requested_fact == "cause":

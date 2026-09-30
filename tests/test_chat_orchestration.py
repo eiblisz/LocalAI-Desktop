@@ -188,6 +188,31 @@ def test_mixed_batch_routes_recall_locally_and_fresh_query_to_web():
     assert [contract.conversation_local for contract in contracts] == [True, False]
 
 
+def test_other_window_recall_stays_local_with_web_on_recovery():
+    contracts = plan_chat_actions(
+        ActionRuntime(),
+        "Mi volt egy masik ablakban a tesztprojekt kodneve?",
+        web_mode="ON",
+    )
+
+    assert contracts[0].route == ROUTE_CHAT
+    assert contracts[0].use_web is False
+    assert contracts[0].conversation_local is False
+
+
+def test_long_external_essay_uses_web_on_without_touching_memory_authority():
+    contracts = plan_chat_actions(
+        ActionRuntime(),
+        "irj egy 10 bekezdesbol allo esszet a magyar 1848-as szabadsagharcrol",
+        web_mode="ON",
+    )
+
+    assert contracts[0].route == ROUTE_WEB
+    assert contracts[0].use_web is True
+    assert contracts[0].constraints.output_budget == 2048
+    assert "10 paragraphs" in contracts[0].constraints.format_constraints
+
+
 def test_invalid_mode_normalizes_to_auto():
     assert normalize_web_mode("weird") == "AUTO"
 

@@ -6,6 +6,7 @@ checking whether its evidence includes the kind of fact the user asked for.
 """
 
 import re
+from difflib import SequenceMatcher
 
 from .question_semantics import analyze_question
 from .request_semantics import identity_lookup_subject
@@ -123,6 +124,10 @@ def _release_subject_surface(prompt):
     """Extract the named entity in a first/debut-release question when structural."""
     raw = _clean(prompt)
     patterns = (
+        r"(?i)\b(?:mi|melyik)\s+volt\s+(?:a|az)\s+"
+        r"(?P<subject>.+?)\s+(?:els[őo]\w*|deb[uü]t\w*)\s+"
+        r"(?:album\w*|nagylemez\w*|lemez\w*)\s+(?:a\s+)?"
+        r"(?:c[ií]m\w*|neve)\b",
         r"(?i)\bmikor\s+(?:adta|adtak|kiadta|kiadtak)\s+(?:ki\s+)?"
         r"(?:a|az)\s+(?:els[őo]|deb[uü]t\w*)\s+[^?]{0,40}?\s+"
         r"(?:a|az)\s+(?P<subject>.+?)\s+(?:egy[uü]ttes|zenekar)\b",
@@ -186,12 +191,50 @@ def _is_debut_release_request(prompt):
     return _debut_release_surface_supported(prompt)
 
 
+def _similar_subject_surface(text, subject):
+    folded_subject = _fold(subject)
+    subject_tokens = folded_subject.split()
+    if not subject_tokens:
+        return ""
+    subject_compact = re.sub(r"[^a-z0-9]", "", folded_subject)
+    if len(subject_compact) < 5:
+        return ""
+
+    raw = str(text or "")
+    tokens = list(re.finditer(
+        r"[A-Za-zÁÉÍÓÖŐÚÜŰáéíóöőúüű0-9.&'’_-]+",
+        raw,
+    ))
+    if not tokens:
+        return ""
+
+    best = ("", 0.0)
+    base_count = len(subject_tokens)
+    for width in range(max(1, base_count - 1), min(len(tokens), base_count + 1) + 1):
+        for start in range(0, len(tokens) - width + 1):
+            end = start + width - 1
+            candidate = raw[tokens[start].start():tokens[end].end()]
+            candidate_compact = re.sub(r"[^a-z0-9]", "", _fold(candidate))
+            if len(candidate_compact) < 5:
+                continue
+            shortest = min(len(subject_compact), len(candidate_compact))
+            longest = max(len(subject_compact), len(candidate_compact))
+            if shortest / longest < 0.75:
+                continue
+            score = SequenceMatcher(None, subject_compact, candidate_compact).ratio()
+            if score >= 0.82 and score > best[1]:
+                best = (candidate, score)
+    return _clean(best[0]).strip(" ,;:") if best[0] else ""
+
+
 def _subject_supported_in_text(text, subject):
     folded_text = _fold(text)
     folded_subject = _fold(subject)
     if not folded_subject:
         return False
     if re.search(r"(?<!\w)" + re.escape(folded_subject) + r"(?!\w)", folded_text):
+        return True
+    if _similar_subject_surface(text, subject):
         return True
 
     # Entity names may be written with or without punctuation/spaces
@@ -843,24 +886,10 @@ def anchor_resolved_direct_fact_answer(
     if not core:
         return str(draft or "").strip()
 
-    sentences = list(_split_answer_sentences(draft))
-    if len(sentences) <= 1:
-        return core
-
-    supporting_sentences = []
-    for sentence in sentences[1:]:
-        # Do not preserve a second model sentence that merely restates the same
-        # resolved debut/release relation. Keep genuinely additional context.
-        if (
-            str(fact.get("relation") or "") == "release"
-            and _is_debut_release_request(sentence)
-            and requested_fact_relation(sentence) == "release"
-        ):
-            continue
-        supporting_sentences.append(sentence)
-
-    supporting = " ".join(supporting_sentences).strip()
-    return (core + (" " + supporting if supporting else "")).strip()
+    # Once the host has deterministically resolved the exact requested core
+    # relation, return that fact only. Extra model prose is not needed for a
+    # concise direct-fact lookup and would reopen a hallucination surface.
+    return core
 
 
 def _subject_display_surface(text, subject):
@@ -879,6 +908,10 @@ def _subject_display_surface(text, subject):
         match = re.search(token_pattern, raw)
         if match:
             return _clean(match.group(0)).strip(" ,;:")
+
+    similar_surface = _similar_subject_surface(raw, subject)
+    if similar_surface:
+        return similar_surface
 
     # Punctuated compact forms such as WASP / W.A.S.P.
     raw_subject = re.sub(r"[^A-Za-z0-9]", "", str(subject or ""))
@@ -929,13 +962,25 @@ def _debut_title_candidates_from_item(item, request_text):
         if all(_fold(existing) != folded for existing in candidates):
             candidates.append(title)
 
-    folded_item = _fold(item_text)
-    self_titled_markers = (
-        "self titled", "selftitled", "eponymous",
-        "sajat nevet viselo", "sajat cimu", "sajat nevu",
-        "selbstbetitelt", "selbstbenannt",
+    # A self-titled marker is only relevant when it is structurally bound
+    # to the debut/first-album relation. A biography may mention a later
+    # eponymous album in the same result; that must not redefine the debut.
+    self_titled_debut_patterns = (
+        r"\b(?:self titled|selftitled|eponymous)\b(?:\s+\w+){0,4}\s+"
+        r"(?:debut|first)\s+(?:studio\s+)?album\b",
+        r"\b(?:debut|first)\b(?:\s+\w+){0,4}\s+"
+        r"(?:self titled|selftitled|eponymous)\b(?:\s+\w+){0,3}\s+album\b",
+        r"\b(?:elso|deb[uü]t\w*)\b(?:\s+\w+){0,4}\s+"
+        r"(?:sajat nevet viselo|sajat cimu|sajat nevu)\b"
+        r"(?:\s+\w+){0,3}\s+(?:album\w*|nagylemez\w*|lemez\w*)\b",
+        r"\b(?:sajat nevet viselo|sajat cimu|sajat nevu)\b"
+        r"(?:\s+\w+){0,4}\s+(?:elso|deb[uü]t\w*)\b"
+        r"(?:\s+\w+){0,3}\s+(?:album\w*|nagylemez\w*|lemez\w*)\b",
+        r"\b(?:erstes|debut\w*)\b(?:\s+\w+){0,4}\s+"
+        r"(?:selbstbetitelt|selbstbenannt)\w*\b(?:\s+\w+){0,3}\s+album\w*\b",
     )
-    if any(marker in folded_item for marker in self_titled_markers):
+    folded_item = _fold(item_text)
+    if any(re.search(pattern, folded_item) for pattern in self_titled_debut_patterns):
         add(subject_surface)
 
     # Encyclopedic result shape:
@@ -970,7 +1015,7 @@ def _debut_title_candidates_from_item(item, request_text):
         result_title
         and _debut_release_item_supported(body, request_text)
         and re.search(
-            r"(?i)\((?:album|studio album|debut album)\)",
+            r"(?i)\((?:debut(?: studio)? album|first(?: studio)? album)\)",
             result_title,
         )
     ):
@@ -981,7 +1026,7 @@ def _debut_title_candidates_from_item(item, request_text):
             flags=re.IGNORECASE,
         )
         cleaned_title = re.sub(
-            r"\s*\((?:album|studio album|debut album)\)\s*$",
+            r"\s*\((?:debut(?: studio)? album|first(?: studio)? album)\)\s*$",
             "",
             cleaned_title,
             flags=re.IGNORECASE,

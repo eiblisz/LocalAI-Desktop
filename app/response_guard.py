@@ -1,3 +1,4 @@
+import html
 import json
 import re
 from dataclasses import dataclass
@@ -1075,6 +1076,64 @@ def _splice_span_repairs(original, spans, replacements, *, user_text):
     return "".join(pieces)
 
 
+def _requested_paragraph_bounds(format_items):
+    for item in format_items:
+        canonical = str(item or "").strip().casefold()
+        ranged = re.fullmatch(r"(\d{1,2})-(\d{1,2}) paragraphs", canonical)
+        if ranged:
+            low, high = sorted((int(ranged.group(1)), int(ranged.group(2))))
+            return low, high
+        exact = re.fullmatch(r"(\d{1,2}) paragraphs", canonical)
+        if exact:
+            value = int(exact.group(1))
+            return value, value
+    return None
+
+
+def _is_heading_only_block(block):
+    value = str(block or "").strip()
+    if not value or "\n" in value:
+        return False
+    plain = re.sub(r"^(?:#{1,6}\s+|\*\*(.+)\*\*|__(.+)__)$", r"\1\2", value).strip()
+    if plain != value:
+        return bool(plain) and not re.search(r"[.!?]$", plain)
+    words = re.findall(r"\w+", plain, flags=re.UNICODE)
+    return 1 <= len(words) <= 12 and not re.search(r"[.!?]$", plain)
+
+
+def _paragraph_blocks(value):
+    raw = str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not raw:
+        return []
+    raw = re.sub(
+        r"(?m)^(?P<heading>\s*(?:#{1,6}\s+.+|\*\*.+\*\*|__.+__))\n(?=\S)",
+        r"\g<heading>\n\n",
+        raw,
+    )
+    raw = re.sub(
+        r"(?<=[.!?])\n(?=(?:\*\*|__|#{1,6}\s+|[A-ZÁÉÍÓÖŐÚÜŰ]))",
+        "\n\n",
+        raw,
+    )
+    return [block.strip() for block in re.split(r"\n\s*\n+", raw) if block.strip()]
+
+
+def _split_prose_block(block):
+    parts = [
+        part.strip()
+        for part in re.split(r"(?<=[.!?])\s+", str(block or "").strip())
+        if part.strip()
+    ]
+    if len(parts) < 2:
+        return None
+    midpoint = max(1, len(parts) // 2)
+    left = " ".join(parts[:midpoint]).strip()
+    right = " ".join(parts[midpoint:]).strip()
+    if not left or not right:
+        return None
+    return left, right
+
+
 def normalize_user_visible_output(text, constraints=None):
     """Remove nonsemantic prose artifacts and enforce safe structural bounds."""
     value = str(text or "")
@@ -1086,41 +1145,57 @@ def normalize_user_visible_output(text, constraints=None):
     formats = {item.casefold() for item in format_items}
 
     if "html" not in formats:
-        # Some models double-escape HTML whitespace entities. Match one or
-        # more nested "amp;" layers without decoding arbitrary HTML markup.
+        value = re.sub(
+            r"&(?:amp;)*#(?:x0*20|0*32);[ \t]*(?=\r?\n|$)",
+            "\n\n",
+            value,
+            flags=re.IGNORECASE,
+        )
         value = re.sub(
             r"&(?:amp;)*#(?:x0*20|0*32);",
             " ",
             value,
             flags=re.IGNORECASE,
         )
+        for _ in range(3):
+            decoded = html.unescape(value)
+            if decoded == value:
+                break
+            value = decoded
+        if "markdown" not in formats:
+            value = re.sub(r"\\[ \t]*(?=\r?\n)", "", value)
 
-    paragraph_range = None
-    for item in format_items:
-        match = re.fullmatch(r"(\d{1,2})-(\d{1,2}) paragraphs", item.casefold())
-        if match:
-            low, high = sorted((int(match.group(1)), int(match.group(2))))
-            paragraph_range = (low, high)
-            break
-
-    # When the user explicitly asks for an essay paragraph range, exceeding
-    # the maximum is a formatting error that can be corrected without another
-    # model call or any factual rewrite: merge trailing prose blocks.
+    paragraph_bounds = _requested_paragraph_bounds(format_items)
     structural_formats = {"html", "json", "markdown", "table", "bulleted list"}
-    if paragraph_range and not (formats & structural_formats):
-        _low, high = paragraph_range
-        blocks = [
-            block.strip()
-            for block in re.split(r"\n\s*\n+", value.strip())
-            if block.strip()
-        ]
+    if paragraph_bounds and not (formats & structural_formats):
+        low, high = paragraph_bounds
+        blocks = _paragraph_blocks(value)
+        heading_blocks = []
+        while blocks and _is_heading_only_block(blocks[0]):
+            heading_blocks.append(blocks.pop(0))
+
         while len(blocks) > high and len(blocks) >= 2:
             blocks[-2:] = [blocks[-2].rstrip() + " " + blocks[-1].lstrip()]
-        if blocks:
-            value = "\n\n".join(blocks)
+
+        while len(blocks) < low:
+            candidate_index = None
+            candidate_split = None
+            candidate_size = 0
+            for index, block in enumerate(blocks):
+                split = _split_prose_block(block)
+                if split and len(block) > candidate_size:
+                    candidate_index = index
+                    candidate_split = split
+                    candidate_size = len(block)
+            if candidate_index is None or candidate_split is None:
+                break
+            blocks[candidate_index:candidate_index + 1] = list(candidate_split)
+
+        rebuilt = heading_blocks + blocks
+        if rebuilt:
+            value = "\n\n".join(rebuilt)
 
     return value
-
 
 def guard_response(
     client,

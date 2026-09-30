@@ -357,6 +357,41 @@ def test_debut_release_evidence_acceptance_is_case_and_wording_invariant(prompt)
 
 
 
+def test_first_album_title_question_without_entity_type_builds_bound_query():
+    prompt = "mi volt a sampleband elso albumanak a cime?"
+    query, strategy = derive_premise_neutral_query(prompt, "selection")
+
+    assert query == "sampleband debut first album discography"
+    assert strategy == "premise_neutral_entity_release_relation"
+
+
+def test_debut_fact_subject_binding_tolerates_high_similarity_spelling_error():
+    prompt = "melyik nagylemez volt az elso a samplband zenekarnak?"
+    evidence = {
+        "results": [{
+            "title": "Sampleband discography",
+            "snippet": "Sampleband released its self-titled debut album in 1984.",
+        }],
+    }
+
+    fact = resolve_debut_release_fact(evidence, prompt)
+
+    assert fact["subject"] == "Sampleband"
+    assert fact["title"] == "Sampleband"
+
+
+def test_debut_fact_subject_binding_rejects_low_similarity_short_neighbor():
+    prompt = "melyik nagylemez volt az elso a samplband zenekarnak?"
+    evidence = {
+        "results": [{
+            "title": "Samp discography",
+            "snippet": "Samp released its self-titled debut album in 1984.",
+        }],
+    }
+
+    assert resolve_debut_release_fact(evidence, prompt) == {}
+
+
 def test_first_album_selection_builds_premise_neutral_entity_query():
     prompt = "Melyik nagylemez volt az első a sampleband zenekarnak?"
     query, strategy = derive_premise_neutral_query(prompt, "selection")
@@ -446,6 +481,25 @@ def test_host_resolves_self_titled_debut_selection_from_bound_evidence():
     assert "1984" in answer
 
 
+def test_later_self_titled_album_does_not_override_named_debut():
+    prompt = "mi volt a metalband elso albumanak a cime?"
+    evidence = {
+        "results": [{
+            "title": "Metalband discography",
+            "snippet": (
+                "Kill One is the debut studio album by Metalband, released in 1983. "
+                "Years later the band released the self-titled album Metalband."
+            ),
+        }],
+    }
+
+    fact = resolve_debut_release_fact(evidence, prompt)
+
+    assert fact["subject"] == "Metalband"
+    assert fact["title"] == "Kill One"
+    assert fact["year"] == "1983"
+
+
 def test_host_direct_fact_fallback_fails_closed_on_conflicting_debut_titles():
     prompt = "Melyik nagylemez volt az első a sampleband zenekarnak?"
     evidence = {
@@ -470,6 +524,42 @@ def test_host_direct_fact_fallback_fails_closed_on_conflicting_debut_titles():
     ) == ""
 
 
+def test_later_generic_album_page_cannot_override_named_debut():
+    prompt = "mi volt a metalband elso albumanak a cime?"
+    evidence = {
+        "results": [
+            {
+                "title": "First Strike - Wikipedia",
+                "snippet": (
+                    "First Strike is the debut studio album by Metalband, "
+                    "released in 1983."
+                ),
+                "page_text": (
+                    "First Strike is the debut studio album by Metalband, "
+                    "released in 1983."
+                ),
+            },
+            {
+                "title": "Metalband (album)",
+                "snippet": (
+                    "Metalband is the fifth studio album by Metalband. "
+                    "The band's debut studio album was First Strike."
+                ),
+                "page_text": (
+                    "Metalband is the fifth studio album by Metalband. "
+                    "The band's debut studio album was First Strike."
+                ),
+            },
+        ],
+    }
+
+    fact = resolve_debut_release_fact(evidence, prompt)
+
+    assert fact["subject"] == "Metalband"
+    assert fact["title"] == "First Strike"
+    assert fact["year"] == "1983"
+
+
 def test_host_resolves_first_album_from_artist_overview_without_using_band_page_title():
     prompt = "melyik nagylemez volt az elso a wasp zenekarnak?"
     evidence = {
@@ -490,7 +580,7 @@ def test_host_resolves_first_album_from_artist_overview_without_using_band_page_
     assert fact["year"] == "1984"
 
 
-def test_host_anchor_replaces_wrong_core_sentence_and_preserves_supporting_context():
+def test_host_anchor_returns_only_resolved_core_fact():
     fact = {
         "subject": "W\\.A.S.P.",
         "title": "W\\.A.S.P.",
@@ -509,10 +599,10 @@ def test_host_anchor_replaces_wrong_core_sentence_and_preserves_supporting_conte
         language="hu",
     )
 
-    assert anchored.startswith(
-        "A W.A.S.P. első nagylemeze a W.A.S.P. című album volt."
+    assert anchored == (
+        "A W.A.S.P. első nagylemeze a W.A.S.P. című album volt. "
+        "Az album 1984-ben jelent meg."
     )
-    assert "1984" in anchored
     assert "The Last Command" not in anchored
-    assert "A zenekar az 1980-as években vált ismertté." in anchored
+    assert "A zenekar az 1980-as években vált ismertté." not in anchored
     assert "\\." not in anchored

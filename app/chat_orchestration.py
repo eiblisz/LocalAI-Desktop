@@ -1,3 +1,5 @@
+from .generation_policy import requested_paragraph_range
+from .internal_authority import is_internal_project_authority_request
 from .memory_scope import (
     is_global_memory_request,
     is_memory_architecture_topic_request,
@@ -107,6 +109,19 @@ def is_conversation_local_request(
     )
 
 
+def _web_on_long_factual_grounding(text):
+    """Force WEB ON only for long external exposition, not ordinary local prose."""
+    paragraph_range = requested_paragraph_range(text)
+    if not paragraph_range or paragraph_range[1] < 6:
+        return False
+    folded = canonical_match_text(text)
+    creative_markers = (
+        "vers", "poem", "koltemeny", "mese", "fiction",
+        "kitalalt tortenet", "creative story",
+    )
+    return not any(marker in folded for marker in creative_markers)
+
+
 def plan_chat_actions(
     action_runtime,
     user_text,
@@ -130,11 +145,26 @@ def plan_chat_actions(
             window_memory=window_memory,
         )
 
+    def local_authority_resolver(unit):
+        return bool(
+            conversation_local_resolver(unit)
+            or is_other_window_request(unit)
+            or is_global_memory_request(unit)
+            or is_memory_architecture_topic_request(unit)
+            or is_internal_project_authority_request(unit)
+        )
+
     contracts = action_runtime.plan_many(
         user_text,
         model_context_suffix=model_context_suffix,
-        force_web=False,
-        disable_web=mode == "OFF",
+        # WEB ON means public/external requests may use web authority. Local
+        # conversation, memory and host/project authority always wins.
+        force_web=bool(
+            mode == "ON" and _web_on_long_factual_grounding(user_text)
+        ),
+        disable_web=lambda unit: bool(
+            mode == "OFF" or local_authority_resolver(unit)
+        ),
         conversation_local=conversation_local_resolver,
         crypto_market_available=crypto_market_available,
         multi_asset_market_available=multi_asset_market_available,
