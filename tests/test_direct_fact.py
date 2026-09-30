@@ -524,6 +524,42 @@ def test_host_direct_fact_fallback_fails_closed_on_conflicting_debut_titles():
     ) == ""
 
 
+def test_later_generic_album_page_cannot_override_named_debut():
+    prompt = "mi volt a metalband elso albumanak a cime?"
+    evidence = {
+        "results": [
+            {
+                "title": "First Strike - Wikipedia",
+                "snippet": (
+                    "First Strike is the debut studio album by Metalband, "
+                    "released in 1983."
+                ),
+                "page_text": (
+                    "First Strike is the debut studio album by Metalband, "
+                    "released in 1983."
+                ),
+            },
+            {
+                "title": "Metalband (album)",
+                "snippet": (
+                    "Metalband is the fifth studio album by Metalband. "
+                    "The band's debut studio album was First Strike."
+                ),
+                "page_text": (
+                    "Metalband is the fifth studio album by Metalband. "
+                    "The band's debut studio album was First Strike."
+                ),
+            },
+        ],
+    }
+
+    fact = resolve_debut_release_fact(evidence, prompt)
+
+    assert fact["subject"] == "Metalband"
+    assert fact["title"] == "First Strike"
+    assert fact["year"] == "1983"
+
+
 def test_host_resolves_first_album_from_artist_overview_without_using_band_page_title():
     prompt = "melyik nagylemez volt az elso a wasp zenekarnak?"
     evidence = {
